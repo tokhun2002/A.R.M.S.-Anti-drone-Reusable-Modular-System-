@@ -17,7 +17,6 @@
 9. [런치 파일 구조](#9-런치-파일-구조)
 10. [전체 데이터 흐름 요약](#10-전체-데이터-흐름-요약)
 11. [개발 순서](#11-개발-순서-권장)
-12. [의존성 요약](#12-의존성-요약)
 
 ---
 
@@ -80,7 +79,7 @@ graph TD
 
     V4L2 -->|V4L2 capture| VN
     GPIO -->|interrupt / polling| GN
-    GN -->|/arms/fire_cmd<br/>std_msgs/Bool| CN
+    GN -->|/arms/engage_cmd<br/>std_msgs/Bool| CN
     VN -->|/arms/image_raw<br/>sensor_msgs/Image| DN
     VN -->|/arms/image_raw| UN
     DN <-->|"REST/gRPC"| DOCKER
@@ -89,6 +88,26 @@ graph TD
     CN -->|/arms/mission_state<br/>arms_msgs/MissionState| UN
     CN -->|MAVLink UART/UDP| FC
 ```
+
+- 영상 수신 (arms_video_node)
+  - publish
+    - `/arms/image_raw`
+- 객체 인식 (arms_detection_node)
+  - subscribe
+    - `/arms/image_raw`
+  - publish
+    - `/arms/detections`
+- 제어 (arms_control_node)
+  - subscribe
+    - `/arms/detections`
+    - `/arms/engage_cmd`
+  - publish
+    - `/arms/mission_state`
+- UI (arms_ui_node)
+  - subscribe
+    - `/arms/image_raw`
+    - `/arms/detections`
+    - `/arms/mission_state`
 
 ### 3.2 커스텀 메시지 정의
 
@@ -143,9 +162,9 @@ stateDiagram-v2
 | 상태       | 드론 동작                    | 제어 출력                 | UI 표시                   |
 | ---------- | ---------------------------- | ------------------------- | ------------------------- |
 | **IDLE**   | 정지 대기                    | 제어 없음 (Disarmed)      | 회색 테두리               |
-| **SEARCH** | Arm, 호버링 유지             | 고정 스로틀, roll/pitch=0 | 노란색, "Searching..."    |
-| **LOCK**   | 목표 추적 시작, 잠금 확인 중 | PID 활성화 (약한 게인)    | 주황색 박스, "Locking..." |
-| **TRACK**  | 완전 추적                    | PID 활성화 (정상 게인)    | 빨간 박스, "LOCKED"       |
+| **SEARCH** | Arm                          | 고정 스로틀, roll/pitch=0 | 노란색, "Searching..."    |
+| **LOCK**   | 목표 추적 시작, 잠금 확인 중 | PID 활성화 (약한 스로톨)  | 주황색 박스, "Locking..." |
+| **TRACK**  | 완전 추적                    | PID 활성화 (풀 스로틀)    | 빨간 박스, "LOCKED"       |
 | **FIRE**   | 추적 유지 + 발사             | PID 유지 + 발사 트리거    | 빨간 박스, "FIRED!"       |
 | **RTL**    | 귀환                         | MAVLink RTL 명령          | "Returning..."            |
 
@@ -232,13 +251,13 @@ arms_video_node
 |       | HTTP POST /infer                  |
 |       | (JPEG frame + params)             |
 |       v                                   |
-|  +---[ Docker Container ]-------------+  |
-|  |  YOLO Inference Server             |  |
-|  |  - Flask / FastAPI                 |  |
-|  |  - Ultralytics YOLOv8/v11          |  |
-|  |  - CUDA (shared GPU via --gpus)    |  |
-|  |  - Port 8080                       |  |
-|  +------------------------------------+  |
+|  +---[ Docker Container ]-------------+   |
+|  |  YOLO Inference Server             |   |
+|  |  - Flask / FastAPI                 |   |
+|  |  - Ultralytics YOLOv8/v11          |   |
+|  |  - CUDA (shared GPU via --gpus)    |   |
+|  |  - Port 8080                       |   |
+|  +------------------------------------+   |
 |                                           |
 +-------------------------------------------+
 ```
@@ -334,16 +353,16 @@ $$
 u(t) = K_p \cdot e(t) + K_i \int_0^t e(\tau)d\tau + K_d \frac{de(t)}{dt}
 $$
 
-- `error_x` → **roll** 명령
-- `error_y` → **pitch** 명령
+- `error_x` → **roll 각도** 명령 [deg]
+- `error_y` → **pitch 각도** 명령 [deg]
 - **throttle** → 상수 (파라미터로 설정)
 - **yaw** → 0 (고정 또는 별도 로직)
 
 ```
-roll_cmd  = PID_roll (error_x)
-pitch_cmd = PID_pitch(error_y)
-throttle  = CONSTANT_THROTTLE
-yaw_cmd   = 0.0
+roll_angle  = PID_roll (error_x)    # [deg], clamped to max_tilt_deg
+pitch_angle = PID_pitch(error_y)    # [deg], clamped to max_tilt_deg
+throttle    = CONSTANT_THROTTLE
+yaw_angle   = 0.0                   # hold heading
 ```
 
 ### 7.3 PID 파라미터
@@ -352,15 +371,15 @@ yaw_cmd   = 0.0
 # arms_control/config/control_params.yaml
 control:
   roll_pid:
-    kp: 0.4
-    ki: 0.01
-    kd: 0.05
-    output_limit: 0.5 # normalized [-1, 1]
+    kp: 15.0
+    ki: 0.5
+    kd: 1.0
+    output_limit: 30.0 # max roll angle [deg]
   pitch_pid:
-    kp: 0.4
-    ki: 0.01
-    kd: 0.05
-    output_limit: 0.5
+    kp: 15.0
+    ki: 0.5
+    kd: 1.0
+    output_limit: 30.0 # max pitch angle [deg]
   throttle: 0.55 # constant throttle [0.0, 1.0]
   control_rate_hz: 30
 
@@ -373,18 +392,20 @@ mavlink:
 
 ### 7.4 MAVLink 명령
 
-제어 명령은 `SET_ATTITUDE_TARGET` (MAVLink #82) 메시지 사용.
+제어 명령은 `SET_ATTITUDE_TARGET` (MAVLink #82) 메시지에 쿼터니언 자세값을 담아 전송.
 
 ```
 MAVLink Message: SET_ATTITUDE_TARGET (#82)
-  - type_mask: ignore position, use body rates or attitude
-  - body_roll_rate  <- roll_cmd
-  - body_pitch_rate <- pitch_cmd
-  - body_yaw_rate   <- yaw_cmd
-  - thrust          <- throttle
+  - type_mask: 0b00000111  (ignore body rates, use attitude quaternion)
+  - q[0..3]     <- quaternion from (roll_angle, pitch_angle, yaw_angle)
+  - thrust      <- throttle
+
+  roll_angle, pitch_angle: PID 출력 [deg] -> rad 변환 후 quaternion 생성
+  yaw_angle  : 0.0 (heading 고정)
 ```
 
-> 또는 FC 설정에 따라 `RC_CHANNELS_OVERRIDE` (#70) 방식도 고려.
+> `RC_CHANNELS_OVERRIDE` (#70) 방식은 FC의 각도 제어 모드(Angle/Stabilize)에 의존하므로,
+> `SET_ATTITUDE_TARGET`으로 직접 자세를 지정하는 것이 더 정확.
 
 ### 7.5 arms_control_node 내부 구조
 
@@ -393,29 +414,30 @@ arms_control_node
   |
   +-- [Subscribers]
   |     /arms/detections  (DetectionArray)
-  |     /arms/fire_cmd    (Bool)
+  |     /arms/engage_cmd    (Bool)
   |
   +-- [Publishers]
   |     /arms/mission_state  (MissionState)
   |
   +-- [State Machine]
   |     evaluate detections -> update state
-  |     fire_cmd (LOCK 상태) -> TRACK 강제 전이
+  |     engage_cmd (LOCK 상태) -> TRACK 강제 전이
   |     distance < D_fire (TRACK 상태) -> FIRE 전이
   |
   +-- [PID Controller]  (active in LOCK / TRACK / FIRE)
-  |     error_x -> roll_cmd
-  |     error_y -> pitch_cmd
+  |     error_x -> roll_angle  [deg]
+  |     error_y -> pitch_angle [deg]
   |
   +-- [MAVLink Interface]
-        SET_ATTITUDE_TARGET -> FC
+        (roll_angle, pitch_angle, yaw_angle) -> quaternion
+        SET_ATTITUDE_TARGET (quaternion + thrust) -> FC
         RTL command -> FC (RTL state)
 ```
 
 ### 7.6 제어 루프 흐름
 
 ```
-/arms/detections  +  /arms/fire_cmd
+/arms/detections  +  /arms/engage_cmd
          |
          v
   [State Machine]
@@ -461,8 +483,8 @@ arms_control_node
 |              o    <- frame center crosshair        |
 |                                                    |
 +----------------------------------------------------+
-|  conf: 0.87  |  err_x: +0.03  |  err_y: -0.01     |
-|  roll: +0.12 |  pitch: -0.04  |  thr: 0.55        |
+|  conf: 0.87  |  err_x: +0.03  |  err_y: -0.01      |
+|  roll: +0.12 |  pitch: -0.04  |  thr: 0.55         |
 +----------------------------------------------------+
 |  [  FIRE  ]   <- button (active only in TRACK)     |
 +----------------------------------------------------+
@@ -472,7 +494,7 @@ arms_control_node
 
 - OpenCV `imshow` 기반 경량 구현 (or rqt plugin)
 - FIRE 버튼: 키보드 스페이스바 or GPIO 버튼 입력
-- `/arms/fire_cmd` (std_msgs/Bool) 발행
+- `/arms/engage_cmd` (std_msgs/Bool) 발행
 
 ---
 
@@ -519,7 +541,7 @@ arms_detection_node
       v
 arms_gpio_node  (Jetson GPIO interrupt / polling)
       |
-      | /arms/fire_cmd  [std_msgs/Bool]
+      | /arms/engage_cmd  [std_msgs/Bool]
       v
 arms_control_node
       | (state machine + PID)
@@ -559,18 +581,6 @@ Phase 4: Mission
   [ ] RTL 명령 연동
   [ ] 통합 테스트
 ```
-
----
-
-## 12. 의존성 요약
-
-| 컴포넌트       | 주요 의존성                                        |
-| -------------- | -------------------------------------------------- |
-| arms_video     | `v4l2_camera` or custom V4L2, `image_transport`    |
-| arms_detection | `cv_bridge`, `requests` (Python HTTP), Docker      |
-| arms_control   | `pymavlink`, custom PID, `rclpy`, `arms_msgs`      |
-| arms_ui        | `opencv-python`, `cv_bridge`                       |
-| Docker (YOLO)  | `ultralytics`, `fastapi`, `uvicorn`, `nvidia-cuda` |
 
 ---
 
