@@ -21,7 +21,7 @@ flowchart TD
     PDB --> BEC[5V BEC]
     BEC --> FC[Pixhawk 6C Mini]
     BEC --> TEL[Holybro 433MHz Telemetry]
-    BEC --> IMU[IMU x4]
+    BEC --> SERVO
 
     PDB --> VTX[Tank Ultimate 2 VTX]
     VTX --> CAM[Foxeer Micro V5]
