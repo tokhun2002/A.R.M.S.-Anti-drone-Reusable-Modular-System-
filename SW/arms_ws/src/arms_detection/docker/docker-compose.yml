@@ -1,0 +1,21 @@
+services:
+  arms_detection:
+    build:
+      # context = arms_ws/src/ so Dockerfile can COPY arms_msgs/ and arms_detection/
+      context: ../..
+      dockerfile: arms_detection/docker/Dockerfile
+    image: arms/detection:latest
+
+    # network_mode: host — container shares the host network stack.
+    # DDS (FastDDS / CycloneDDS) multicast discovery works without any extra config.
+    network_mode: host
+
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      # Set to match host DDS middleware if changed from default
+      # - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+    volumes:
+      - ./models:/models:ro    # place .pt model file here
+    restart: unless-stopped

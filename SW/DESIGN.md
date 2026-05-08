@@ -31,11 +31,11 @@
 ```
 +----------------------------------------------------------+
 |                    Operator Interface                    |
-|          (Monitor Display + Fire Button Input)           |
+|                    (Monitor Display)                     |
 +----------------------------------------------------------+
 |   Video Pipeline   |  Detection  |   Flight Control      |
-|  (V4L2 -> ROS)     |  (YOLO/     |   State Machine +     |
-|                    |   Docker)   |   PID + MAVLink       |
+|  (V4L2 -> ROS)     |  (YOLO)     |   State Machine +     |
+|                    |             |   PID + MAVLink       |
 +----------------------------------------------------------+
 |              ROS 2 Middleware (Humble)                   |
 +----------------------------------------------------------+
@@ -67,19 +67,17 @@ arms_ws/
 ```mermaid
 graph TD
     V4L2["/dev/video0<br/>(USB FPV Receiver)"]
-    GPIO["Jetson GPIO<br/>(Fire Button)"]
+    GPIO["Jetson GPIO<br/>(Launch Button)"]
 
     VN["arms_video_node<br/>(arms_video)"]
     DN["arms_detection_node<br/>(arms_detection)"]
     DOCKER["YOLO Inference<br/>(Docker Container)"]
-    GN["arms_gpio_node<br/>(arms_control)"]
-    CN["arms_control_node<br/>(arms_control)<br/>---<br/>State Machine<br/>+ PID<br/>+ MAVLink"]
+    CN["arms_control_node<br/>(arms_control)<br/>---<br/>GPIO + State Machine<br/>+ PID + MAVLink"]
     UN["arms_ui_node<br/>(arms_ui)"]
     FC["Flight Controller<br/>(MAVLink / UART)"]
 
     V4L2 -->|V4L2 capture| VN
-    GPIO -->|interrupt / polling| GN
-    GN -->|/arms/engage_cmd<br/>std_msgs/Bool| CN
+    GPIO -->|direct read / interrupt| CN
     VN -->|/arms/image_raw<br/>sensor_msgs/Image| DN
     VN -->|/arms/image_raw| UN
     DN <-->|"REST/gRPC"| DOCKER
@@ -100,7 +98,6 @@ graph TD
 - 제어 (arms_control_node)
   - subscribe
     - `/arms/detections`
-    - `/arms/engage_cmd`
   - publish
     - `/arms/mission_state`
 - UI (arms_ui_node)
@@ -131,10 +128,9 @@ BoundingBox[]   detections
 ```
 # arms_msgs/MissionState.msg
 std_msgs/Header header
-string          state            # IDLE | SEARCH | LOCK | TRACK | FIRE | RTL
-uint32          lock_count
-float32         lock_duration_sec
-float32         error_x          # current normalized pixel error (for UI)
+string          state                # IDLE | SEARCH | LOCK | TRACK | FIRE | RTL
+float32         lock_elapsed_sec     # continuous detection duration so far [s]
+float32         error_x              # current normalized pixel error (for UI)
 float32         error_y
 bool            target_locked
 ```
@@ -177,14 +173,14 @@ stateDiagram-v2
     IDLE --> SEARCH : arm_command received
     SEARCH --> IDLE : disarm_command
 
-    SEARCH --> LOCK : target detected\n(confidence > threshold)
+    SEARCH --> LOCK : continuous detection >= T_lock\n(confidence > threshold)
     LOCK --> SEARCH : target lost\n(no detection N frames)
 
-    LOCK --> TRACK : (lock_duration > T_lock)\nOR fire_button pressed
+    LOCK --> TRACK : launch button pressed\n(GPIO / human input)
     TRACK --> SEARCH : target lost
 
     TRACK --> FIRE : distance < D_fire\n(ultrasonic sensor)
-    FIRE --> RTL : net_fired signal\n(payload trigger sent)
+    FIRE --> RTL : net launched\n(payload trigger sent)
 
     RTL --> IDLE : drone landed /\n mission complete
 ```
@@ -195,11 +191,10 @@ stateDiagram-v2
 # arms_control/config/control_params.yaml (mission section)
 mission:
   detection_confidence_threshold: 0.65
-  lock_frames_required: 15 # N frames continuous detection to enter LOCK
-  lock_duration_sec: 2.0 # stable track duration before TRACK state
+  lock_duration_sec: 2.0 # continuous detection duration required to enter LOCK [s]
   lost_frames_threshold: 10 # frames without detection -> back to SEARCH
-  lock_box_tolerance: 0.15 # normalized bbox center must be within this of frame center
-  fire_distance_m: 3.0 # ultrasonic distance threshold to trigger FIRE
+  lock_box_tolerance: 0.15 # normalized bbox center tolerance from frame center
+  fire_distance_m: 3.0 # ultrasonic distance threshold to trigger FIRE (net launch) [m]
 ```
 
 ---
@@ -243,83 +238,79 @@ arms_video_node
 
 ### 6.1 Docker 통합 구조
 
+호스트 측 ROS2 노드 없이, Docker 컨테이너가 ROS2 네트워크에 직접 참여한다.
+
 ```
-+---[ ROS Host (Jetson) ]-------------------+
-|                                           |
-|  arms_detection_node                      |
-|       |                                   |
-|       | HTTP POST /infer                  |
-|       | (JPEG frame + params)             |
-|       v                                   |
-|  +---[ Docker Container ]-------------+   |
-|  |  YOLO Inference Server             |   |
-|  |  - Flask / FastAPI                 |   |
-|  |  - Ultralytics YOLOv8/v11          |   |
-|  |  - CUDA (shared GPU via --gpus)    |   |
-|  |  - Port 8080                       |   |
-|  +------------------------------------+   |
-|                                           |
-+-------------------------------------------+
++---[ Jetson (Host) ]-----------------------------+
+|                                                 |
+|  /arms/image_raw  (ROS2 topic, DDS)             |
+|       |                                         |
+|       | network_mode: host                      |
+|       v                                         |
+|  +---[ Docker Container ]------------------+    |
+|  |  arms_detection_node.py                 |    |
+|  |  - Base: ultralytics:latest-jetson-     |    |
+|  |          jetpack6 + ROS2 Humble         |    |
+|  |  - Subscribes /arms/image_raw           |    |
+|  |  - Ultralytics YOLO inference (CUDA)    |    |
+|  |  - Publishes /arms/detections           |    |
+|  +------------------------------------------+   |
+|                                                 |
++-------------------------------------------------+
 ```
+
+`network_mode: host` 로 컨테이너가 호스트 네트워크 스택을 공유하므로
+DDS 멀티캐스트 discovery가 별도 설정 없이 동작한다.
 
 ### 6.2 Docker Compose
 
 ```yaml
-# docker/docker-compose.yml
+# arms_detection/docker/docker-compose.yml
 services:
-  yolo_server:
-    image: arms/yolo-server:latest
+  arms_detection:
+    build:
+      context: ../.. # arms_ws/src/ — arms_msgs 소스 접근용
+      dockerfile: arms_detection/docker/Dockerfile
+    image: arms/detection:latest
+    network_mode: host # DDS 통신 핵심 설정
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
-    ports:
-      - "8080:8080"
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - ARMS_MODEL=/models/drone.pt
+      - ARMS_CONF=0.5
+      - ARMS_IOU=0.45
     volumes:
       - ./models:/models:ro
     restart: unless-stopped
 ```
 
-### 6.3 YOLO 서버 API
+### 6.3 Dockerfile 구성
 
 ```
-POST /infer
-Content-Type: application/json
-
-{
-  "image_b64": "<base64 encoded JPEG>",
-  "confidence": 0.5,
-  "iou": 0.45
-}
-
-Response:
-{
-  "detections": [
-    {
-      "x_center": 0.52,
-      "y_center": 0.48,
-      "width": 0.12,
-      "height": 0.15,
-      "confidence": 0.87,
-      "class_id": 0,
-      "class_name": "drone"
-    }
-  ],
-  "inference_time_ms": 18.3
-}
+Base : ultralytics/ultralytics:latest-jetson-jetpack6
+  +-- ROS2 Humble (rclpy, sensor_msgs, rosidl)
+  +-- arms_msgs (소스 COPY 후 colcon build)
+  +-- arms_detection_node.py
 ```
 
 ### 6.4 추론 흐름
 
 ```
-/arms/image_raw  -->  arms_detection_node
-                            |
-                     compress to JPEG
-                            |
-                     HTTP POST /infer
-                            |
-                     parse response
-                            |
-               /arms/detections (DetectionArray)
+/arms/image_raw (sensor_msgs/Image)
+        |
+        | DDS (network_mode: host)
+        v
+arms_detection_node.py (Docker 내부)
+        |
+   np.frombuffer → numpy array
+        |
+   YOLO.predict()
+        |
+   BoundingBox 변환 (normalized coords)
+        |
+        v
+/arms/detections (arms_msgs/DetectionArray)
 ```
 
 ---
@@ -367,28 +358,43 @@ yaw_angle   = 0.0                   # hold heading
 
 ### 7.3 PID 파라미터
 
+arms_control은 C++ (ament_cmake) 로 구현되며, ROS2 파라미터로 런타임 설정이 가능하다.
+
 ```yaml
 # arms_control/config/control_params.yaml
-control:
-  roll_pid:
-    kp: 15.0
-    ki: 0.5
-    kd: 1.0
-    output_limit: 30.0 # max roll angle [deg]
-  pitch_pid:
-    kp: 15.0
-    ki: 0.5
-    kd: 1.0
-    output_limit: 30.0 # max pitch angle [deg]
-  throttle: 0.55 # constant throttle [0.0, 1.0]
-  control_rate_hz: 30
+arms_control_node:
+  ros__parameters:
+    control:
+      roll_pid:
+        kp: 15.0
+        ki: 0.5
+        kd: 1.0
+        output_limit: 30.0 # max roll angle [deg], anti-windup clamp 도 동일 값 적용
+      pitch_pid:
+        kp: 15.0
+        ki: 0.5
+        kd: 1.0
+        output_limit: 30.0 # max pitch angle [deg]
+      throttle: 0.55 # constant throttle [0.0, 1.0]
+      control_rate_hz: 30.0
 
-mavlink:
-  connection: "/dev/ttyTHS1" # Jetson UART to FC
-  baud: 115200
-  system_id: 255
-  component_id: 1
+    mavlink:
+      connection: "udp:127.0.0.1:14550" # SITL
+      # connection: "/dev/ttyTHS1"        # 실 기체 (Jetson UART)
+      baud: 115200
+      system_id: 255
+      component_id: 1
+
+    gpio:
+      enabled: false # 실 기체: true
+      launch_button_pin: 18 # BOARD 핀 번호 (libgpiod)
 ```
+
+PID 구현 특이사항:
+
+- **anti-windup**: integral 값을 `[-output_limit/ki, +output_limit/ki]` 로 clamp
+- **derivative kick 방지**: 첫 번째 호출에서 미분항 생략
+- **출력 단위**: [deg], MAVSDK `Offboard::Attitude` 에 직접 전달 (deg→rad 변환은 MAVSDK 내부 처리)
 
 ### 7.4 MAVLink 명령
 
@@ -414,14 +420,16 @@ arms_control_node
   |
   +-- [Subscribers]
   |     /arms/detections  (DetectionArray)
-  |     /arms/engage_cmd    (Bool)
+  |
+  +-- [GPIO]
+  |     Jetson GPIO pin (Launch Button) — interrupt callback
   |
   +-- [Publishers]
   |     /arms/mission_state  (MissionState)
   |
   +-- [State Machine]
   |     evaluate detections -> update state
-  |     engage_cmd (LOCK 상태) -> TRACK 강제 전이
+  |     launch button (GPIO, LOCK 상태) -> TRACK 전이
   |     distance < D_fire (TRACK 상태) -> FIRE 전이
   |
   +-- [PID Controller]  (active in LOCK / TRACK / FIRE)
@@ -437,7 +445,7 @@ arms_control_node
 ### 7.6 제어 루프 흐름
 
 ```
-/arms/detections  +  /arms/engage_cmd
+/arms/detections  +  GPIO (launch button)
          |
          v
   [State Machine]
@@ -486,15 +494,12 @@ arms_control_node
 |  conf: 0.87  |  err_x: +0.03  |  err_y: -0.01      |
 |  roll: +0.12 |  pitch: -0.04  |  thr: 0.55         |
 +----------------------------------------------------+
-|  [  FIRE  ]   <- button (active only in TRACK)     |
-+----------------------------------------------------+
 ```
 
 ### 8.2 UI 구현
 
 - OpenCV `imshow` 기반 경량 구현 (or rqt plugin)
-- FIRE 버튼: 키보드 스페이스바 or GPIO 버튼 입력
-- `/arms/engage_cmd` (std_msgs/Bool) 발행
+- launch 버튼은 GPIO로 직접 처리 (UI에서 별도 발행 없음)
 
 ---
 
@@ -539,11 +544,7 @@ arms_detection_node
       +---------> arms_ui_node (overlay boxes)
       |
       v
-arms_gpio_node  (Jetson GPIO interrupt / polling)
-      |
-      | /arms/engage_cmd  [std_msgs/Bool]
-      v
-arms_control_node
+arms_control_node  (launch button read directly via Jetson GPIO)
       | (state machine + PID)
       |
       | /arms/mission_state  [arms_msgs/MissionState]
@@ -577,7 +578,7 @@ Phase 3: Control
 
 Phase 4: Mission
   [ ] arms_control: 상태 머신 구현 (control_node 내부)
-  [ ] FIRE 버튼 입력 연동
+  [ ] launch 버튼 GPIO 입력 연동
   [ ] RTL 명령 연동
   [ ] 통합 테스트
 ```

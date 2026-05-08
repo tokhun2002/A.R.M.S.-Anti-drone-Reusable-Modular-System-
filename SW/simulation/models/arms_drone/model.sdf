@@ -1,0 +1,106 @@
+<?xml version="1.0"?>
+<!--
+  arms_drone model for Gazebo Harmonic (SDF 1.9)
+  Based on PX4 x500 quadrotor.
+
+  Additions over the base x500:
+    1. upward_camera_link  — camera sensor pointing to the sky (+Z body)
+    2. upward_ray_link     — GPU ray sensor pointing to the sky, range 0~50 m
+
+  Sensor topics (Gazebo internal):
+    /arms_drone/upward_camera/image   (gz.msgs.Image)
+    /arms_drone/upward_ray/scan       (gz.msgs.LaserScan)
+
+  These are bridged to ROS2 by simulation/launch/bridge.launch.py.
+
+  NOTE: The base x500 SDF is included by reference from the PX4-Autopilot
+  gazebo models directory. This file extends it by merging links and sensors.
+  For standalone use, replace the <include> with the full x500 SDF content.
+-->
+<sdf version="1.9">
+  <model name="arms_drone">
+
+    <!-- Include the base x500 model from PX4 -->
+    <include merge="true">
+      <uri>model://x500</uri>
+    </include>
+
+    <!-- ================================================================
+         Upward-facing camera
+         pitch = -pi/2 → optical axis points to +Z (sky) in body frame
+         ================================================================ -->
+    <link name="upward_camera_link">
+      <pose relative_to="base_link">0 0 0.15 0 -1.5708 0</pose>
+      <inertial>
+        <mass>0.01</mass>
+        <inertia><ixx>1e-6</ixx><iyy>1e-6</iyy><izz>1e-6</izz></inertia>
+      </inertial>
+      <sensor name="upward_camera" type="camera">
+        <pose>0 0 0 0 0 0</pose>
+        <always_on>true</always_on>
+        <update_rate>30</update_rate>
+        <camera>
+          <horizontal_fov>1.047</horizontal_fov>  <!-- 60 deg -->
+          <image>
+            <width>1280</width>
+            <height>720</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.1</near>
+            <far>100</far>
+          </clip>
+        </camera>
+        <topic>/arms_drone/upward_camera/image</topic>
+      </sensor>
+    </link>
+
+    <joint name="upward_camera_joint" type="fixed">
+      <parent>base_link</parent>
+      <child>upward_camera_link</child>
+    </joint>
+
+    <!-- ================================================================
+         Upward-facing ray sensor (distance to objects above)
+         pitch = -pi/2 → ray points to +Z (sky)
+         ================================================================ -->
+    <link name="upward_ray_link">
+      <pose relative_to="base_link">0 0 0.15 0 -1.5708 0</pose>
+      <inertial>
+        <mass>0.005</mass>
+        <inertia><ixx>1e-7</ixx><iyy>1e-7</iyy><izz>1e-7</izz></inertia>
+      </inertial>
+      <sensor name="upward_ray" type="gpu_lidar">
+        <pose>0 0 0 0 0 0</pose>
+        <always_on>true</always_on>
+        <update_rate>10</update_rate>
+        <lidar>
+          <scan>
+            <horizontal>
+              <samples>1</samples>
+              <min_angle>0</min_angle>
+              <max_angle>0</max_angle>
+            </horizontal>
+            <vertical>
+              <samples>1</samples>
+              <min_angle>0</min_angle>
+              <max_angle>0</max_angle>
+            </vertical>
+          </scan>
+          <range>
+            <min>0.1</min>
+            <max>50.0</max>
+            <resolution>0.01</resolution>
+          </range>
+        </lidar>
+        <topic>/arms_drone/upward_ray/scan</topic>
+      </sensor>
+    </link>
+
+    <joint name="upward_ray_joint" type="fixed">
+      <parent>base_link</parent>
+      <child>upward_ray_link</child>
+    </joint>
+
+  </model>
+</sdf>

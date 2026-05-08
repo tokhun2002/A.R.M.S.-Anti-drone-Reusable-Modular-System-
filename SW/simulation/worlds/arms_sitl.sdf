@@ -1,0 +1,85 @@
+<?xml version="1.0"?>
+<!--
+  A.R.M.S. SITL world for Gazebo Harmonic.
+
+  Contents:
+    - Ground plane
+    - Sun (directional light)
+    - arms_drone at origin (upward camera + ray sensor)
+    - Red sphere at (5, 3, 10) meters — acts as the target drone
+
+  To change red ball position: edit the <pose> under <model name="red_ball">.
+  Format: x y z roll pitch yaw
+-->
+<sdf version="1.9">
+  <world name="arms_sitl">
+
+    <!-- Physics -->
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- Plugins -->
+    <plugin filename="gz-sim-physics-system"      name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-sensors-system"       name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+
+    <!-- Sun -->
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- Ground plane -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <material>
+            <ambient>0.4 0.4 0.4 1</ambient>
+            <diffuse>0.4 0.4 0.4 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- A.R.M.S. interceptor drone -->
+    <include>
+      <uri>model://arms_drone</uri>
+      <name>arms_drone</name>
+      <pose>0 0 0.2 0 0 0</pose>
+    </include>
+
+    <!-- Red ball target (r=0.3 m, at 10 m altitude) -->
+    <!-- Adjust pose to test different tracking angles -->
+    <model name="red_ball">
+      <static>true</static>
+      <pose>5 3 10 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><sphere><radius>0.3</radius></sphere></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><sphere><radius>0.3</radius></sphere></geometry>
+          <material>
+            <ambient>1 0 0 1</ambient>
+            <diffuse>1 0 0 1</diffuse>
+            <specular>0.5 0.5 0.5 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

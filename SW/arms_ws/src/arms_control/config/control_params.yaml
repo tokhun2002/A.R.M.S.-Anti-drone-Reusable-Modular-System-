@@ -1,0 +1,33 @@
+arms_control_node:
+  ros__parameters:
+    mission:
+      detection_confidence_threshold: 0.65
+      lock_duration_sec: 2.0        # continuous detection duration to enter LOCK [s]
+      lost_frames_threshold: 10     # frames without detection -> back to SEARCH
+      lock_box_tolerance: 0.15      # not yet used in SM, reserved for bbox center check
+      fire_distance_m: 5.0          # ultrasonic / ray sensor distance threshold [m]
+
+    control:
+      roll_pid:
+        kp: 15.0
+        ki: 0.5
+        kd: 1.0
+        output_limit: 30.0          # max roll angle [deg]
+      pitch_pid:
+        kp: 15.0
+        ki: 0.5
+        kd: 1.0
+        output_limit: 30.0          # max pitch angle [deg]
+      throttle: 0.55                # constant throttle [0.0, 1.0]
+      control_rate_hz: 30.0
+
+    mavlink:
+      connection: "udp:127.0.0.1:14550"   # SITL default
+      # connection: "/dev/ttyTHS1"         # real drone (Jetson UART)
+      baud: 115200
+      system_id: 255
+      component_id: 1
+
+    gpio:
+      enabled: false          # set true on real Jetson hardware
+      launch_button_pin: 18   # BOARD pin number

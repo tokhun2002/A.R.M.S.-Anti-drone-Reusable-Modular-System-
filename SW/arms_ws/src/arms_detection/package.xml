@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>arms_detection</name>
+  <version>0.1.0</version>
+  <description>
+    YOLO detection — runs entirely inside a Docker container.
+    The container subscribes to /arms/image_raw and publishes /arms/detections.
+    Start with: cd docker &amp;&amp; docker compose up
+  </description>
+  <maintainer email="dev@arms.local">arms</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
