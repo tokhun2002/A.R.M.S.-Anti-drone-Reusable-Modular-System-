@@ -1,9 +1,9 @@
 """
-SITL launch: arms_control + arms_ui
+SITL launch: ros_gz_bridge + arms_control + arms_ui
 - MAVLink via UDP (PX4 SITL default)
 - GPIO disabled
-- Camera/distance come from ros_gz_bridge (run separately)
-- Detection: start separately via docker compose up
+- Gazebo 카메라/거리 센서를 ROS2 토픽으로 브리지
+- Detection: 별도로 docker compose up 필요
     cd arms_detection/docker && docker compose up
 """
 
@@ -19,13 +19,30 @@ def generate_launch_description():
         Path(get_package_share_directory("arms_control")) / "config" / "control_params.yaml"
     )
 
-    # SITL overrides: UDP connection, GPIO disabled
     sitl_overrides = {
         "mavlink.connection": "udp:127.0.0.1:14550",
         "gpio.enabled": False,
     }
 
+    bridge_params = [
+        "/arms_drone/upward_camera/image@sensor_msgs/msg/Image[gz.msgs.Image",
+        "/arms_drone/upward_ray/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan",
+    ]
+
     return LaunchDescription([
+        # Gazebo ↔ ROS2 bridge
+        Node(
+            package="ros_gz_bridge",
+            executable="parameter_bridge",
+            name="gz_ros2_bridge",
+            output="screen",
+            arguments=bridge_params,
+            remappings=[
+                ("/arms_drone/upward_camera/image", "/arms/image_raw"),
+                ("/arms_drone/upward_ray/scan",     "/arms/scan_raw"),
+            ],
+        ),
+        # State machine + PID + MAVLink
         Node(
             package="arms_control",
             executable="arms_control_node",
@@ -33,6 +50,7 @@ def generate_launch_description():
             output="screen",
             parameters=[str(control_config), sitl_overrides],
         ),
+        # OpenCV UI
         Node(
             package="arms_ui",
             executable="arms_ui_node",
