@@ -1,0 +1,8 @@
+.claude
+
+__pycache__/
+
+build/
+install/
+log/
+
