@@ -143,12 +143,14 @@ void MavlinkInterface::send_rtl()
 void MavlinkInterface::trigger_payload()
 {
   if (!connected_) return;
-  // Actuate servo on AUX1 (index 0 in MAVSDK actuator control group 0, channel 4+)
-  // Adjust channel index per hardware wiring.
-  mavsdk::Action::ActuatorControlGroup group{};
-  group.controls[4] = 1.f;   // AUX1 → max (fire)
-  action_->set_actuator_control(0, group);
-  log("Payload trigger sent.");
+  // set_actuator: index starts at 1, value range -1.0 ~ 1.0
+  // Adjust index per hardware wiring (e.g. AUX1 = 1).
+  auto result = action_->set_actuator(1, 1.f);
+  if (result != mavsdk::Action::Result::Success) {
+    log("Payload trigger failed: " + std::to_string(static_cast<int>(result)));
+  } else {
+    log("Payload trigger sent.");
+  }
 }
 
 void MavlinkInterface::log(const std::string & msg) const
