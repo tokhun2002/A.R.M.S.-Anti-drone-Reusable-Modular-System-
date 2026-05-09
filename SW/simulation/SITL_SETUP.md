@@ -30,7 +30,7 @@ source install/setup.bash
 ## 3. worlds, models 파일 등록
 
 - `make px4_sitl`은 빌드만 하며, 커스텀 모델/월드 파일은 자동으로 등록되지 않는다.
-- `SW/simulation`에 있는 worlds와 models을 PX4에서 불러올 수 있게 심볼링 링크를 만들어줘야 한다.
+- `SW/simulation`에 있는 worlds와 models을 PX4에서 불러올 수 있게 심볼릭 링크를 만들어줘야 한다.
 
 ```bash
 # 월드 파일 링크
@@ -54,7 +54,7 @@ PX4_GZ_MODEL=arms_drone \
 make px4_sitl gz_x500
 ```
 
-### Terminal 2 — A.R.M.S. 노드 (ros_gz_bridge 포함)
+### Terminal 2 — A.R.M.S. 노드
 
 ```bash
 source /opt/ros/humble/setup.bash
