@@ -2,10 +2,8 @@
 
 두 가지 모드를 다룹니다.
 
-- **[A] 실 기체** — Jetson + FPV 수신기 + FC(Flight Controller)
+- **[A] 실기체** — Jetson + FPV 수신기 + FC(Flight Controller)
 - **[B] SITL** — PX4 + Gazebo Harmonic (시뮬레이션)
-
----
 
 ## 공통 사전 준비
 

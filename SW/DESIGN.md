@@ -1,8 +1,6 @@
 # A.R.M.S. 소프트웨어 설계 문서
 
-- Anti-drone Reusable Modular System — Software Architecture
-
----
+_Anti-drone Reusable Modular System — Software Architecture_
 
 ## 목차
 
@@ -16,9 +14,6 @@
 8. [오퍼레이터 UI (arms_ui)](#8-오퍼레이터-ui-arms_ui)
 9. [런치 파일 구조](#9-런치-파일-구조)
 10. [전체 데이터 흐름 요약](#10-전체-데이터-흐름-요약)
-11. [개발 순서](#11-개발-순서-권장)
-
----
 
 ## 1. 시스템 개요
 
@@ -43,8 +38,6 @@
 +----------------------------------------------------------+
 ```
 
----
-
 ## 2. ROS 패키지 구조
 
 ```
@@ -58,29 +51,27 @@ arms_ws/
     └── arms_msgs/             # Custom message/service definitions
 ```
 
----
-
 ## 3. 노드 및 토픽 구조
 
 ### 3.1 노드 그래프
 
 ```mermaid
 graph TD
-    V4L2["/dev/video0<br/>(USB FPV Receiver)"]
+    V4L2["/dev/video0<br/>(USB FPV Receiver)<br/>실기체"]
+    GAZEBO["Gazebo Camera<br/>(SITL)"]
     GPIO["Jetson GPIO<br/>(Launch Button)"]
 
-    VN["arms_video_node<br/>(arms_video)"]
-    DN["arms_detection_node<br/>(arms_detection)"]
-    DOCKER["YOLO Inference<br/>(Docker Container)"]
+    VN["arms_video_node<br/>실기체: usb_cam<br/>SITL: gz_ros2_bridge"]
+    DN["arms_detection_node<br/>(Docker Container)<br/>YOLO Inference"]
     CN["arms_control_node<br/>(arms_control)<br/>---<br/>GPIO + State Machine<br/>+ PID + MAVLink"]
     UN["arms_ui_node<br/>(arms_ui)"]
     FC["Flight Controller<br/>(MAVLink / UART)"]
 
     V4L2 -->|V4L2 capture| VN
+    GAZEBO -->|gz topic| VN
     GPIO -->|direct read / interrupt| CN
     VN -->|/arms/image_raw<br/>sensor_msgs/Image| DN
     VN -->|/arms/image_raw| UN
-    DN <-->|"REST/gRPC"| DOCKER
     DN -->|/arms/detections<br/>arms_msgs/DetectionArray| CN
     DN -->|/arms/detections| UN
     CN -->|/arms/mission_state<br/>arms_msgs/MissionState| UN
@@ -134,8 +125,6 @@ float32         error_x              # current normalized pixel error (for UI)
 float32         error_y
 bool            target_locked
 ```
-
----
 
 ## 4. 상태 머신 (arms_control 내부)
 
@@ -197,51 +186,62 @@ mission:
   fire_distance_m: 3.0 # ultrasonic distance threshold to trigger FIRE (net launch) [m]
 ```
 
----
-
 ## 5. 영상 수신 (arms_video)
 
 ### 5.1 구성
 
+arms_video_node는 영상 소스에 따라 두 가지 모드로 동작한다.
+어느 모드든 `/arms/image_raw`를 동일하게 발행하므로 downstream 노드(detection, UI)는 소스를 알 필요가 없다.
+
+**실기체 모드**
+
 - FPV 수신기 → USB Video Capture 장치 (`/dev/video0`)
 - V4L2 드라이버를 통해 프레임 수신
-- `image_transport` 를 통해 `/arms/image_raw` 발행
-- 해상도/FPS는 런치 파라미터로 설정
+- `image_transport`를 통해 `/arms/image_raw` 발행
+
+**SITL 모드**
+
+- Gazebo가 발행하는 카메라 토픽을 구독
+- `/arms/image_raw`로 relay 발행 (포맷 변환만 수행)
 
 ### 5.2 런치 파라미터
 
 ```yaml
 # arms_video/config/video_params.yaml
 video:
-  device: "/dev/video0"
+  mode: "v4l2" # "v4l2" (실기체) | "gazebo" (SITL)
+  device: "/dev/video0" # v4l2 모드에서만 사용
+  gazebo_topic: "/camera/image_raw" # gazebo 모드에서만 사용
   width: 1280
   height: 720
   fps: 30
-  pixel_format: "YUYV" # or MJPG depending on capture card
+  pixel_format: "YUYV" # or MJPG, v4l2 모드에서만 사용
   topic_name: "/arms/image_raw"
-  camera_info_url: "" # optional calibration
 ```
 
 ### 5.3 노드 구현 요약
 
 ```
 arms_video_node
-  - v4l2_capture() loop at target FPS
-  - convert frame to sensor_msgs/Image (BGR8)
-  - publish /arms/image_raw
-  - optional: publish /arms/image_compressed for UI bandwidth
-```
+  [v4l2 모드]
+    - v4l2_capture() loop at target FPS
+    - convert frame to sensor_msgs/Image (BGR8)
+    - publish /arms/image_raw
 
----
+  [gazebo 모드]
+    - subscribe Gazebo camera topic
+    - relay (포맷 변환) → publish /arms/image_raw
+```
 
 ## 6. 객체 인식 (arms_detection)
 
 ### 6.1 Docker 통합 구조
 
-호스트 측 ROS2 노드 없이, Docker 컨테이너가 ROS2 네트워크에 직접 참여한다.
+arms_detection_node 자체가 Docker 컨테이너 안에서 실행된다.
+호스트에 별도 ROS2 노드 없이 컨테이너가 ROS2 네트워크에 직접 참여한다.
 
 ```
-+---[ Jetson (Host) ]-----------------------------+
++---[ Host (Jetson / Laptop) ]--------------------+
 |                                                 |
 |  /arms/image_raw  (ROS2 topic, DDS)             |
 |       |                                         |
@@ -249,10 +249,9 @@ arms_video_node
 |       v                                         |
 |  +---[ Docker Container ]------------------+    |
 |  |  arms_detection_node.py                 |    |
-|  |  - Base: ultralytics:latest-jetson-     |    |
-|  |          jetpack6 + ROS2 Humble         |    |
+|  |  - Base: ultralytics + ROS2 Humble      |    |
 |  |  - Subscribes /arms/image_raw           |    |
-|  |  - Ultralytics YOLO inference (CUDA)    |    |
+|  |  - Ultralytics YOLO inference           |    |
 |  |  - Publishes /arms/detections           |    |
 |  +------------------------------------------+   |
 |                                                 |
@@ -264,31 +263,21 @@ DDS 멀티캐스트 discovery가 별도 설정 없이 동작한다.
 
 ### 6.2 Docker Compose
 
-```yaml
-# arms_detection/docker/docker-compose.yml
-services:
-  arms_detection:
-    build:
-      context: ../.. # arms_ws/src/ — arms_msgs 소스 접근용
-      dockerfile: arms_detection/docker/Dockerfile
-    image: arms/detection:latest
-    network_mode: host # DDS 통신 핵심 설정
-    runtime: nvidia
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
-      - ARMS_MODEL=/models/drone.pt
-      - ARMS_CONF=0.5
-      - ARMS_IOU=0.45
-    volumes:
-      - ./models:/models:ro
-    restart: unless-stopped
+플랫폼에 따라 compose 파일을 선택한다.
+
+```bash
+# Jetson
+docker compose -f docker-compose.jetson.yml up --build
+
+# 노트북 (x86)
+docker compose -f docker-compose.laptop.yml up --build
 ```
 
 ### 6.3 Dockerfile 구성
 
 ```
-Base : ultralytics/ultralytics:latest-jetson-jetpack6
+Jetson : ultralytics/ultralytics:latest-jetson-jetpack6
+Laptop : ultralytics/ultralytics:latest
   +-- ROS2 Humble (rclpy, sensor_msgs, rosidl)
   +-- arms_msgs (소스 COPY 후 colcon build)
   +-- arms_detection_node.py
@@ -312,8 +301,6 @@ arms_detection_node.py (Docker 내부)
         v
 /arms/detections (arms_msgs/DetectionArray)
 ```
-
----
 
 ## 7. 비행 제어 및 상태 관리 (arms_control)
 
@@ -472,8 +459,6 @@ arms_control_node
   publish /arms/mission_state (for UI)
 ```
 
----
-
 ## 8. 오퍼레이터 UI (arms_ui)
 
 ### 8.1 화면 레이아웃
@@ -501,28 +486,37 @@ arms_control_node
 - OpenCV `imshow` 기반 경량 구현 (or rqt plugin)
 - launch 버튼은 GPIO로 직접 처리 (UI에서 별도 발행 없음)
 
----
-
 ## 9. 런치 파일 구조
 
-### 9.1 전체 런치
+### 9.1 SITL 런치
 
-```python
-# arms_bringup/launch/arms_full.launch.py
-
-launch_arguments:
-  - device:    "/dev/video0"
-  - model:     "yolov8n_drone.pt"
-  - serial:    "/dev/ttyTHS1"
+```
+# arms_bringup/launch/arms_sitl.launch.py
 
 nodes:
-  - arms_video_node      (arms_video)
-  - arms_detection_node  (arms_detection)
-  - arms_control_node    (arms_control)
+  - gz_ros2_bridge       (ros_gz_bridge)
+      /arms_drone/upward_camera/image → /arms/image_raw
+      /arms_drone/upward_ray/scan     → /arms/scan_raw
+  - arms_control_node    (arms_control)  MAVLink: udp:127.0.0.1:14550, GPIO: off
   - arms_ui_node         (arms_ui)
+
+별도 실행:
+  cd arms_detection/docker && docker compose -f docker-compose.laptop.yml up
 ```
 
----
+### 9.2 실기체 런치
+
+```
+# arms_bringup/launch/arms_full.launch.py
+
+nodes:
+  - arms_video_node      (usb_cam)       /dev/video0 → /arms/image_raw
+  - arms_control_node    (arms_control)  MAVLink: /dev/ttyTHS1, GPIO: on
+  - arms_ui_node         (arms_ui)
+
+별도 실행:
+  cd arms_detection/docker && docker compose -f docker-compose.jetson.yml up
+```
 
 ## 10. 전체 데이터 흐름 요약
 
@@ -554,33 +548,6 @@ arms_control_node  (launch button read directly via Jetson GPIO)
       v
 Flight Controller --> ESC --> Motors
                   --> Payload Trigger (FIRE state)
-```
-
----
-
-## 11. 개발 순서 (권장)
-
-```
-Phase 1: Infra
-  [x] ROS workspace + package skeleton
-  [x] arms_msgs 정의
-  [ ] arms_video: V4L2 수신 + topic 발행 검증
-
-Phase 2: Perception
-  [ ] Docker YOLO 서버 구축 및 단독 테스트
-  [ ] arms_detection: HTTP bridge + DetectionArray 발행
-  [ ] arms_ui: 영상 + 바운딩박스 오버레이 표시
-
-Phase 3: Control
-  [ ] arms_control: PID 구현 + MAVLink 연결
-  [ ] SITL(Software-In-The-Loop)로 PID 튜닝
-  [ ] 실기체 테스트
-
-Phase 4: Mission
-  [ ] arms_control: 상태 머신 구현 (control_node 내부)
-  [ ] launch 버튼 GPIO 입력 연동
-  [ ] RTL 명령 연동
-  [ ] 통합 테스트
 ```
 
 ---
