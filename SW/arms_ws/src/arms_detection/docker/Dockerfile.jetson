@@ -1,10 +1,10 @@
 # ============================================================
-# A.R.M.S. Detection Container
+# A.R.M.S. Detection Container — Jetson (JetPack 6)
 # Base: Ultralytics Jetson Jetpack6 (Ubuntu 22.04 + CUDA + ultralytics)
 # Adds: ROS2 Humble + arms_msgs + detection node
 #
 # Build context: arms_ws/src/
-#   docker-compose build (from arms_detection/docker/)
+#   docker compose -f docker-compose.jetson.yml up --build
 # ============================================================
 FROM ultralytics/ultralytics:latest-jetson-jetpack6
 
