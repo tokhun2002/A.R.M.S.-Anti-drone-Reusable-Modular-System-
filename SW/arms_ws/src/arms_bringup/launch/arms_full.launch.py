@@ -1,12 +1,14 @@
 """
 Full real-hardware launch: arms_video + arms_control + arms_ui
 - Detection: start separately via docker compose up
-    cd arms_detection/docker && docker compose up
+    cd arms_detection/docker && docker compose -f docker-compose.jetson.yml up
 """
 
 from pathlib import Path
 
 from launch import LaunchDescription
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -15,8 +17,8 @@ def generate_launch_description():
     control_config = (
         Path(get_package_share_directory("arms_control")) / "config" / "control_params.yaml"
     )
-    video_config = (
-        Path(get_package_share_directory("arms_video")) / "config" / "video_params.yaml"
+    video_launch = (
+        Path(get_package_share_directory("arms_video")) / "launch" / "video.launch.py"
     )
 
     hw_overrides = {
@@ -25,17 +27,9 @@ def generate_launch_description():
     }
 
     return LaunchDescription([
-        # Video capture (usb_cam)
-        Node(
-            package="usb_cam",
-            executable="usb_cam_node_exe",
-            name="arms_video_node",
-            output="screen",
-            parameters=[str(video_config)],
-            remappings=[
-                ("image_raw", "/arms/image_raw"),
-                ("camera_info", "/arms/camera_info"),
-            ],
+        # Video capture (arms_video_node)
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(str(video_launch)),
         ),
         # State machine + PID + MAVLink
         Node(
