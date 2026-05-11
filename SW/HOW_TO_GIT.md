@@ -1,4 +1,4 @@
-# HOW to Git
+# Git & GitHub 사용 가이드
 
 ## 요약
 
@@ -108,9 +108,9 @@ Git에는 파일이 거치는 세 가지 구역이 있다:
 
 ```mermaid
 flowchart LR
-    WD["📁 작업 디렉토리<br/>(Working Directory)<br/>파일을 실제로 수정하는 곳"]
-    ST["📋 스테이징 영역<br/>(Stage / Index)<br/>커밋할 파일을 모아두는 곳"]
-    LR["🗄️ 로컬 저장소<br/>(Local Repository)<br/>이력이 저장되는 곳"]
+    WD["작업 디렉토리<br/>(Working Directory)<br/>파일을 실제로 수정하는 곳"]
+    ST["스테이징 영역<br/>(Stage / Index)<br/>커밋할 파일을 모아두는 곳"]
+    LR["로컬 저장소<br/>(Local Repository)<br/>이력이 저장되는 곳"]
 
     WD -->|"git add"| ST
     ST -->|"git restore --staged<br/>(스테이징 취소)"| WD
