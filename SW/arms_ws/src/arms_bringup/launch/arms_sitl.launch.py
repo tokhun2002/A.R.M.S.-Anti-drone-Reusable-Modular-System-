@@ -26,7 +26,7 @@ def generate_launch_description():
     )
 
     sitl_overrides = {
-        "mavlink.connection": "udp:127.0.0.1:14550",
+        "mavlink.connection": "udp://:14540",
         "gpio.enabled": False,
     }
 
