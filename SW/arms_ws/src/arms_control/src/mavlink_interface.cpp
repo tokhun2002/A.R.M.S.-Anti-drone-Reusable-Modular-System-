@@ -19,7 +19,7 @@ bool MavlinkInterface::connect()
   log("Connecting to " + connection_url_ + " ...");
 
   mavsdk_ = std::make_unique<mavsdk::Mavsdk>(
-    mavsdk::Mavsdk::Configuration{mavsdk::ComponentType::GroundStation});
+    mavsdk::Mavsdk::Configuration{mavsdk::Mavsdk::ComponentType::GroundStation});
 
   auto result = mavsdk_->add_any_connection(connection_url_);
   if (result != mavsdk::ConnectionResult::Success) {
