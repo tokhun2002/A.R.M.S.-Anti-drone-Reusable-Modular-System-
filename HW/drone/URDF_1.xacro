@@ -1,0 +1,599 @@
+<?xml version="1.0" ?>
+<robot name="URDF_1" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+<xacro:include filename="/home/cocoma57/ws/URDF_1_description/urdf/materials.xacro" />
+<xacro:include filename="/home/cocoma57/ws/URDF_1_description/urdf/URDF_1.trans" />
+<xacro:include filename="/home/cocoma57/ws/URDF_1_description/urdf/URDF_1.gazebo" />
+<link name="base_link">
+  <inertial>
+    <origin xyz="5.104040966764493e-16 3.6457435476889233e-16 -0.023034666698081206" rpy="0 0 0"/>
+    <mass value="0.19130992657858306"/>
+    <inertia ixx="0.000743" iyy="0.000743" izz="0.000498" ixy="0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="part_1_2_1_1">
+  <inertial>
+    <origin xyz="0.027940575164025885 0.014493977211858822 -0.050921972342450925" rpy="0 0 0"/>
+    <mass value="0.03433751533394128"/>
+    <inertia ixx="1.6e-05" iyy="3.5e-05" izz="2.2e-05" ixy="-0.0" iyz="0.0" ixz="8e-06"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.054092 0.014494 -0.07" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.054092 0.014494 -0.07" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="part_1_2_2_1">
+  <inertial>
+    <origin xyz="-0.015787977211858747 0.0231115751640259 0.01907802765754908" rpy="0 0 0"/>
+    <mass value="0.03433751533394128"/>
+    <inertia ixx="3.5e-05" iyy="1.6e-05" izz="2.2e-05" ixy="0.0" iyz="8e-06" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.015788 -0.058921 -0.0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.015788 -0.058921 -0.0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="part_1_2_3_1">
+  <inertial>
+    <origin xyz="-0.02311157516402583 -0.015787977211858813 -0.05092197234245093" rpy="0 0 0"/>
+    <mass value="0.03433751533394128"/>
+    <inertia ixx="1.6e-05" iyy="3.5e-05" izz="2.2e-05" ixy="-0.0" iyz="-0.0" ixz="-8e-06"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.058921 -0.015788 -0.07" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_3_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.058921 -0.015788 -0.07" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_3_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="part_1_2_4_1">
+  <inertial>
+    <origin xyz="0.015787977211858827 -0.023111575164025955 -0.050921972342450925" rpy="0 0 0"/>
+    <mass value="0.03433751533394128"/>
+    <inertia ixx="3.5e-05" iyy="1.6e-05" izz="2.2e-05" ixy="0.0" iyz="-8e-06" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.015788 0.058921 -0.07" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_4_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.015788 0.058921 -0.07" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_4_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="part_1_3_1_1">
+  <inertial>
+    <origin xyz="0.0 1.3750107348365494e-16 0.010696321776997773" rpy="0 0 0"/>
+    <mass value="0.005579951375297485"/>
+    <inertia ixx="1e-06" iyy="1e-06" izz="1e-06" ixy="0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.125 -0.0 -0.02" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.125 -0.0 -0.02" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="part_1_3_2_1">
+  <inertial>
+    <origin xyz="-5.329070518200751e-17 1.6653345369377348e-16 0.010696321776997773" rpy="0 0 0"/>
+    <mass value="0.005579951375297485"/>
+    <inertia ixx="1e-06" iyy="1e-06" izz="1e-06" ixy="0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.0 -0.125 -0.02" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.0 -0.125 -0.02" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="part_1_3_3_1">
+  <inertial>
+    <origin xyz="8.326672684688674e-17 8.91213351109686e-17 0.010696321776997766" rpy="0 0 0"/>
+    <mass value="0.005579951375297485"/>
+    <inertia ixx="1e-06" iyy="1e-06" izz="1e-06" ixy="0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.125 0.0 -0.02" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_3_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.125 0.0 -0.02" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_3_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="part_1_3_4_1">
+  <inertial>
+    <origin xyz="8.881784197001253e-17 6.938893903907228e-17 0.010696321776997773" rpy="0 0 0"/>
+    <mass value="0.005579951375297485"/>
+    <inertia ixx="1e-06" iyy="1e-06" izz="1e-06" ixy="0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.0 0.125 -0.02" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_4_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.0 0.125 -0.02" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_4_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="part_2_1">
+  <inertial>
+    <origin xyz="-0.0004985536932014094 -4.020594300120525e-07 0.05296254807189453" rpy="0 0 0"/>
+    <mass value="0.1139799572990245"/>
+    <inertia ixx="0.000513" iyy="0.000514" izz="0.00018" ixy="-0.0" iyz="-0.0" ixz="-1e-06"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.0 -0.0 -0.07" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.0 -0.0 -0.07" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/part_2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RS2205_2300KV_1_1_1">
+  <inertial>
+    <origin xyz="2.0770225317434665e-07 2.1471467318123897e-05 -0.002401620289056267" rpy="0 0 0"/>
+    <mass value="0.005805491235665958"/>
+    <inertia ixx="0.0" iyy="0.0" izz="1e-06" ixy="0.0" iyz="-0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.12484 -0.0 0.01" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.12484 -0.0 0.01" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RS2205_2300KV_2_1_1">
+  <inertial>
+    <origin xyz="-0.12483980087728776 0.014970412034970237 -0.014772959035986579" rpy="0 0 0"/>
+    <mass value="0.02425093066384165"/>
+    <inertia ixx="2e-06" iyy="2e-06" izz="2e-06" ixy="-0.0" iyz="-0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.24968 0.015 0.01" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.24968 0.015 0.01" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RS2205_2300KV_1_2_1">
+  <inertial>
+    <origin xyz="8.579641596454669e-09 2.1471455677962714e-05 -0.002401620289056267" rpy="0 0 0"/>
+    <mass value="0.005805491235665958"/>
+    <inertia ixx="0.0" iyy="0.0" izz="1e-06" ixy="0.0" iyz="-0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.0 -0.125 0.01" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.0 -0.125 0.01" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RS2205_2300KV_2_2_1">
+  <inertial>
+    <origin xyz="1.0072586157272305e-13 0.014970412023330118 0.11022704096401335" rpy="0 0 0"/>
+    <mass value="0.02425093066384165"/>
+    <inertia ixx="2e-06" iyy="2e-06" izz="2e-06" ixy="-0.0" iyz="-0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.0 -0.11 0.135" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.0 -0.11 0.135" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RS2205_2300KV_1_3_1">
+  <inertial>
+    <origin xyz="8.579641677664007e-09 2.147145567795948e-05 -0.002401620289056279" rpy="0 0 0"/>
+    <mass value="0.005805491235665958"/>
+    <inertia ixx="0.0" iyy="0.0" izz="1e-06" ixy="0.0" iyz="-0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.125 -0.0 0.01" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_3_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.125 -0.0 0.01" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_3_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RS2205_2300KV_2_3_1">
+  <inertial>
+    <origin xyz="0.1250000000001008 0.01497041202333009 -0.014772959035986659" rpy="0 0 0"/>
+    <mass value="0.02425093066384165"/>
+    <inertia ixx="2e-06" iyy="2e-06" izz="2e-06" ixy="-0.0" iyz="-0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.25 0.015 0.01" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_3_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.25 0.015 0.01" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_3_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RS2205_2300KV_1_4_1">
+  <inertial>
+    <origin xyz="8.591281707551892e-09 2.1272333066299498e-05 -0.002401620289056371" rpy="0 0 0"/>
+    <mass value="0.005805491235665958"/>
+    <inertia ixx="0.0" iyy="0.0" izz="1e-06" ixy="0.0" iyz="-0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.0 0.12484 0.01" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_4_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.0 0.12484 0.01" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_4_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RS2205_2300KV_2_4_1">
+  <inertial>
+    <origin xyz="1.1740801431657899e-11 0.014970212900718413 -0.13961295903598683" rpy="0 0 0"/>
+    <mass value="0.02425093066384165"/>
+    <inertia ixx="2e-06" iyy="2e-06" izz="2e-06" ixy="-0.0" iyz="-0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.0 0.13984 -0.11484" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_4_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.0 0.13984 -0.11484" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_4_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="5045_Propeller_CCW_1_1">
+  <inertial>
+    <origin xyz="-3.8667301568984236e-08 -6.765340998553526e-06 -0.0035337301840080507" rpy="0 0 0"/>
+    <mass value="0.003998949816325393"/>
+    <inertia ixx="2e-06" iyy="2e-06" izz="4e-06" ixy="0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.12484 -0.0 0.027" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.12484 -0.0 0.027" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_1_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="5045_Propeller_CCW_3_1">
+  <inertial>
+    <origin xyz="-6.460645360389927e-06 -2.0215345390184324e-06 -0.003533730184008113" rpy="0 0 0"/>
+    <mass value="0.003998949816325393"/>
+    <inertia ixx="2e-06" iyy="2e-06" izz="4e-06" ixy="-0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.125 0.0 0.027" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_3_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.125 0.0 0.027" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_3_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="5045_Propeller_CCW_2_1">
+  <inertial>
+    <origin xyz="3.5578596695842473e-06 4.0312717530799347e-07 -0.003534147879166609" rpy="0 0 0"/>
+    <mass value="0.003998922236747806"/>
+    <inertia ixx="2e-06" iyy="2e-06" izz="4e-06" ixy="0.0" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.0 -0.125 0.027" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.0 -0.125 0.027" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_2_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="5045_Propeller_CCW_4_1">
+  <inertial>
+    <origin xyz="-1.8470414595930643e-06 -3.2665762446232316e-06 -0.0035341478791666436" rpy="0 0 0"/>
+    <mass value="0.003998922236747806"/>
+    <inertia ixx="2e-06" iyy="2e-06" izz="4e-06" ixy="0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.0 0.12484 0.027" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_4_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.0 0.12484 0.027" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_4_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<joint name="joint_1" type="fixed">
+  <origin xyz="0.054092 -0.014494 0.07" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="part_1_2_1_1"/>
+</joint>
+
+<joint name="joint_2" type="fixed">
+  <origin xyz="0.015788 0.058921 0.0" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="part_1_2_2_1"/>
+</joint>
+
+<joint name="joint_3" type="fixed">
+  <origin xyz="-0.058921 0.015788 0.07" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="part_1_2_3_1"/>
+</joint>
+
+<joint name="joint_4" type="fixed">
+  <origin xyz="-0.015788 -0.058921 0.07" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="part_1_2_4_1"/>
+</joint>
+
+<joint name="joint_5" type="fixed">
+  <origin xyz="0.125 0.0 0.02" rpy="0 0 0"/>
+  <parent link="part_1_2_1_1"/>
+  <child link="part_1_3_1_1"/>
+</joint>
+
+<joint name="joint_6" type="fixed">
+  <origin xyz="0.0 0.125 0.02" rpy="0 0 0"/>
+  <parent link="part_1_2_2_1"/>
+  <child link="part_1_3_2_1"/>
+</joint>
+
+<joint name="joint_7" type="fixed">
+  <origin xyz="-0.125 -0.0 0.02" rpy="0 0 0"/>
+  <parent link="part_1_2_3_1"/>
+  <child link="part_1_3_3_1"/>
+</joint>
+
+<joint name="joint_8" type="fixed">
+  <origin xyz="0.0 -0.125 0.02" rpy="0 0 0"/>
+  <parent link="part_1_2_4_1"/>
+  <child link="part_1_3_4_1"/>
+</joint>
+
+<joint name="joint_9" type="fixed">
+  <origin xyz="-0.0 0.0 0.07" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="part_2_1"/>
+</joint>
+
+<joint name="joint_10" type="fixed">
+  <origin xyz="0.12484 0.0 -0.01" rpy="0 0 0"/>
+  <parent link="part_1_2_1_1"/>
+  <child link="RS2205_2300KV_1_1_1"/>
+</joint>
+
+<joint name="joint_11" type="fixed">
+  <origin xyz="0.24968 -0.015 -0.01" rpy="0 0 0"/>
+  <parent link="RS2205_2300KV_1_1_1"/>
+  <child link="RS2205_2300KV_2_1_1"/>
+</joint>
+
+<joint name="joint_12" type="fixed">
+  <origin xyz="0.0 0.125 -0.01" rpy="0 0 0"/>
+  <parent link="part_1_2_2_1"/>
+  <child link="RS2205_2300KV_1_2_1"/>
+</joint>
+
+<joint name="joint_13" type="fixed">
+  <origin xyz="0.0 0.11 -0.135" rpy="0 0 0"/>
+  <parent link="RS2205_2300KV_1_2_1"/>
+  <child link="RS2205_2300KV_2_2_1"/>
+</joint>
+
+<joint name="joint_14" type="fixed">
+  <origin xyz="-0.125 0.0 -0.01" rpy="0 0 0"/>
+  <parent link="part_1_2_3_1"/>
+  <child link="RS2205_2300KV_1_3_1"/>
+</joint>
+
+<joint name="joint_15" type="fixed">
+  <origin xyz="-0.25 -0.015 -0.01" rpy="0 0 0"/>
+  <parent link="RS2205_2300KV_1_3_1"/>
+  <child link="RS2205_2300KV_2_3_1"/>
+</joint>
+
+<joint name="joint_16" type="fixed">
+  <origin xyz="0.0 -0.12484 -0.01" rpy="0 0 0"/>
+  <parent link="part_1_2_4_1"/>
+  <child link="RS2205_2300KV_1_4_1"/>
+</joint>
+
+<joint name="joint_17" type="fixed">
+  <origin xyz="0.0 -0.13984 0.11484" rpy="0 0 0"/>
+  <parent link="RS2205_2300KV_1_4_1"/>
+  <child link="RS2205_2300KV_2_4_1"/>
+</joint>
+
+<joint name="joint_18" type="continuous">
+  <origin xyz="0.12484 0.0 -0.027" rpy="0 0 0"/>
+  <parent link="RS2205_2300KV_2_1_1"/>
+  <child link="5045_Propeller_CCW_1_1"/>
+  <axis xyz="-0.0 -0.0 1.0"/>
+</joint>
+
+<joint name="joint_19" type="continuous">
+  <origin xyz="-0.125 -0.0 -0.027" rpy="0 0 0"/>
+  <parent link="RS2205_2300KV_2_3_1"/>
+  <child link="5045_Propeller_CCW_3_1"/>
+  <axis xyz="-0.0 0.0 1.0"/>
+</joint>
+
+<joint name="joint_20" type="continuous">
+  <origin xyz="0.0 0.125 -0.027" rpy="0 0 0"/>
+  <parent link="RS2205_2300KV_2_2_1"/>
+  <child link="5045_Propeller_CCW_2_1"/>
+  <axis xyz="0.0 0.0 1.0"/>
+</joint>
+
+<joint name="joint_21" type="continuous">
+  <origin xyz="0.0 -0.12484 -0.027" rpy="0 0 0"/>
+  <parent link="RS2205_2300KV_2_4_1"/>
+  <child link="5045_Propeller_CCW_4_1"/>
+  <axis xyz="-0.0 0.0 1.0"/>
+</joint>
+
+</robot>
