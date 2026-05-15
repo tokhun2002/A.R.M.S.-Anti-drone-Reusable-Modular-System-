@@ -16,6 +16,7 @@ services:
       - ARMS_MODEL=${ARMS_MODEL:-/models/best.onnx}
       - ARMS_CONF=${ARMS_CONF:-0.5}
       - ARMS_IOU=${ARMS_IOU:-0.45}
+      - ARMS_CLASSES=${ARMS_CLASSES:-balloon}
     volumes:
-      - ./models:/models:ro # place .onnx model file here
+      - ./models:/models:ro    # place .onnx model file here
     restart: unless-stopped
