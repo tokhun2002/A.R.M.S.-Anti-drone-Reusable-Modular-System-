@@ -62,10 +62,10 @@ graph TD
     GPIO["Jetson GPIO<br/>(Launch Button)"]
 
     VN["arms_video_node<br/>실기체: usb_cam<br/>SITL: gz_ros2_bridge"]
-    DN["arms_detection_node<br/>(Docker Container)<br/>YOLO Inference"]
+    DN["arms_detection_node<br/>(YOLO Inference in Docker)"]
     CN["arms_control_node<br/>(arms_control)<br/>---<br/>GPIO + State Machine<br/>+ PID + MAVLink"]
     UN["arms_ui_node<br/>(arms_ui)"]
-    FC["Flight Controller<br/>(MAVLink / UART)"]
+    FC["Flight Controller<br/>(MAVLink UART/UDP)"]
 
     V4L2 -->|V4L2 capture| VN
     GAZEBO -->|gz topic| VN
@@ -78,26 +78,17 @@ graph TD
     CN -->|MAVLink UART/UDP| FC
 ```
 
-- 영상 수신 (arms_video_node)
-  - publish
-    - `/arms/image_raw`
-- 객체 인식 (arms_detection_node)
-  - subscribe
-    - `/arms/image_raw`
-  - publish
-    - `/arms/detections`
-- 제어 (arms_control_node)
-  - subscribe
-    - `/arms/detections`
-  - publish
-    - `/arms/mission_state`
-- UI (arms_ui_node)
-  - subscribe
-    - `/arms/image_raw`
-    - `/arms/detections`
-    - `/arms/mission_state`
+### 3.2 노드별 역할
 
-### 3.2 커스텀 메시지 정의
+| 노드                  | 패키지           | 역할                                                                                                                                                           | subscribe                                                          | publish               | 실행 환경 |
+| --------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | --------------------- | --------- |
+| `arms_video_node`     | `arms_video`     | 영상 소스 추상화. 실기체는 usb_cam으로 USB 캡처 카드 수신, SITL은 gz_ros2_bridge로 Gazebo 카메라 수신.                                                         | —                                                                  | `/arms/image_raw`     | 호스트    |
+| `arms_detection_node` | `arms_detection` | YOLO 추론 수행 후 바운딩박스 발행. **Docker 컨테이너 안에서 실행**되며 `network_mode: host`로 ROS2 DDS 네트워크에 직접 참여                                    | `/arms/image_raw`                                                  | `/arms/detections`    | Docker    |
+| `arms_control_node`   | `arms_control`   | 상태 머신, PID 제어, MAVLink 통신 담당. 감지 결과로 상태 전이 판단, PID로 roll/pitch 명령 계산, MAVLink로 FC에 자세 명령 전송. GPIO로 발사 버튼 입력 직접 읽음 | `/arms/detections`                                                 | `/arms/mission_state` | 호스트    |
+| `arms_ui_node`        | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                                         | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state` | —                     | 호스트    |
+| `gz_scan_bridge`      | `ros_gz_bridge`  | SITL 전용. Gazebo 거리 센서 토픽을 ROS2로 브릿지. arms_sitl.launch.py에서 직접 실행                                                                            | `/arms_drone/upward_ray/scan` (gz)                                 | `/arms/scan_raw`      | 호스트    |
+
+### 3.3 커스텀 메시지 정의
 
 ```
 # arms_msgs/BoundingBox.msg
@@ -162,16 +153,16 @@ stateDiagram-v2
     IDLE --> SEARCH : arm_command received
     SEARCH --> IDLE : disarm_command
 
-    SEARCH --> LOCK : continuous detection >= T_lock\n(confidence > threshold)
-    LOCK --> SEARCH : target lost\n(no detection N frames)
+    SEARCH --> LOCK : continuous detection >= T_lock<br/>(confidence > threshold)
+    LOCK --> SEARCH : target lost<br/>(no detection N frames)
 
-    LOCK --> TRACK : launch button pressed\n(GPIO / human input)
+    LOCK --> TRACK : launch button pressed<br/>(GPIO / human input)
     TRACK --> SEARCH : target lost
 
-    TRACK --> FIRE : distance < D_fire\n(ultrasonic sensor)
-    FIRE --> RTL : net launched\n(payload trigger sent)
+    TRACK --> FIRE : distance < D_fire<br/>(ultrasonic sensor)
+    FIRE --> RTL : net launched<br/>(payload trigger sent)
 
-    RTL --> IDLE : drone landed /\n mission complete
+    RTL --> IDLE : drone landed /<br/> mission complete
 ```
 
 ### 4.3 전이 조건 파라미터
@@ -219,20 +210,6 @@ video:
   topic_name: "/arms/image_raw"
 ```
 
-### 5.3 노드 구현 요약
-
-```
-arms_video_node
-  [v4l2 모드]
-    - v4l2_capture() loop at target FPS
-    - convert frame to sensor_msgs/Image (BGR8)
-    - publish /arms/image_raw
-
-  [gazebo 모드]
-    - subscribe Gazebo camera topic
-    - relay (포맷 변환) → publish /arms/image_raw
-```
-
 ## 6. 객체 인식 (arms_detection)
 
 ### 6.1 Docker 통합 구조
@@ -241,25 +218,19 @@ arms_detection_node 자체가 Docker 컨테이너 안에서 실행된다.
 호스트에 별도 ROS2 노드 없이 컨테이너가 ROS2 네트워크에 직접 참여한다.
 
 ```
-+---[ Host (Jetson / Laptop) ]--------------------+
-|                                                 |
-|  /arms/image_raw  (ROS2 topic, DDS)             |
-|       |                                         |
-|       | network_mode: host                      |
-|       v                                         |
-|  +---[ Docker Container ]------------------+    |
-|  |  arms_detection_node.py                 |    |
-|  |  - Base: ultralytics + ROS2 Humble      |    |
-|  |  - Subscribes /arms/image_raw           |    |
-|  |  - Ultralytics YOLO inference           |    |
-|  |  - Publishes /arms/detections           |    |
-|  +------------------------------------------+   |
-|                                                 |
-+-------------------------------------------------+
+/arms/image_raw (sensor_msgs/Image)
+        |
+        | DDS (network_mode: host)
+        v
+    arms_detection_node.py (Docker 내부)
+        |
+    YOLO inference
+        |
+    BoundingBox 변환 (normalized coords)
+        |
+        v
+/arms/detections (arms_msgs/DetectionArray)
 ```
-
-`network_mode: host` 로 컨테이너가 호스트 네트워크 스택을 공유하므로
-DDS 멀티캐스트 discovery가 별도 설정 없이 동작한다.
 
 ### 6.2 Docker Compose
 
@@ -275,32 +246,28 @@ docker compose -f docker-compose.laptop.yml up --build
 
 ### 6.3 Dockerfile 구성
 
-```
-Jetson : ultralytics/ultralytics:latest-jetson-jetpack6
-Laptop : ultralytics/ultralytics:latest
-  +-- ROS2 Humble (rclpy, sensor_msgs, rosidl)
-  +-- arms_msgs (소스 COPY 후 colcon build)
-  +-- arms_detection_node.py
-```
+- base image
+  - Jetson : `ultralytics/ultralytics:latest-jetson-jetpack6`
+  - Laptop : `ultralytics/ultralytics:latest`
+- 구성
+  - ROS2 Humble (rclpy, sensor_msgs, rosidl)
+  - arms_msgs (소스 COPY 후 colcon build)
+  - arms_detection_node.py
 
-### 6.4 추론 흐름
+### 6.4 YOLO 모델 학습 및 변환
 
-```
-/arms/image_raw (sensor_msgs/Image)
-        |
-        | DDS (network_mode: host)
-        v
-arms_detection_node.py (Docker 내부)
-        |
-   np.frombuffer → numpy array
-        |
-   YOLO.predict()
-        |
-   BoundingBox 변환 (normalized coords)
-        |
-        v
-/arms/detections (arms_msgs/DetectionArray)
-```
+- 데이터셋: [Roboflow — Balloon Project](https://universe.roboflow.com/balloon-kutdi/balloon-project-az6w8)에서 다운로드. 풍선을 단일 클래스로 학습
+- 모델: YOLOv11 small
+- 경량화: FP16 양자화 후 TensorRT 형식으로 변환
+
+#### 플랫폼별 변환
+
+| 플랫폼       | TensorRT 변환                  |
+| ------------ | ------------------------------ |
+| 노트북 (x86) | `trtexec` (CUDA 드라이버 필요) |
+| Jetson (ARM) | `trtexec` (JetPack 내장)       |
+
+> TensorRT engine은 변환한 GPU 아키텍처에서만 동작한다. Jetson용 engine은 Jetson에서, 노트북용은 노트북에서 각각 변환해야 한다.
 
 ## 7. 비행 제어 및 상태 관리 (arms_control)
 
@@ -381,55 +348,11 @@ PID 구현 특이사항:
 
 - **anti-windup**: integral 값을 `[-output_limit/ki, +output_limit/ki]` 로 clamp
 - **derivative kick 방지**: 첫 번째 호출에서 미분항 생략
-- **출력 단위**: [deg], MAVSDK `Offboard::Attitude` 에 직접 전달 (deg→rad 변환은 MAVSDK 내부 처리)
+- **출력 단위**: [deg],
+  - MAVSDK `Offboard::Attitude` (roll_deg, pitch_deg, yaw_deg)에 전달
+  - MAVSDK가 내부적으로 euler→quaternion 변환 후 SET_ATTITUDE_TARGET으로 FC에 전송
 
-### 7.4 MAVLink 명령
-
-제어 명령은 `SET_ATTITUDE_TARGET` (MAVLink #82) 메시지에 쿼터니언 자세값을 담아 전송.
-
-```
-MAVLink Message: SET_ATTITUDE_TARGET (#82)
-  - type_mask: 0b00000111  (ignore body rates, use attitude quaternion)
-  - q[0..3]     <- quaternion from (roll_angle, pitch_angle, yaw_angle)
-  - thrust      <- throttle
-
-  roll_angle, pitch_angle: PID 출력 [deg] -> rad 변환 후 quaternion 생성
-  yaw_angle  : 0.0 (heading 고정)
-```
-
-> `RC_CHANNELS_OVERRIDE` (#70) 방식은 FC의 각도 제어 모드(Angle/Stabilize)에 의존하므로,
-> `SET_ATTITUDE_TARGET`으로 직접 자세를 지정하는 것이 더 정확.
-
-### 7.5 arms_control_node 내부 구조
-
-```
-arms_control_node
-  |
-  +-- [Subscribers]
-  |     /arms/detections  (DetectionArray)
-  |
-  +-- [GPIO]
-  |     Jetson GPIO pin (Launch Button) — interrupt callback
-  |
-  +-- [Publishers]
-  |     /arms/mission_state  (MissionState)
-  |
-  +-- [State Machine]
-  |     evaluate detections -> update state
-  |     launch button (GPIO, LOCK 상태) -> TRACK 전이
-  |     distance < D_fire (TRACK 상태) -> FIRE 전이
-  |
-  +-- [PID Controller]  (active in LOCK / TRACK / FIRE)
-  |     error_x -> roll_angle  [deg]
-  |     error_y -> pitch_angle [deg]
-  |
-  +-- [MAVLink Interface]
-        (roll_angle, pitch_angle, yaw_angle) -> quaternion
-        SET_ATTITUDE_TARGET (quaternion + thrust) -> FC
-        RTL command -> FC (RTL state)
-```
-
-### 7.6 제어 루프 흐름
+### 7.4 제어 루프 흐름
 
 ```
 /arms/detections  +  GPIO (launch button)
@@ -457,6 +380,52 @@ arms_control_node
   UART -> Flight Controller
          |
   publish /arms/mission_state (for UI)
+```
+
+### 7.5 MAVLink 명령
+
+제어 명령은 `SET_ATTITUDE_TARGET` (MAVLink #82) 메시지에 쿼터니언 자세값을 담아 전송.
+
+```
+MAVLink Message: SET_ATTITUDE_TARGET (#82)
+  - type_mask: 0b00000111  (ignore body rates, use attitude quaternion)
+  - q[0..3]     <- quaternion from (roll_angle, pitch_angle, yaw_angle)
+  - thrust      <- throttle
+
+  roll_angle, pitch_angle: PID 출력 [deg] -> rad 변환 후 quaternion 생성
+  yaw_angle  : 0.0 (heading 고정)
+```
+
+> `RC_CHANNELS_OVERRIDE` (#70) 방식은 FC의 각도 제어 모드(Angle/Stabilize)에 의존하므로,
+> `SET_ATTITUDE_TARGET`으로 직접 자세를 지정하는 것이 더 정확.
+
+### 7.6 arms_control_node 내부 구조
+
+```
+arms_control_node
+  |
+  +-- [Subscribers]
+  |     /arms/detections  (DetectionArray)
+  |
+  +-- [GPIO]
+  |     Jetson GPIO pin (Launch Button) — interrupt callback
+  |
+  +-- [Publishers]
+  |     /arms/mission_state  (MissionState)
+  |
+  +-- [State Machine]
+  |     evaluate detections -> update state
+  |     launch button (GPIO, LOCK 상태) -> TRACK 전이
+  |     distance < D_fire (TRACK 상태) -> FIRE 전이
+  |
+  +-- [PID Controller]  (active in LOCK / TRACK / FIRE)
+  |     error_x -> roll_angle  [deg]
+  |     error_y -> pitch_angle [deg]
+  |
+  +-- [MAVLink Interface]
+        (roll_angle, pitch_angle, yaw_angle) -> quaternion
+        SET_ATTITUDE_TARGET (quaternion + thrust) -> FC
+        RTL command -> FC (RTL state)
 ```
 
 ## 8. 오퍼레이터 UI (arms_ui)
@@ -493,12 +462,15 @@ arms_control_node
 ```
 # arms_bringup/launch/arms_sitl.launch.py
 
+includes:
+  - arms_video/launch/video_sitl.launch.py
+      → arms_video_node (gz_ros2_bridge)
+          /arms_drone/upward_camera/image → /arms/image_raw
+
 nodes:
-  - gz_ros2_bridge       (ros_gz_bridge)
-      /arms_drone/upward_camera/image → /arms/image_raw
-      /arms_drone/upward_ray/scan     → /arms/scan_raw
-  - arms_control_node    (arms_control)  MAVLink: udp:127.0.0.1:14550, GPIO: off
-  - arms_ui_node         (arms_ui)
+  - gz_scan_bridge    (ros_gz_bridge)  /arms_drone/upward_ray/scan → /arms/scan_raw
+  - arms_control_node (arms_control)   MAVLink: udp://:14540, GPIO: off
+  - arms_ui_node      (arms_ui)
 
 별도 실행:
   cd arms_detection/docker && docker compose -f docker-compose.laptop.yml up
@@ -509,10 +481,13 @@ nodes:
 ```
 # arms_bringup/launch/arms_full.launch.py
 
+includes:
+  - arms_video/launch/video.launch.py
+      → arms_video_node (usb_cam)  /dev/video0 → /arms/image_raw
+
 nodes:
-  - arms_video_node      (usb_cam)       /dev/video0 → /arms/image_raw
-  - arms_control_node    (arms_control)  MAVLink: /dev/ttyTHS1, GPIO: on
-  - arms_ui_node         (arms_ui)
+  - arms_control_node (arms_control)  MAVLink: /dev/ttyTHS1, GPIO: on
+  - arms_ui_node      (arms_ui)
 
 별도 실행:
   cd arms_detection/docker && docker compose -f docker-compose.jetson.yml up
@@ -521,35 +496,35 @@ nodes:
 ## 10. 전체 데이터 흐름 요약
 
 ```
-FPV Receiver (USB)
-      |
-      | V4L2 frame
-      v
-arms_video_node
+FPV Receiver (USB)          Gazebo Camera (SITL)
+      |                             |
+      | V4L2                        | gz topic
+      v                             v
+arms_video_node  ─────────────────────────────
       |
       | /arms/image_raw  [sensor_msgs/Image, 30Hz]
-      +---------> arms_ui_node (display)
+      +─────────────────────────────> arms_ui_node (display)
       |
+      | DDS (network_mode: host)
       v
-arms_detection_node
-      | (HTTP to Docker YOLO, ~20-30Hz)
+arms_detection_node  (Docker 컨테이너 내부, YOLO inference)
       |
       | /arms/detections  [arms_msgs/DetectionArray]
-      +---------> arms_ui_node (overlay boxes)
+      +─────────────────────────────> arms_ui_node (overlay boxes)
       |
       v
-arms_control_node  (launch button read directly via Jetson GPIO)
-      | (state machine + PID)
+arms_control_node  (Jetson GPIO: launch button)
+      | state machine + PID
       |
       | /arms/mission_state  [arms_msgs/MissionState]
-      +---------> arms_ui_node (state display)
+      +─────────────────────────────> arms_ui_node (state display)
       |
-      | MAVLink UART
+      | MAVLink UART (/dev/ttyTHS1) or UDP (SITL)
       v
-Flight Controller --> ESC --> Motors
-                  --> Payload Trigger (FIRE state)
+Flight Controller ──> ESC ──> Motors
+                  ──> Payload Trigger (FIRE state)
 ```
 
 ---
 
-_Document version: 0.1 — 2026-05-08_
+_Document version: 0.2 — 2026-05-15_
