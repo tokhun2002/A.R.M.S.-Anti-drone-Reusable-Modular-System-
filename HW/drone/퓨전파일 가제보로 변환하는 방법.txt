@@ -1,0 +1,129 @@
+0. Gazebo / PX4 기존 실행 중인 것 전부 종료
+pkill -9 -f "gz"
+pkill -9 -f "gazebo"
+pkill -9 -f "px4"
+
+
+
+1. urdf 폴더로 이동
+cd ~/ws/URDF_1_description/urdf
+
+
+
+2. xacro 파일 인코딩 문제 해결 + 조인트 이름 영어로 변경
+cp URDF_1.xacro URDF_1.xacro.bak
+cp URDF_1.trans URDF_1.trans.bak
+
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+# xacro 변환
+p = Path("URDF_1.xacro")
+raw = p.read_bytes()
+
+try:
+    text = raw.decode("cp949")
+except UnicodeDecodeError:
+    text = raw.decode("euc-kr", errors="replace")
+
+count = 0
+
+def repl(m):
+    global count
+    count += 1
+    joint_type = m.group(2)
+    return f'<joint name="joint_{count}" type="{joint_type}">'
+
+text = re.sub(r'<joint name="([^"]+)" type="([^"]+)">', repl, text)
+p.write_text(text, encoding="utf-8")
+
+# trans 파일도 UTF-8로 변환
+p = Path("URDF_1.trans")
+if p.exists():
+    raw = p.read_bytes()
+    try:
+        text = raw.decode("cp949")
+    except UnicodeDecodeError:
+        text = raw.decode("euc-kr", errors="replace")
+    p.write_text(text, encoding="utf-8")
+
+print(f"converted to UTF-8 and renamed {count} joints")
+PY
+
+
+
+3. $(find URDF_1_description) 경로 문제 해결
+python3 - <<'PY'
+from pathlib import Path
+
+root = "/home/cocoma57/ws/URDF_1_description"
+
+for name in ["URDF_1.xacro", "URDF_1.gazebo", "URDF_1.trans", "materials.xacro"]:
+    p = Path(name)
+    if p.exists():
+        text = p.read_text(encoding="utf-8", errors="replace")
+        text = text.replace("$(find URDF_1_description)", root)
+        p.write_text(text, encoding="utf-8")
+
+print("replaced package path with absolute path")
+PY
+
+
+
+4. xacro → urdf 변환
+source /opt/ros/humble/setup.bash
+xacro URDF_1.xacro > URDF_1.urdf
+
+
+
++ 절대좌표계를 상대좌표계로 변환
+
+
+
+5. urdf → sdf 변환
+gz sdf -p URDF_1.urdf > URDF_1.sdf
+
+
+
+6. 필요 없는 ROS control 플러그인 제거
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+p = Path("URDF_1.sdf")
+text = p.read_text(encoding="utf-8", errors="replace")
+
+text = re.sub(
+    r'<plugin[^>]*filename=["\']libgazebo_ros_control\.so["\'][^>]*>.*?</plugin>',
+    '',
+    text,
+    flags=re.DOTALL
+)
+
+text = re.sub(
+    r'<plugin[^>]*libgazebo_ros_control\.so[^>]*/>',
+    '',
+    text,
+    flags=re.DOTALL
+)
+
+text = re.sub(
+    r'<plugin[^>]*>[^<]*<filename>libgazebo_ros_control\.so</filename>.*?</plugin>',
+    '',
+    text,
+    flags=re.DOTALL
+)
+
+p.write_text(text, encoding="utf-8")
+print("removed libgazebo_ros_control.so plugin if existed")
+PY
+
+
+
+7. Gazebo 실행
+LIBGL_ALWAYS_SOFTWARE=1 gz sim -v 4 URDF_1.sdf
+
+
+
++ 한번만 변환해두면 7번만 실행하면 됨
