@@ -13,9 +13,10 @@ services:
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       # - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-      - ARMS_MODEL=${ARMS_MODEL:-/models/drone.pt}
+      - ARMS_MODEL=${ARMS_MODEL:-/models/best.engine}
       - ARMS_CONF=${ARMS_CONF:-0.5}
       - ARMS_IOU=${ARMS_IOU:-0.45}
+      - ARMS_CLASSES=${ARMS_CLASSES:-balloon}
     volumes:
-      - ./models:/models:ro    # place .pt model file here
+      - ./models:/models:ro    # place .engine model file here
     restart: unless-stopped
