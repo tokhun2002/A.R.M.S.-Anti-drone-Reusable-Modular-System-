@@ -6,7 +6,7 @@
 
 | 노드                  | 확인 항목                                                    | SITL | 실기체 |
 | --------------------- | ------------------------------------------------------------ | ---- | ------ |
-| `gz_ros2_bridge`      | 기동 확인, `/arms/scan_raw` 발행                             | ☐    | —      |
+| `gz_scan_bridge`      | 기동 확인, `/arms/scan_raw` 발행                             | ☐    | —      |
 | `arms_video_node`     | 기동 확인, `/arms/image_raw` 발행                            | ■    | ☐      |
 | `arms_detection_node` | Docker 컨테이너 기동, `/arms/detections` 발행                | ☐    | ☐      |
 | `arms_control_node`   | 기동 확인, 전체 제어 시퀀스 작동, `/arms/mission_state` 발행 | ☐    | ☐      |

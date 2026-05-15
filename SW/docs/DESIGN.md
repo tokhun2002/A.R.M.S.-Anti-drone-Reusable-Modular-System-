@@ -78,15 +78,23 @@ graph TD
     CN -->|MAVLink UART/UDP| FC
 ```
 
+| 노드                  | subscribe                                                          | publish               |
+| --------------------- | ------------------------------------------------------------------ | --------------------- |
+| `arms_video_node`     | —                                                                  | `/arms/image_raw`     |
+| `arms_detection_node` | `/arms/image_raw`                                                  | `/arms/detections`    |
+| `arms_control_node`   | `/arms/detections`                                                 | `/arms/mission_state` |
+| `arms_ui_node`        | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state` | —                     |
+| `gz_scan_bridge`      | `/arms_drone/upward_ray/scan` (gz)                                 | `/arms/scan_raw`      |
+
 ### 3.2 노드별 역할
 
-| 노드                  | 패키지           | 역할                                                                                                                                                           | subscribe                                                          | publish               | 실행 환경 |
-| --------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | --------------------- | --------- |
-| `arms_video_node`     | `arms_video`     | 영상 소스 추상화. 실기체는 usb_cam으로 USB 캡처 카드 수신, SITL은 gz_ros2_bridge로 Gazebo 카메라 수신.                                                         | —                                                                  | `/arms/image_raw`     | 호스트    |
-| `arms_detection_node` | `arms_detection` | YOLO 추론 수행 후 바운딩박스 발행. **Docker 컨테이너 안에서 실행**되며 `network_mode: host`로 ROS2 DDS 네트워크에 직접 참여                                    | `/arms/image_raw`                                                  | `/arms/detections`    | Docker    |
-| `arms_control_node`   | `arms_control`   | 상태 머신, PID 제어, MAVLink 통신 담당. 감지 결과로 상태 전이 판단, PID로 roll/pitch 명령 계산, MAVLink로 FC에 자세 명령 전송. GPIO로 발사 버튼 입력 직접 읽음 | `/arms/detections`                                                 | `/arms/mission_state` | 호스트    |
-| `arms_ui_node`        | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                                         | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state` | —                     | 호스트    |
-| `gz_scan_bridge`      | `ros_gz_bridge`  | SITL 전용. Gazebo 거리 센서 토픽을 ROS2로 브릿지. arms_sitl.launch.py에서 직접 실행                                                                            | `/arms_drone/upward_ray/scan` (gz)                                 | `/arms/scan_raw`      | 호스트    |
+| 노드                  | 패키지           | 역할                                                                                                                                                           | 실행 환경 |
+| --------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| `arms_video_node`     | `arms_video`     | 영상 소스 추상화. 실기체는 usb_cam으로 USB 캡처 카드 수신, SITL은 gz_ros2_bridge로 Gazebo 카메라 수신.                                                         | 호스트    |
+| `arms_detection_node` | `arms_detection` | YOLO 추론 수행 후 바운딩박스 발행. **Docker 컨테이너 안에서 실행**되며 `network_mode: host`로 ROS2 DDS 네트워크에 직접 참여                                    | Docker    |
+| `arms_control_node`   | `arms_control`   | 상태 머신, PID 제어, MAVLink 통신 담당. 감지 결과로 상태 전이 판단, PID로 roll/pitch 명령 계산, MAVLink로 FC에 자세 명령 전송. GPIO로 발사 버튼 입력 직접 읽음 | 호스트    |
+| `arms_ui_node`        | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                                         | 호스트    |
+| `gz_scan_bridge`      | `ros_gz_bridge`  | SITL 전용. Gazebo 거리 센서 토픽을 ROS2로 브릿지. arms_sitl.launch.py에서 직접 실행                                                                            | 호스트    |
 
 ### 3.3 커스텀 메시지 정의
 
