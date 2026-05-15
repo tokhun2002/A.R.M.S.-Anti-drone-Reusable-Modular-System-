@@ -16,7 +16,7 @@ PX4 + Gazebo Harmonic 기반 ARMS 전용 SITL 환경 구성 매뉴얼
 
 ### 2.1 ros_gz_bridge (소스 빌드 필수)
 
-> ⚠️ apt의 `ros-humble-ros-gz-bridge`는 Gazebo Fortress (`ign-msgs 8`, `ign-transport 11`) 기준으로 빌드되어 있다. 반면 PX4 SITL은 Gazebo Harmonic (`gz-msgs 10`, `gz-transport 13`)을 사용하므로 버전이 맞지 않아 `Unknown message type [9]` 에러가 발생하고 ROS2 토픽이 브릿지되지 않는다. 반드시 Harmonic 버전으로 소스 빌드해야 한다.
+> ⚠️ apt의 `ros-humble-ros-gz-bridge`는 Gazebo Fortress (`ign-msgs 8`, `ign-transport 11`) 기준으로 빌드되어 있음. 반면 PX4 SITL은 Gazebo Harmonic (`gz-msgs 10`, `gz-transport 13`)을 사용하므로 버전이 맞지 않아 `Unknown message type [9]` 에러가 발생하고 ROS2 토픽이 브릿지되지 않음. 반드시 Harmonic 버전으로 소스 빌드해야 함.
 
 ```bash
 # Harmonic dev 패키지 설치
@@ -30,6 +30,8 @@ git clone https://github.com/gazebosim/ros_gz.git -b humble
 cd ~/ros_gz_harmonic_ws
 source /opt/ros/humble/setup.bash
 GZ_VERSION=harmonic colcon build --packages-select ros_gz_bridge ros_gz_interfaces
+
+source ~/ros_gz_harmonic_ws/install/setup.bash
 ```
 
 설치 확인:
@@ -56,8 +58,8 @@ source install/setup.bash
 
 ## 4. worlds, models 파일 등록
 
-- `make px4_sitl`은 빌드만 하며, 커스텀 모델/월드 파일은 자동으로 등록되지 않는다.
-- `SW/simulation`에 있는 worlds와 models을 PX4에서 불러올 수 있게 심볼릭 링크를 만들어줘야 한다.
+- `make px4_sitl`은 빌드만 하며, 커스텀 모델/월드 파일은 자동으로 등록되지 않음.
+- `SW/simulation`에 있는 worlds와 models을 PX4에서 불러올 수 있게 심볼릭 링크를 만들어야 함.
 
 ```bash
 # 월드 파일 링크
@@ -81,7 +83,7 @@ PX4_GZ_MODEL=arms_drone \
 make px4_sitl gz_x500
 ```
 
-- `SW/simulation`에 만들어둔 world, model로 PX4 SITL을 실행한다
+- `SW/simulation`에 만들어둔 world, model로 PX4 SITL을 실행
 
 ### Terminal 2 — A.R.M.S. 노드
 
@@ -93,7 +95,7 @@ source /path/to/ros_gz_harmonic_ws/install/setup.bash
 ros2 launch arms_bringup arms_sitl.launch.py
 ```
 
-`arms_sitl.launch.py` 가 내부적으로 아래를 한 번에 기동한다:
+`arms_sitl.launch.py` 가 내부적으로 아래를 한 번에 기동:
 
 - `gz_ros2_bridge` — Gazebo 카메라/ray sensor → `/arms/image_raw`, `/arms/scan_raw`
 - `arms_control_node` — 상태머신 + PID + MAVLink(UDP)
