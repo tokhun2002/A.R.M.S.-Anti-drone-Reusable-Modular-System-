@@ -1,0 +1,1082 @@
+<sdf version='1.11'>
+  <model name='URDF_1'>
+    <link name='base_link'>
+      <inertial>
+        <pose>-0.0001053135768977817 4.076796133275295e-06 0.017469591476250788 0 0 0</pose>
+        <mass>0.58518543831259306</mass>
+        <inertia>
+          <ixx>0.0047249700254269056</ixx>
+          <ixy>-3.6884730949155408e-10</ixy>
+          <ixz>4.8032411985179994e-06</ixz>
+          <iyy>0.0047259919690931683</iyy>
+          <iyz>8.9901877324310132e-08</iyz>
+          <izz>0.003931170807070972</izz>
+        </inertia>
+      </inertial>
+      <collision name='base_link_collision'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/base_link.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__part_1_2_1_1_collision_1'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__RS2205_2300KV_1_1_1_collision_2'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__RS2205_2300KV_2_1_1_collision_3'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__part_1_3_1_1_collision_4'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__part_1_2_2_1_collision_5'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__RS2205_2300KV_1_2_1_collision_6'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__RS2205_2300KV_2_2_1_collision_7'>
+        <pose>0 0 8.6736173798840355e-18 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__part_1_3_2_1_collision_8'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__part_1_2_3_1_collision_9'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__RS2205_2300KV_1_3_1_collision_10'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__RS2205_2300KV_2_3_1_collision_11'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__part_1_3_3_1_collision_12'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__part_1_2_4_1_collision_13'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__RS2205_2300KV_1_4_1_collision_14'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__RS2205_2300KV_2_4_1_collision_15'>
+        <pose>0 -1.387778780781446e-17 1.387778780781446e-17 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__part_1_3_4_1_collision_16'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__part_2_1_collision_17'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <visual name='base_link_visual'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/base_link.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__part_1_2_1_1_visual_1'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__RS2205_2300KV_1_1_1_visual_2'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__RS2205_2300KV_2_1_1_visual_3'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__part_1_3_1_1_visual_4'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__part_1_2_2_1_visual_5'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__RS2205_2300KV_1_2_1_visual_6'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__RS2205_2300KV_2_2_1_visual_7'>
+        <pose>0 0 8.6736173798840355e-18 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__part_1_3_2_1_visual_8'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__part_1_2_3_1_visual_9'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__RS2205_2300KV_1_3_1_visual_10'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__RS2205_2300KV_2_3_1_visual_11'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__part_1_3_3_1_visual_12'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__part_1_2_4_1_visual_13'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_2_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__RS2205_2300KV_1_4_1_visual_14'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_1_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__RS2205_2300KV_2_4_1_visual_15'>
+        <pose>0 -1.387778780781446e-17 1.387778780781446e-17 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/RS2205_2300KV_2_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__part_1_3_4_1_visual_16'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_1_3_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__part_2_1_visual_17'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/part_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <self_collide>true</self_collide>
+      <gravity>true</gravity>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+      <self_collide>true</self_collide>
+    </link>
+    <joint name='joint_18' type='revolute'>
+      <pose relative_to='base_link'>0.12484000000000001 0 -0.027 0 0 0</pose>
+      <parent>base_link</parent>
+      <child>5045_Propeller_CCW_1_1</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-inf</lower>
+          <upper>inf</upper>
+        </limit>
+        <dynamics>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='5045_Propeller_CCW_1_1'>
+      <pose relative_to='joint_18'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>-3.8667301568984242e-08 -6.765340998553526e-06 -0.0035337301840080511 0 0 0</pose>
+        <mass>0.0039989498163253926</mass>
+        <inertia>
+          <ixx>1.9999999999999999e-06</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>1.9999999999999999e-06</iyy>
+          <iyz>0</iyz>
+          <izz>3.9999999999999998e-06</izz>
+        </inertia>
+      </inertial>
+      <collision name='5045_Propeller_CCW_1_1_collision'>
+        <pose>-0.12484000000000001 0 0.027 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <visual name='5045_Propeller_CCW_1_1_visual'>
+        <pose>-0.12484000000000001 0 0.027 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <self_collide>true</self_collide>
+    </link>
+    <joint name='joint_20' type='revolute'>
+      <pose relative_to='base_link'>0 0.125 -0.027 0 0 0</pose>
+      <parent>base_link</parent>
+      <child>5045_Propeller_CCW_2_1</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-inf</lower>
+          <upper>inf</upper>
+        </limit>
+        <dynamics>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='5045_Propeller_CCW_2_1'>
+      <pose relative_to='joint_20'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>3.5578596695842469e-06 4.0312717530799352e-07 -0.0035341478791666089 0 0 0</pose>
+        <mass>0.0039989222367478056</mass>
+        <inertia>
+          <ixx>1.9999999999999999e-06</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>1.9999999999999999e-06</iyy>
+          <iyz>0</iyz>
+          <izz>3.9999999999999998e-06</izz>
+        </inertia>
+      </inertial>
+      <collision name='5045_Propeller_CCW_2_1_collision'>
+        <pose>0 -0.125 0.027 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <visual name='5045_Propeller_CCW_2_1_visual'>
+        <pose>0 -0.125 0.027 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <self_collide>true</self_collide>
+    </link>
+    <joint name='joint_19' type='revolute'>
+      <pose relative_to='base_link'>-0.125 0 -0.027 0 0 0</pose>
+      <parent>base_link</parent>
+      <child>5045_Propeller_CCW_3_1</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-inf</lower>
+          <upper>inf</upper>
+        </limit>
+        <dynamics>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='5045_Propeller_CCW_3_1'>
+      <pose relative_to='joint_19'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>-6.4606453603899272e-06 -2.0215345390184319e-06 -0.0035337301840081131 0 0 0</pose>
+        <mass>0.0039989498163253926</mass>
+        <inertia>
+          <ixx>1.9999999999999999e-06</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>1.9999999999999999e-06</iyy>
+          <iyz>0</iyz>
+          <izz>3.9999999999999998e-06</izz>
+        </inertia>
+      </inertial>
+      <collision name='5045_Propeller_CCW_3_1_collision'>
+        <pose>0.125 0 0.027 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <visual name='5045_Propeller_CCW_3_1_visual'>
+        <pose>0.125 0 0.027 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <self_collide>true</self_collide>
+    </link>
+    <joint name='joint_21' type='revolute'>
+      <pose relative_to='base_link'>0 -0.12484000000000001 -0.026999999999999979 0 0 0</pose>
+      <parent>base_link</parent>
+      <child>5045_Propeller_CCW_4_1</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-inf</lower>
+          <upper>inf</upper>
+        </limit>
+        <dynamics>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='5045_Propeller_CCW_4_1'>
+      <pose relative_to='joint_21'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>-1.8470414595930641e-06 -3.266576244623232e-06 -0.0035341478791666441 0 0 0</pose>
+        <mass>0.0039989222367478056</mass>
+        <inertia>
+          <ixx>1.9999999999999999e-06</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>1.9999999999999999e-06</iyy>
+          <iyz>0</iyz>
+          <izz>3.9999999999999998e-06</izz>
+        </inertia>
+      </inertial>
+      <collision name='5045_Propeller_CCW_4_1_collision'>
+        <pose>0 0.12484000000000001 0.027 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode>
+              <mu>0.20000000000000001</mu>
+              <mu2>0.20000000000000001</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <visual name='5045_Propeller_CCW_4_1_visual'>
+        <pose>0 0.12484000000000001 0.027 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>file:///home/cocoma57/ws/URDF_1_description/meshes/5045_Propeller_CCW_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <script>
+            <name>Gazebo/Silver</name>
+            <uri>file://media/materials/scripts/gazebo.material</uri>
+          </script>
+          <diffuse>0.875 0.875 0.875 1</diffuse>
+          <ambient>0.875 0.875 0.875 1</ambient>
+        </material>
+      </visual>
+      <self_collide>true</self_collide>
+    </link>
+    
+    <frame name='joint_11' attached_to='RS2205_2300KV_1_1_1'>
+      <pose>0.12484000000000001 -0.014999999999999999 0 0 0 0</pose>
+    </frame>
+    <frame name='RS2205_2300KV_2_1_1' attached_to='joint_11'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_10' attached_to='part_1_2_1_1'>
+      <pose>0.070748000000000005 0.014494 -0.080000000000000002 0 0 0</pose>
+    </frame>
+    <frame name='RS2205_2300KV_1_1_1' attached_to='joint_10'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_5' attached_to='part_1_2_1_1'>
+      <pose>0.070907999999999999 0.014494 -0.050000000000000003 0 0 0</pose>
+    </frame>
+    <frame name='part_1_3_1_1' attached_to='joint_5'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_1' attached_to='base_link'>
+      <pose>0.054092000000000001 -0.014494 0.070000000000000007 0 0 0</pose>
+    </frame>
+    <frame name='part_1_2_1_1' attached_to='joint_1'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_13' attached_to='RS2205_2300KV_1_2_1'>
+      <pose>0 -0.014999999999999999 -0.125 0 0 0</pose>
+    </frame>
+    <frame name='RS2205_2300KV_2_2_1' attached_to='joint_13'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_12' attached_to='part_1_2_2_1'>
+      <pose>-0.015788 0.066078999999999999 -0.01 0 0 0</pose>
+    </frame>
+    <frame name='RS2205_2300KV_1_2_1' attached_to='joint_12'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_6' attached_to='part_1_2_2_1'>
+      <pose>-0.015788 0.066078999999999999 0.02 0 0 0</pose>
+    </frame>
+    <frame name='part_1_3_2_1' attached_to='joint_6'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_2' attached_to='base_link'>
+      <pose>0.015788 0.058921000000000001 0 0 0 0</pose>
+    </frame>
+    <frame name='part_1_2_2_1' attached_to='joint_2'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_15' attached_to='RS2205_2300KV_1_3_1'>
+      <pose>-0.125 -0.014999999999999999 0 0 0 0</pose>
+    </frame>
+    <frame name='RS2205_2300KV_2_3_1' attached_to='joint_15'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_14' attached_to='part_1_2_3_1'>
+      <pose>-0.066078999999999999 -0.015788 -0.080000000000000002 0 0 0</pose>
+    </frame>
+    <frame name='RS2205_2300KV_1_3_1' attached_to='joint_14'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_7' attached_to='part_1_2_3_1'>
+      <pose>-0.066078999999999999 -0.015788 -0.050000000000000003 0 0 0</pose>
+    </frame>
+    <frame name='part_1_3_3_1' attached_to='joint_7'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_3' attached_to='base_link'>
+      <pose>-0.058921000000000001 0.015788 0.070000000000000007 0 0 0</pose>
+    </frame>
+    <frame name='part_1_2_3_1' attached_to='joint_3'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_17' attached_to='RS2205_2300KV_1_4_1'>
+      <pose>0 -0.014999999999999999 0.12484000000000001 0 0 0</pose>
+    </frame>
+    <frame name='RS2205_2300KV_2_4_1' attached_to='joint_17'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_16' attached_to='part_1_2_4_1'>
+      <pose>0.015788 -0.065919000000000005 -0.080000000000000002 0 0 0</pose>
+    </frame>
+    <frame name='RS2205_2300KV_1_4_1' attached_to='joint_16'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_8' attached_to='part_1_2_4_1'>
+      <pose>0.015788 -0.066078999999999999 -0.050000000000000003 0 0 0</pose>
+    </frame>
+    <frame name='part_1_3_4_1' attached_to='joint_8'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_4' attached_to='base_link'>
+      <pose>-0.015788 -0.058921000000000001 0.070000000000000007 0 0 0</pose>
+    </frame>
+    <frame name='part_1_2_4_1' attached_to='joint_4'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='joint_9' attached_to='base_link'>
+      <pose>0 0 0.070000000000000007 0 0 0</pose>
+    </frame>
+    <frame name='part_2_1' attached_to='joint_9'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+  </model>
+</sdf>
