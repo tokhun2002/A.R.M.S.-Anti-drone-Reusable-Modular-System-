@@ -22,7 +22,7 @@ arms_control_node:
       control_rate_hz: 30.0
 
     mavlink:
-      connection: "udp:127.0.0.1:14540"   # SITL default
+      connection: "udp://:14540"           # SITL default
       # connection: "/dev/ttyTHS1"         # real drone (Jetson UART)
       baud: 115200
       system_id: 255
