@@ -41,9 +41,26 @@ ldd ~/ros_gz_harmonic_ws/install/ros_gz_bridge/lib/libros_gz_bridge.so | grep gz
 # libgz-msgs10.so.10 이 보여야 정상
 ```
 
-## 3. ROS2 워크스페이스 빌드
+## 3. YOLO 모델 가중치 다운로드
 
-- MAVSDK 및 관련 의존성 설치 필요할 수 있음
+YOLO 모델 가중치는 너무 커서 git lfs로 관리됨
+
+### git lfs 설치
+
+```bash
+sudo apt install git-lfs
+```
+
+### 모델 가중치 다운로드
+
+```bash
+git lfs install
+git lfs pull
+```
+
+## 4. ROS2 워크스페이스 빌드
+
+MAVSDK 및 관련 의존성 설치 필요할 수 있음
 
 ```bash
 cd /path/to/SW/arms_ws
@@ -56,7 +73,16 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-## 4. worlds, models 파일 등록
+최초 설치 이후에도 `arms_ws` 코드가 업데이트 된다면 항상 다시 빌드하고 실행해야 함
+
+```bash
+# colcon build --packages-select {package name}
+colcon build --packages-select arms_control
+
+source install/setup.bash
+```
+
+## 5. worlds, models 파일 등록
 
 - `make px4_sitl`은 빌드만 하며, 커스텀 모델/월드 파일은 자동으로 등록되지 않음.
 - `SW/simulation`에 있는 worlds와 models을 PX4에서 불러올 수 있게 심볼릭 링크를 만들어야 함.
@@ -71,7 +97,7 @@ cd /path/to/PX4-Autopilot/Tools/simulation/gz/models/
 ln -s /path/to/SW/simulation/models/arms_drone .
 ```
 
-## 5. SITL 실행
+## 6. SITL 실행
 
 ### Terminal 1 — PX4 SITL + Gazebo
 
@@ -83,7 +109,7 @@ PX4_GZ_MODEL=arms_drone \
 make px4_sitl gz_x500
 ```
 
-- `SW/simulation`에 만들어둔 world, model로 PX4 SITL을 실행
+`SW/simulation`에 만들어둔 world, model로 PX4 SITL을 실행
 
 ### Terminal 2 — A.R.M.S. 노드
 
@@ -92,16 +118,39 @@ source /opt/ros/humble/setup.bash
 source /path/to/SW/arms_ws/install/setup.bash
 source /path/to/ros_gz_harmonic_ws/install/setup.bash
 
+# YOLO detection (docker) 사용 시
 ros2 launch arms_bringup arms_sitl.launch.py
+
+# OpenCV 원 감지 사용 시 (docker 불필요, 빠른 검증용)
+ros2 launch arms_bringup arms_sitl_opencv.launch.py
 ```
 
-`arms_sitl.launch.py` 가 내부적으로 아래를 한 번에 기동:
+각 launch 파일이 내부적으로 한 번에 기동하는 노드:
 
-- `gz_ros2_bridge` — Gazebo 카메라/ray sensor → `/arms/image_raw`, `/arms/scan_raw`
-- `arms_control_node` — 상태머신 + PID + MAVLink(UDP)
-- `arms_ui_node` — OpenCV 오버레이
+| launch 파일                  | 포함 노드                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------- |
+| `arms_sitl.launch.py`        | gz_scan_bridge, arms_control_node, arms_ui_node                                 |
+| `arms_sitl_opencv.launch.py` | gz_scan_bridge, **arms_opencv_detection_node**, arms_control_node, arms_ui_node |
 
-## 6. 동작 확인
+> 매번 `source ...`하기 귀찮다면 `.bashrc`에 등록하면 됨
+
+### Terminal 3 — YOLO Detection 노드 (arms_sitl.launch.py 사용 시)
+
+```bash
+cd /path/to/SW/arms_ws/src/arms_detection/docker
+
+# 노트북
+docker compose -f docker-compose.laptop.yml up
+
+# 젯슨
+docker compose -f docker-compose.jetson.yml up
+```
+
+YOLO 모델을 실행하기 위한 의존성이 모두 설치된 docker container 내부에서 detection node 실행
+
+> `arms_sitl_opencv.launch.py` 사용 시 Terminal 3 불필요
+
+## 7. 동작 확인
 
 ```bash
 # 토픽 목록
@@ -125,7 +174,7 @@ ros2 topic echo /arms/scan_raw
 4. launch 버튼 입력 → `TRACK`
 5. 거리 < `fire_distance_m` (5.0 m) → `FIRE` → `RTL`
 
-## 7. 빨간 공 위치 변경
+## 8. 빨간 공 위치 변경
 
 `simulation/worlds/arms_sitl.sdf` 에서 `red_ball` 모델의 `<pose>` 를 수정한다.
 
@@ -140,7 +189,7 @@ ros2 topic echo /arms/scan_raw
 - 왼쪽 45도 위: `<pose>-5 0 5 0 0 0</pose>`
 - 멀리: `<pose>10 10 15 0 0 0</pose>`
 
-## 8. MAVLink 포트 설정
+## 9. MAVLink 포트 설정
 
 PX4 SITL 기본 MAVLink 포트:
 
@@ -152,13 +201,13 @@ PX4 SITL 기본 MAVLink 포트:
 
 `control_params.yaml` 의 `mavlink.connection` 을 `"udp:127.0.0.1:14540"` 으로 변경하면 QGC와 동시 연결 가능.
 
-## 9. 트러블슈팅
+## 10. 트러블슈팅
 
 | 증상                                | 원인                                                    | 해결                                                                             |
 | ----------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | `Heartbeat timeout`                 | PX4 SITL 미실행 또는 포트 불일치                        | Terminal 1 상태 확인, 포트 확인                                                  |
 | `/arms/image_raw` 없음              | `arms_sitl.launch.py` 미실행 또는 모델 토픽 경로 불일치 | Terminal 2 확인, `gz topic -l` 로 Gazebo 토픽 확인                               |
-| `Unknown message type [9]`          | ros_gz_bridge가 Fortress용으로 빌드되어 Harmonic 불일치 | 섹션 2.3 소스 빌드 절차 수행 후 `source ~/ros_gz_harmonic_ws/install/setup.bash` |
+| `Unknown message type [9]`          | ros_gz_bridge가 Fortress용으로 빌드되어 Harmonic 불일치 | 섹션 2.1 소스 빌드 절차 수행 후 `source ~/ros_gz_harmonic_ws/install/setup.bash` |
 | `OFFBOARD rejected`                 | 스트리밍 시작 전 모드 변경 시도                         | `start_offboard_stream()` 후 2초 대기 확인                                       |
-| 상태가 SEARCH에서 멈춤              | detection 컨테이너 미기동                               | `docker ps`, `/arms/detections` 토픽 echo 확인                                   |
+| 상태가 SEARCH에서 멈춤              | detection 노드 미기동                                   | `docker ps` 또는 opencv 노드 실행 여부 확인, `/arms/detections` 토픽 echo 확인   |
 | Accel/Gyro/Baro/Compass sensor 없음 | arms_sitl.sdf world에 센서 시뮬레이션 플러그인 누락     | world 파일에 Imu/AirPressure/Magnetometer/NavSat 플러그인 확인                   |
