@@ -54,7 +54,7 @@ class ArmsDetectionNode(Node):
         super().__init__("arms_detection_node")
 
         self.get_logger().info(f"Loading YOLO model from {MODEL_PATH} ...")
-        self.model = YOLO(MODEL_PATH)
+        self.model = YOLO(MODEL_PATH, task="detect")
         self.get_logger().info("Model loaded.")
 
         best_effort_qos = QoSProfile(
