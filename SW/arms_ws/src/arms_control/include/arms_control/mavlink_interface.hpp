@@ -10,7 +10,6 @@
 #include <mavsdk/mavsdk.h>
 #include <mavsdk/plugins/action/action.h>
 #include <mavsdk/plugins/offboard/offboard.h>
-#include <mavsdk/plugins/telemetry/telemetry.h>
 
 namespace arms_control {
 
@@ -55,8 +54,8 @@ private:
   std::string connection_url_;
   LogFn       log_fn_;
 
-  std::unique_ptr<mavsdk::Mavsdk>    mavsdk_;
-  std::shared_ptr<mavsdk::System>    system_;
+  std::unique_ptr<mavsdk::Mavsdk>     mavsdk_;
+  std::shared_ptr<mavsdk::System>     system_;
   std::unique_ptr<mavsdk::Action>    action_;
   std::unique_ptr<mavsdk::Offboard>  offboard_;
 

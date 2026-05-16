@@ -138,15 +138,13 @@ public:
     } else {
       mav_->start_offboard_stream(static_cast<float>(control_rate_hz_));
 
-      if (!gpio_enabled_) {
-        // SITL: auto-arm after giving PX4 time to accept the offboard stream
-        std::this_thread::sleep_for(2s);
-        mav_->set_offboard_mode();
-        std::this_thread::sleep_for(500ms);
-        mav_->arm();
-        sm_->arm();
-        RCLCPP_INFO(get_logger(), "SITL: armed and OFFBOARD mode set.");
-      }
+      // SITL / 실기체 공통: offboard 스트림 안정화 후 자동 arm
+      std::this_thread::sleep_for(2s);
+      mav_->set_offboard_mode();
+      std::this_thread::sleep_for(500ms);
+      mav_->arm();
+      sm_->arm();
+      RCLCPP_INFO(get_logger(), "Armed and OFFBOARD mode set.");
     }
 
     // ----------------------------------------------------------------
