@@ -10,7 +10,7 @@ CONF = 0.5
 IOU = 0.45
 
 print(f"[INFO] 모델 로드 중: {MODEL.resolve()}")
-model = YOLO(str(MODEL))
+model = YOLO(str(MODEL), task="detect")
 print(f"[INFO] 모델 로드 완료 | 클래스: {list(model.names.values())}")
 
 cap = cv2.VideoCapture(CAMERA)
