@@ -105,22 +105,23 @@ class PanelGUI:
                   bg="#d0021b", fg="white", activebackground="#ff1744",
                   command=self.node.fire_launch).pack(pady=5, fill="x", padx=20)
 
-        tk.Label(root, text="DETECTION MODE", fg="#aaaaaa", bg="#1e1e1e",
+        tk.Label(root, text="DETECTION MODE (다중 선택)", fg="#aaaaaa", bg="#1e1e1e",
                  font=("Arial", 10)).pack(pady=(8, 2))
         mfrm = tk.Frame(root, bg="#1e1e1e")
         mfrm.pack()
-        self.mode = "both"
-        self.mode_btns = {}
-        for m, label, col in [("hsv", "YOLO ON", "#2e7d32"),
-                              ("absdiff", "ABSDIFF", "#0277bd"),
-                              ("both", "BOTH", "#1565c0"),
-                              ("yolo", "YOLO OFF", "#555555")]:
-            b = tk.Button(mfrm, text=label, width=8, font=("Arial", 9, "bold"),
-                          command=lambda mm=m: self.set_mode(mm))
-            b.grid(row=0, column=len(self.mode_btns), padx=2)
-            self.mode_btns[m] = (b, col)
-        self._refresh_mode_btns()
-        tk.Label(root, text="YOLO ON=검출  ABSDIFF=대비점  YOLO OFF=정지",
+        # 3개 독립 토글. 여러 개 켜면 다 적용(융합). param 이름 = use_hsv/use_yolo/use_absdiff
+        # 기본: hsv ON, yolo OFF, absdiff ON
+        self.det_on = {"hsv": True, "yolo": False, "absdiff": True}
+        self.det_btns = {}
+        for key, label, col in [("hsv", "HSV", "#2e7d32"),
+                                ("yolo", "YOLO", "#6a1b9a"),
+                                ("absdiff", "ABSDIFF", "#0277bd")]:
+            b = tk.Button(mfrm, text=label, width=9, font=("Arial", 9, "bold"),
+                          command=lambda k=key: self.toggle_det(k))
+            b.grid(row=0, column=len(self.det_btns), padx=2)
+            self.det_btns[key] = (b, col)
+        self._refresh_det_btns()
+        tk.Label(root, text="눌린 것 = ON (초록/보라/파랑). 여러 개 켜면 융합 검출.",
                  fg="#777777", bg="#1e1e1e", font=("Arial", 8)).pack()
 
         sfrm = tk.Frame(root, bg="#1e1e1e")
@@ -135,7 +136,7 @@ class PanelGUI:
         self.kp_start = tk.Scale(root, from_=0, to=150, resolution=1, orient="horizontal",
                                  length=300, bg="#1e1e1e", fg="white", label="시작 P (약하게)",
                                  highlightthickness=0, troughcolor="#444")
-        self.kp_start.set(20)
+        self.kp_start.set(60)
         self.kp_start.pack()
         self.kp_start.bind("<ButtonRelease-1>",
                            lambda e: ros_param_set("control.kp_start", float(self.kp_start.get())))
@@ -190,24 +191,25 @@ class PanelGUI:
         self.alt = tk.Scale(root, from_=2, to=100, resolution=1, orient="horizontal",
                             length=300, bg="#1e1e1e", fg="white", label="풍선 고도 [m]",
                             highlightthickness=0, troughcolor="#444")
-        self.alt.set(30)
+        self.alt.set(50)
         self.alt.pack(pady=(2, 0))
         self.alt.bind("<ButtonRelease-1>",
                       lambda e: ros_param_set_node(REFEREE_NODE, "alt", float(self.alt.get())))
 
         self._poll()
 
-    def set_mode(self, m):
-        self.mode = m
-        ros_param_set_node(FUSION_NODE, "mode", m)
-        self._refresh_mode_btns()
+    def toggle_det(self, key):
+        # 해당 검출기 on/off 뒤집고 fusion_detector 의 use_<key> 파라미터 갱신
+        self.det_on[key] = not self.det_on[key]
+        ros_param_set_node(FUSION_NODE, f"use_{key}", str(self.det_on[key]).lower())
+        self._refresh_det_btns()
 
-    def _refresh_mode_btns(self):
-        for m, (b, col) in self.mode_btns.items():
-            if m == self.mode:
-                b.config(bg=col, fg="white", relief="sunken")
+    def _refresh_det_btns(self):
+        for key, (b, col) in self.det_btns.items():
+            if self.det_on[key]:
+                b.config(bg=col, fg="white", relief="sunken")      # ON
             else:
-                b.config(bg="#333333", fg="#cccccc", relief="raised")
+                b.config(bg="#333333", fg="#cccccc", relief="raised")  # OFF
 
     def flip_roll(self):
         self.roll_sign *= -1.0

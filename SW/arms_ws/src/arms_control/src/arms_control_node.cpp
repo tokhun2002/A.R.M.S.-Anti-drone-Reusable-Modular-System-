@@ -56,7 +56,7 @@ public:
     declare_parameter("control.control_rate_hz",       30.0);
 
     // ---- 시간 기반 P 램프 (시작 약한 P → 설정 시간 동안 최대 P까지 증가) ----
-    declare_parameter("control.kp_start",      20.0);   // TRACK 진입 시 P (약하게 시작 — 중심 안 잃게)
+    declare_parameter("control.kp_start",      60.0);   // TRACK 진입 시 P (약하게 시작 — 중심 안 잃게)
     declare_parameter("control.kp_max",        150.0);  // 램프 끝(최대) P
     declare_parameter("control.kp_ramp_sec",   5.0);    // kp_start→kp_max 증가 시간 [s] (패널 조절)
 
@@ -494,10 +494,10 @@ private:
   double filt_err_x_{0.0};
   double filt_err_y_{0.0};
   // 시간 기반 P 램프
-  double kp_start_{20.0};
+  double kp_start_{60.0};
   double kp_max_{150.0};
   double kp_ramp_sec_{5.0};
-  double kp_now_{20.0};
+  double kp_now_{60.0};
   rclcpp::Time track_enter_time_;
   int    dbg_count_{0};
   double control_rate_hz_{30.0};

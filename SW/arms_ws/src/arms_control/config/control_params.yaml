@@ -33,7 +33,7 @@ arms_control_node:
       control_rate_hz: 30.0
 
       # --- 시간 기반 P 램프 (시작 약한 P → 설정 시간 동안 최대 P까지 증가) ---
-      kp_start: 20.0               # TRACK 진입 시 P (약하게 시작 — 중심 안 잃게)
+      kp_start: 60.0               # TRACK 진입 시 P (약하게 시작 — 중심 안 잃게)
       kp_max: 150.0                # 램프 끝(최대) P
       kp_ramp_sec: 5.0             # kp_start→kp_max 증가 시간 [s] (패널 슬라이더로 조절)
 

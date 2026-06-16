@@ -71,7 +71,10 @@ class FusionDetector(Node):
         super().__init__("fusion_detector")
 
         # --- 파라미터 ---
-        self.declare_parameter("mode", "both")            # hsv | absdiff | both | yolo
+        # 검출기 3개 독립 on/off (여러 개 켜면 다 적용 → 융합). 패널 버튼이 토글.
+        self.declare_parameter("use_hsv", True)        # 색(빨강) 검출
+        self.declare_parameter("use_yolo", False)      # YOLO 도커 검출
+        self.declare_parameter("use_absdiff", True)    # 대비(튀는 점) 검출
         self.declare_parameter("cv.diff_thresh", 25)       # 노이즈보다 높게(점 peak는 충분히 큼)
         self.declare_parameter("cv.bg_blur", 15)           # 배경(하늘) 추정 median 커널
         self.declare_parameter("cv.pre_blur", 3)           # 노이즈 제거 가우시안
@@ -190,18 +193,10 @@ class FusionDetector(Node):
             return
 
         h, w = bgr.shape[:2]
-        mode = str(self.get_parameter("mode").value).lower()
-        # 모드:
-        #   hsv     = 색(빨강) 검출만
-        #   absdiff = 대비(튀는 점) 검출만
-        #   both    = hsv + absdiff 융합 (둘 중 잡히는 거)
-        #   yolo    = YOLO 도커 검출 (SITL 에선 도커 미실행 → 개발중, 데이터 없으면 미검출)
-        want_hsv = mode in ("both", "hsv")
-        want_absdiff = mode in ("both", "absdiff")
-        want_yolo = mode == "yolo"
-        # off = 검출 정지 (빈 결과 발행 → 풍선 안 잡고 SEARCH 유지)
-        if mode == "off":
-            want_hsv = want_absdiff = want_yolo = False
+        # 검출기 3개 독립 토글 (여러 개 켜져 있으면 전부 돌려서 융합)
+        want_hsv     = bool(self.get_parameter("use_hsv").value)
+        want_yolo    = bool(self.get_parameter("use_yolo").value)
+        want_absdiff = bool(self.get_parameter("use_absdiff").value)
 
         # --- 각 검출기 결과 ---
         yolo_box = None
@@ -211,14 +206,14 @@ class FusionDetector(Node):
         hsv_box = self.detect_hsv(bgr) if want_hsv else None
         cv_box = self.detect_cv(bgr) if want_absdiff else None
 
-        # --- target 결정: 여러 개면 confidence 최고. 둘 다 있으면 융합 ---
+        # --- target 결정: 켜진 검출기 중 잡힌 것들을 융합(중심 평균, 최고신뢰 박스) ---
         cands = [b for b in (yolo_box, hsv_box, cv_box) if b is not None]
         if not cands:
             target = None
         elif len(cands) == 1:
             target = cands[0]
         else:
-            target = self._fuse(cands[0], cands[1])
+            target = self._fuse_all(cands)
 
         out = DetectionArray()
         out.header = msg.header
@@ -228,30 +223,27 @@ class FusionDetector(Node):
 
         # --- 디버그 영상 ---
         if bool(self.get_parameter("publish_debug").value):
-            self._publish_debug(bgr, msg.header, yolo_box, cv_box, target, mode)
+            label = "+".join(
+                n for n, on in (("HSV", want_hsv), ("YOLO", want_yolo), ("ABSDIFF", want_absdiff)) if on
+            ) or "OFF"
+            self._publish_debug(bgr, msg.header, yolo_box, hsv_box, cv_box, target, label)
 
     # -----------------------------------------------------------------
-    def _fuse(self, yolo_box, cv_box):
-        """둘 다 → 중심 평균 / 하나만 → 그것 / 없음 → None."""
-        if yolo_box is not None and cv_box is not None:
-            t = BoundingBox()
-            t.x_center = (yolo_box.x_center + cv_box.x_center) / 2.0
-            t.y_center = (yolo_box.y_center + cv_box.y_center) / 2.0
-            # 박스 크기는 YOLO 쪽(형태 정보)을 신뢰
-            t.width = yolo_box.width
-            t.height = yolo_box.height
-            t.confidence = max(yolo_box.confidence, cv_box.confidence)
-            t.class_id = 9
-            t.class_name = "fused"
-            return t
-        if yolo_box is not None:
-            return yolo_box
-        if cv_box is not None:
-            return cv_box
-        return None
+    def _fuse_all(self, boxes):
+        """켜진 검출기들이 동시에 잡으면 융합: 중심은 평균, 크기/신뢰는 최고신뢰 박스."""
+        best = max(boxes, key=lambda b: b.confidence)
+        t = BoundingBox()
+        t.x_center = sum(b.x_center for b in boxes) / len(boxes)
+        t.y_center = sum(b.y_center for b in boxes) / len(boxes)
+        t.width = best.width
+        t.height = best.height
+        t.confidence = best.confidence
+        t.class_id = 9
+        t.class_name = "fused"
+        return t
 
     # -----------------------------------------------------------------
-    def _publish_debug(self, bgr, header, yolo_box, cv_box, target, mode):
+    def _publish_debug(self, bgr, header, yolo_box, hsv_box, cv_box, target, mode):
         img = bgr.copy()
         h, w = img.shape[:2]
 
@@ -273,9 +265,10 @@ class FusionDetector(Node):
             cv2.putText(img, label, (x1, max(12, y1 - 5)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
 
-        # YOLO=초록, CV=노랑, target=빨강 십자
+        # YOLO=초록, HSV=자홍, CV=노랑, target=빨강 십자
         draw(yolo_box, (0, 200, 0), "YOLO")
-        draw(cv_box, (0, 220, 220), "CV")
+        draw(hsv_box, (200, 0, 200), "HSV")
+        draw(cv_box, (0, 220, 220), "ABSDIFF")
         if target is not None:
             tx, ty = int(target.x_center * w), int(target.y_center * h)
             cv2.drawMarker(img, (tx, ty), (0, 0, 255),
