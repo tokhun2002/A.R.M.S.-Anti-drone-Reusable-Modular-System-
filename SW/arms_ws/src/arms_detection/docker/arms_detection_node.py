@@ -8,6 +8,7 @@ Model path is read from the env var ARMS_MODEL (default: /models/drone.pt).
 """
 
 import os
+import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -23,14 +24,29 @@ IOU = float(os.environ.get("ARMS_IOU",  "0.45"))
 
 
 def imgmsg_to_numpy(msg: Image) -> np.ndarray:
-    """Convert sensor_msgs/Image to HxWxC uint8 numpy array (no cv_bridge needed)."""
-    dtype = np.uint8
-    channels = {"rgb8": 3, "bgr8": 3, "mono8": 1}.get(msg.encoding, 3)
-    img = np.frombuffer(msg.data, dtype=dtype).reshape(msg.height, msg.width, channels)
-    # YOLO expects RGB; sensor_msgs default is rgb8 from usb_cam / Gazebo bridge
-    if msg.encoding == "bgr8":
-        img = img[:, :, ::-1].copy()
-    return img
+    """sensor_msgs/Image → HxWx3 uint8 RGB (cv_bridge 없이)
+    msg.step 기반으로 바이트 수를 자동 계산하므로 해상도/인코딩 무관하게 동작.
+    """
+    data = np.frombuffer(msg.data, dtype=np.uint8)
+    bpp  = msg.step // msg.width  # bytes per pixel
+    enc  = msg.encoding.lower()
+
+    if enc == "rgb8":
+        return data.reshape(msg.height, msg.width, 3)
+    elif enc == "bgr8":
+        return data.reshape(msg.height, msg.width, 3)[:, :, ::-1].copy()
+    elif enc == "mono8":
+        return cv2.cvtColor(data.reshape(msg.height, msg.width), cv2.COLOR_GRAY2RGB)
+    elif enc in ("yuyv", "yuv422", "yuv422_yuy2"):
+        return cv2.cvtColor(data.reshape(msg.height, msg.width, 2), cv2.COLOR_YUV2RGB_YUYV)
+    else:
+        # fallback: step으로 채널 수 추정
+        img = data.reshape(msg.height, msg.width, bpp)
+        if bpp == 2:
+            return cv2.cvtColor(img, cv2.COLOR_YUV2RGB_YUYV)
+        elif bpp == 4:
+            return cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
+        return img
 
 
 class ArmsDetectionNode(Node):
@@ -38,7 +54,7 @@ class ArmsDetectionNode(Node):
         super().__init__("arms_detection_node")
 
         self.get_logger().info(f"Loading YOLO model from {MODEL_PATH} ...")
-        self.model = YOLO(MODEL_PATH)
+        self.model = YOLO(MODEL_PATH, task="detect")
         self.get_logger().info("Model loaded.")
 
         best_effort_qos = QoSProfile(
