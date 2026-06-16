@@ -4,12 +4,13 @@
 #  ./run_arms.sh 하나로 PX4(arms_drone) + 전체 스택 + 패널 GUI 실행.
 # =============================================================================
 PX4_DIR="$HOME/PX4-Autopilot"
-ARMS_SW="/home/inair/ARMS/SW"
+ARMS_SW="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 # =============================================================================
 
 ARMS_WS="$ARMS_SW/arms_ws"
 export ARMS_SW
 ROS_SETUP="source /opt/ros/humble/setup.bash; source $ARMS_WS/install/setup.bash; export ARMS_SW=$ARMS_SW"
+export GZ_SIM_RESOURCE_PATH="$ARMS_SW/simulation/models:$GZ_SIM_RESOURCE_PATH"
 
 # 이전 인스턴스 깨끗이 정리
 pkill -9 -f px4 2>/dev/null; pkill -9 -f 'gz sim' 2>/dev/null

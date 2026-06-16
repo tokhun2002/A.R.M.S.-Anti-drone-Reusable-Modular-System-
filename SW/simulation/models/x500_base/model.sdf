@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  x500_base — ARMS 커스텀 (base_link 형상을 ver_ksh_assembly.stl 로 교체)
+  물리/모터/프로펠러/센서/collision 은 원본 x500 그대로.
+  바뀐 것: base_link_visual 메시 → ARMS STL, scale 0.001, roll +90deg(Y-up→Z-up).
+           기존 5010 모터베이스 visual 4개 제거(STL 동체와 겹침 방지).
+  STL 은 같은 폴더 meshes/ver_ksh_assembly.stl 에 있어야 함.
+-->
+<sdf version='1.9'>
+  <model name='x500_base'>
+    <pose>0 0 .24 0 0 0</pose>
+    <self_collide>false</self_collide>
+    <static>false</static>
+    <link name="base_link">
+      <inertial>
+        <mass>2.0</mass>
+        <inertia>
+          <ixx>0.02166666666666667</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>0.02166666666666667</iyy>
+          <iyz>0</iyz>
+          <izz>0.04000000000000001</izz>
+        </inertia>
+      </inertial>
+      <gravity>true</gravity>
+      <velocity_decay />
+
+      <!-- ===== ARMS 커스텀 동체 (SolidWorks STL) ===== -->
+      <!-- scale 0.001: mm→m / roll 1.5708: STL은 Y축이 위 → Z축이 위로 -->
+      <visual name="base_link_visual">
+        <pose>0 0 0.1 -1.5708 0 0.7854</pose>
+        <geometry>
+          <mesh>
+            <scale>0.003 0.003 0.003</scale>
+            <uri>model://x500_base/meshes/ver_ksh_assembly.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.1 0.35 0.1 1</ambient>
+          <diffuse>0.15 0.55 0.15 1</diffuse>
+          <specular>0.2 0.3 0.2 1</specular>
+        </material>
+      </visual>
+
+      <!-- NXP 로고 평면들은 제거 (커스텀 동체엔 불필요) -->
+
+      <collision name="base_link_collision_0">
+        <pose>0 0 .007 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.35355339059327373 0.35355339059327373 0.05</size>
+          </box>
+        </geometry>
+        <surface>
+          <contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact>
+          <friction><ode /></friction>
+        </surface>
+      </collision>
+      <collision name="base_link_collision_1">
+        <pose>0 -0.098 -.123 -0.35 0 0</pose>
+        <geometry><box><size>0.015 0.015 0.21</size></box></geometry>
+        <surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode /></friction></surface>
+      </collision>
+      <collision name="base_link_collision_2">
+        <pose>0 0.098 -.123 0.35 0 0</pose>
+        <geometry><box><size>0.015 0.015 0.21</size></box></geometry>
+        <surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode /></friction></surface>
+      </collision>
+      <collision name="base_link_collision_3">
+        <pose>0 -0.132 -.2195 0 0 0</pose>
+        <geometry><box><size>0.25 0.015 0.015</size></box></geometry>
+        <surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode /></friction></surface>
+      </collision>
+      <collision name="base_link_collision_4">
+        <pose>0 0.132 -.2195 0 0 0</pose>
+        <geometry><box><size>0.25 0.015 0.015</size></box></geometry>
+        <surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode /></friction></surface>
+      </collision>
+
+      <sensor name="air_pressure_sensor" type="air_pressure">
+        <gz_frame_id>base_link</gz_frame_id>
+        <always_on>1</always_on>
+        <update_rate>50</update_rate>
+        <air_pressure><pressure><noise type="gaussian"><mean>0</mean><stddev>3</stddev></noise></pressure></air_pressure>
+      </sensor>
+      <sensor name="magnetometer_sensor" type="magnetometer">
+        <gz_frame_id>base_link</gz_frame_id>
+        <always_on>1</always_on>
+        <update_rate>100</update_rate>
+        <magnetometer>
+          <x><noise type="gaussian"><stddev>0.0001</stddev></noise></x>
+          <y><noise type="gaussian"><stddev>0.0001</stddev></noise></y>
+          <z><noise type="gaussian"><stddev>0.0001</stddev></noise></z>
+        </magnetometer>
+      </sensor>
+      <sensor name="imu_sensor" type="imu">
+        <gz_frame_id>base_link</gz_frame_id>
+        <always_on>1</always_on>
+        <update_rate>250</update_rate>
+        <imu>
+          <angular_velocity>
+            <x><noise type="gaussian"><mean>0.0</mean><stddev>0.0008726646</stddev></noise></x>
+            <y><noise type="gaussian"><mean>0.0</mean><stddev>0.0008726646</stddev></noise></y>
+            <z><noise type="gaussian"><mean>0.0</mean><stddev>0.0008726646</stddev></noise></z>
+          </angular_velocity>
+          <linear_acceleration>
+            <x><noise type="gaussian"><mean>0.0</mean><stddev>0.00637</stddev></noise></x>
+            <y><noise type="gaussian"><mean>0.0</mean><stddev>0.00637</stddev></noise></y>
+            <z><noise type="gaussian"><mean>0.0</mean><stddev>0.00686</stddev></noise></z>
+          </linear_acceleration>
+        </imu>
+      </sensor>
+      <sensor name="navsat_sensor" type="navsat">
+        <gz_frame_id>base_link</gz_frame_id>
+        <always_on>1</always_on>
+        <update_rate>30</update_rate>
+      </sensor>
+    </link>
+
+    <!-- ===== 프로펠러 4개 (원본 그대로, 회전 유지) ===== -->
+    <link name="rotor_0">
+      <gravity>true</gravity><self_collide>false</self_collide><velocity_decay />
+      <pose>0.278 -0.278 0.06 0 0 0</pose>
+      <inertial><mass>0.016076923076923075</mass><inertia><ixx>3.8464910483993325e-07</ixx><iyy>2.6115851691700804e-05</iyy><izz>2.649858234714004e-05</izz></inertia></inertial>
+      <visual name="rotor_0_visual">
+        <pose>-0.022 -0.14638461538461536 -0.016 0 0 0</pose>
+        <geometry><mesh><scale>0.8461538461538461 0.8461538461538461 0.8461538461538461</scale><uri>model://x500_base/meshes/1345_prop_ccw.stl</uri></mesh></geometry>
+        <material><script><name>Gazebo/DarkGrey</name><uri>file://media/materials/scripts/gazebo.material</uri></script></material>
+      </visual>
+      <visual name="rotor_0_visual_motor_bell">
+        <pose>0 0 -.032 0 0 0</pose>
+        <geometry><mesh><scale>1 1 1</scale><uri>model://x500_base/meshes/5010Bell.dae</uri></mesh></geometry>
+      </visual>
+      <collision name="rotor_0_collision"><pose>0 0 0 0 0 0 </pose><geometry><box><size>0.2792307692307692 0.016923076923076923 0.0008461538461538462</size></box></geometry><surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode /></friction></surface></collision>
+    </link>
+    <joint name="rotor_0_joint" type="revolute"><parent>base_link</parent><child>rotor_0</child><axis><xyz>0 0 1</xyz><limit><lower>-1e+16</lower><upper>1e+16</upper></limit><dynamics><spring_reference>0</spring_reference><spring_stiffness>0</spring_stiffness></dynamics></axis></joint>
+
+    <link name="rotor_1">
+      <gravity>true</gravity><self_collide>false</self_collide><velocity_decay />
+      <pose>-0.278 0.278 0.06 0 0 0</pose>
+      <inertial><mass>0.016076923076923075</mass><inertia><ixx>3.8464910483993325e-07</ixx><iyy>2.6115851691700804e-05</iyy><izz>2.649858234714004e-05</izz></inertia></inertial>
+      <visual name="rotor_1_visual">
+        <pose>-0.022 -0.14638461538461536 -0.016 0 0 0</pose>
+        <geometry><mesh><scale>0.8461538461538461 0.8461538461538461 0.8461538461538461</scale><uri>model://x500_base/meshes/1345_prop_ccw.stl</uri></mesh></geometry>
+        <material><script><name>Gazebo/DarkGrey</name><uri>file://media/materials/scripts/gazebo.material</uri></script></material>
+      </visual>
+      <visual name="rotor_1_visual_motor_top"><pose>0 0 -.032 0 0 0</pose><geometry><mesh><scale>1 1 1</scale><uri>model://x500_base/meshes/5010Bell.dae</uri></mesh></geometry></visual>
+      <collision name="rotor_1_collision"><pose>0 0 0 0 0 0 </pose><geometry><box><size>0.2792307692307692 0.016923076923076923 0.0008461538461538462</size></box></geometry><surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode /></friction></surface></collision>
+    </link>
+    <joint name="rotor_1_joint" type="revolute"><parent>base_link</parent><child>rotor_1</child><axis><xyz>0 0 1</xyz><limit><lower>-1e+16</lower><upper>1e+16</upper></limit><dynamics><spring_reference>0</spring_reference><spring_stiffness>0</spring_stiffness></dynamics></axis></joint>
+
+    <link name="rotor_2">
+      <gravity>true</gravity><self_collide>false</self_collide><velocity_decay />
+      <pose>0.278 0.278 0.06 0 0 0</pose>
+      <inertial><mass>0.016076923076923075</mass><inertia><ixx>3.8464910483993325e-07</ixx><iyy>2.6115851691700804e-05</iyy><izz>2.649858234714004e-05</izz></inertia></inertial>
+      <visual name="rotor_2_visual">
+        <pose>-0.022 -0.14638461538461536 -0.016 0 0 0</pose>
+        <geometry><mesh><scale>0.8461538461538461 0.8461538461538461 0.8461538461538461</scale><uri>model://x500_base/meshes/1345_prop_cw.stl</uri></mesh></geometry>
+        <material><script><name>Gazebo/DarkGrey</name><uri>file://media/materials/scripts/gazebo.material</uri></script></material>
+      </visual>
+      <visual name="rotor_2_visual_motor_top"><pose>0 0 -.032 0 0 0</pose><geometry><mesh><scale>1 1 1</scale><uri>model://x500_base/meshes/5010Bell.dae</uri></mesh></geometry></visual>
+      <collision name="rotor_2_collision"><pose>0 0 0 0 0 0 </pose><geometry><box><size>0.2792307692307692 0.016923076923076923 0.0008461538461538462</size></box></geometry><surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode /></friction></surface></collision>
+    </link>
+    <joint name="rotor_2_joint" type="revolute"><parent>base_link</parent><child>rotor_2</child><axis><xyz>0 0 1</xyz><limit><lower>-1e+16</lower><upper>1e+16</upper></limit><dynamics><spring_reference>0</spring_reference><spring_stiffness>0</spring_stiffness></dynamics></axis></joint>
+
+    <link name="rotor_3">
+      <gravity>true</gravity><self_collide>false</self_collide><velocity_decay />
+      <pose>-0.278 -0.278 0.06 0 0 0</pose>
+      <inertial><mass>0.016076923076923075</mass><inertia><ixx>3.8464910483993325e-07</ixx><iyy>2.6115851691700804e-05</iyy><izz>2.649858234714004e-05</izz></inertia></inertial>
+      <visual name="rotor_3_visual">
+        <pose>-0.022 -0.14638461538461536 -0.016 0 0 0</pose>
+        <geometry><mesh><scale>0.8461538461538461 0.8461538461538461 0.8461538461538461</scale><uri>model://x500_base/meshes/1345_prop_cw.stl</uri></mesh></geometry>
+        <material><script><name>Gazebo/DarkGrey</name><uri>file://media/materials/scripts/gazebo.material</uri></script></material>
+      </visual>
+      <visual name="rotor_3_visual_motor_top"><pose>0 0 -.032 0 0 0</pose><geometry><mesh><scale>1 1 1</scale><uri>model://x500_base/meshes/5010Bell.dae</uri></mesh></geometry></visual>
+      <collision name="rotor_3_collision"><pose>0 0 0 0 0 0 </pose><geometry><box><size>0.2792307692307692 0.016923076923076923 0.0008461538461538462</size></box></geometry><surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode /></friction></surface></collision>
+    </link>
+    <joint name="rotor_3_joint" type="revolute"><parent>base_link</parent><child>rotor_3</child><axis><xyz>0 0 1</xyz><limit><lower>-1e+16</lower><upper>1e+16</upper></limit><dynamics><spring_reference>0</spring_reference><spring_stiffness>0</spring_stiffness></dynamics></axis></joint>
+  </model>
+</sdf>
