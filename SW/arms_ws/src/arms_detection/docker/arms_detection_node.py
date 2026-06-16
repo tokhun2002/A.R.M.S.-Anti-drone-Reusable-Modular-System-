@@ -50,7 +50,7 @@ class ArmsDetectionNode(Node):
         self.sub = self.create_subscription(
             Image, "/arms/image_raw", self.cb_image, best_effort_qos
         )
-        self.pub = self.create_publisher(DetectionArray, "/arms/detections", 10)
+        self.pub = self.create_publisher(DetectionArray, "/arms/yolo_detections", 10)
 
         self.get_logger().info("arms_detection_node ready.")
 

@@ -13,6 +13,7 @@ enum class State {
   IDLE,
   SEARCH,
   LOCK,
+  BOOST,
   TRACK,
   FIRE,
   RTL,
@@ -37,11 +38,13 @@ public:
   // ---------- external events ----------
   void on_detection(const std::vector<arms_msgs::msg::BoundingBox> & detections);
   void on_launch_button();
+  void on_boost_complete();
   void on_distance(double distance_m);
   void on_fire_complete();
   void arm();
   void disarm();
   void on_landed();
+  void force_search();   // 외부 RESET: 어떤 상태든 SEARCH 로 강제 복귀
 
   // ---------- accessors ----------
   State       state()             const { return state_; }

@@ -11,6 +11,7 @@ std::string to_string(State s)
     case State::IDLE:   return "IDLE";
     case State::SEARCH: return "SEARCH";
     case State::LOCK:   return "LOCK";
+    case State::BOOST:  return "BOOST";
     case State::TRACK:  return "TRACK";
     case State::FIRE:   return "FIRE";
     case State::RTL:    return "RTL";
@@ -59,6 +60,7 @@ void StateMachine::on_detection(
       target_locked_ = true;
     }
   } else if (state_ == State::LOCK ||
+             state_ == State::BOOST ||
              state_ == State::TRACK ||
              state_ == State::FIRE) {
     if (lock_timer_running_) {
@@ -72,16 +74,24 @@ void StateMachine::on_detection(
 void StateMachine::on_launch_button()
 {
   if (state_ == State::LOCK) {
-    transition(State::TRACK);
+    transition(State::TRACK);   // BOOST 없이 바로 위치보정 추적
   } else if (log_fn_) {
     log_fn_("[StateMachine] Launch button pressed in state " +
             to_string(state_) + " — ignored.");
   }
 }
 
+void StateMachine::on_boost_complete()
+{
+  if (state_ == State::BOOST) {
+    transition(State::TRACK);   // 부스트 끝(또는 빗나감) → 위치보정
+  }
+}
+
 void StateMachine::on_distance(double distance_m)
 {
-  if (state_ == State::TRACK && distance_m < params_.fire_distance_m) {
+  if ((state_ == State::TRACK || state_ == State::BOOST) &&
+      distance_m < params_.fire_distance_m) {
     transition(State::FIRE);
   }
 }
@@ -114,12 +124,26 @@ void StateMachine::on_landed()
   }
 }
 
+void StateMachine::force_search()
+{
+  // RESET: RTL/TRACK/FIRE 등 어떤 상태든 즉시 SEARCH 로.
+  // 모든 락온/타이머/소실카운트 초기화해서 깨끗한 탐색 상태로 만든다.
+  lock_timer_running_ = false;
+  lock_elapsed_sec_   = 0.0;
+  lost_frame_count_   = 0;
+  target_locked_      = false;
+  error_x_            = 0.0;
+  error_y_            = 0.0;
+  transition(State::SEARCH);
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
 void StateMachine::on_target_lost()
 {
+  // BOOST 중에는 타겟 소실해도 발사 유지(committed). SEARCH/LOCK/TRACK 만 복귀 처리.
   if (state_ == State::SEARCH ||
       state_ == State::LOCK   ||
       state_ == State::TRACK)

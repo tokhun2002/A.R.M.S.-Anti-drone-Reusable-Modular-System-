@@ -30,7 +30,7 @@
          pitch = -pi/2 → optical axis points to +Z (sky) in body frame
          ================================================================ -->
     <link name="upward_camera_link">
-      <pose relative_to="base_link">0 0 1.0 0 -1.5708 0</pose>
+      <pose relative_to="base_link">0 0 0.15 0 -1.5708 0</pose>
       <inertial>
         <mass>0.01</mass>
         <inertia><ixx>1e-6</ixx><iyy>1e-6</iyy><izz>1e-6</izz></inertia>
@@ -42,8 +42,8 @@
         <camera>
           <horizontal_fov>1.047</horizontal_fov>  <!-- 60 deg -->
           <image>
-            <width>320</width>
-            <height>240</height>
+            <width>1280</width>
+            <height>720</height>
             <format>R8G8B8</format>
           </image>
           <clip>
@@ -65,7 +65,7 @@
          pitch = -pi/2 → ray points to +Z (sky)
          ================================================================ -->
     <link name="upward_ray_link">
-      <pose relative_to="base_link">0 0 1.0 0 -1.5708 0</pose>
+      <pose relative_to="base_link">0 0 0.15 0 -1.5708 0</pose>
       <inertial>
         <mass>0.005</mass>
         <inertia><ixx>1e-7</ixx><iyy>1e-7</iyy><izz>1e-7</izz></inertia>

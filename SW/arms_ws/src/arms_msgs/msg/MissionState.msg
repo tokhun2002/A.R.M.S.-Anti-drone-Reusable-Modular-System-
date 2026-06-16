@@ -4,3 +4,4 @@ float32 lock_elapsed_sec    # continuous detection duration so far [s]
 float32 error_x             # normalized pixel error from frame center [-0.5, 0.5]
 float32 error_y
 bool    target_locked
+float32 kp_now              # 현재 적용 중인 P 게인 (시간 램프 값)

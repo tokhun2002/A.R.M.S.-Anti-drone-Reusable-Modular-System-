@@ -1,39 +1,41 @@
 <?xml version="1.0"?>
 <!--
-  A.R.M.S. SITL world for Gazebo Harmonic.
-
-  Contents:
-    - Ground plane
-    - Sun (directional light)
-    - arms_drone at origin (upward camera + ray sensor)
-    - Red sphere at (5, 3, 10) meters — acts as the target drone
-
-  To change red ball position: edit the <pose> under <model name="red_ball">.
-  Format: x y z roll pitch yaw
+  A.R.M.S. SITL world (Gazebo Harmonic)
+  - 드론(arms_drone)은 PX4가 airframe 4021로 직접 스폰 → 여기 include 안 함
+  - 센서 시스템 플러그인(IMU/baro/airspeed/mag/navsat) 포함 → arm 가능
+  - red_ball : 날아다니는 풍선 (referee가 set_pose로 비행 + 명중 연출)
 -->
 <sdf version="1.9">
   <world name="arms_sitl">
 
-    <!-- Physics -->
     <physics name="1ms" type="ignored">
       <max_step_size>0.001</max_step_size>
       <real_time_factor>1.0</real_time_factor>
     </physics>
 
-    <!-- Plugins -->
-    <plugin filename="gz-sim-physics-system"          name="gz::sim::systems::Physics"/>
-    <plugin filename="gz-sim-sensors-system"           name="gz::sim::systems::Sensors">
+    <!-- 핵심 시스템 플러그인 -->
+    <plugin filename="gz-sim-physics-system"            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-sensors-system"            name="gz::sim::systems::Sensors">
       <render_engine>ogre2</render_engine>
     </plugin>
-    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
-    <plugin filename="gz-sim-user-commands-system"     name="gz::sim::systems::UserCommands"/>
-    <!-- PX4 SITL 센서 시뮬레이션 플러그인 -->
-    <plugin filename="gz-sim-imu-system"               name="gz::sim::systems::Imu"/>
-    <plugin filename="gz-sim-air-pressure-system"      name="gz::sim::systems::AirPressure"/>
-    <plugin filename="gz-sim-magnetometer-system"      name="gz::sim::systems::Magnetometer"/>
-    <plugin filename="gz-sim-navsat-system"            name="gz::sim::systems::NavSat"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"  name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-user-commands-system"      name="gz::sim::systems::UserCommands"/>
 
-    <!-- Sun -->
+    <!-- 비행 센서 플러그인 (이게 빠지면 PX4가 Accel/Gyro/baro/mag missing 으로 arm 거부) -->
+    <plugin filename="gz-sim-imu-system"          name="gz::sim::systems::Imu"/>
+    <plugin filename="gz-sim-air-pressure-system" name="gz::sim::systems::AirPressure"/>
+    <plugin filename="gz-sim-air-speed-system"    name="gz::sim::systems::AirSpeed"/>
+    <plugin filename="gz-sim-magnetometer-system" name="gz::sim::systems::Magnetometer"/>
+    <plugin filename="gz-sim-navsat-system"       name="gz::sim::systems::NavSat"/>
+
+    <!-- 하늘 배경 (카메라가 위를 보므로 균일한 하늘색이 검출에 유리) -->
+    <scene>
+      <ambient>0.9 0.9 0.9 1</ambient>
+      <background>0.6 0.78 0.95 1</background>
+      <sky></sky>
+      <grid>false</grid>
+    </scene>
+
     <light type="directional" name="sun">
       <cast_shadows>true</cast_shadows>
       <pose>0 0 10 0 0 0</pose>
@@ -42,7 +44,6 @@
       <direction>-0.5 0.1 -0.9</direction>
     </light>
 
-    <!-- Ground plane -->
     <model name="ground_plane">
       <static>true</static>
       <link name="link">
@@ -59,19 +60,17 @@
       </link>
     </model>
 
-    <!-- A.R.M.S. interceptor drone -->
-    <include>
-      <uri>model://arms_drone</uri>
-      <name>arms_drone</name>
-      <pose>0 0 0.2 0 0 0</pose>
-    </include>
-
-    <!-- Red ball target (왼쪽 45도 위) -->
-    <!-- Adjust pose to test different tracking angles -->
+    <!-- 날아다니는 풍선 (referee가 움직임). 시작 고도 12m -->
     <model name="red_ball">
-      <static>true</static>
-      <pose>-1 0 5 0 0 0</pose>
+      <static>false</static>
+      <pose>0 0 12 0 0 0</pose>
       <link name="link">
+        <gravity>false</gravity>
+        <kinematic>true</kinematic>
+        <inertial>
+          <mass>0.05</mass>
+          <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz></inertia>
+        </inertial>
         <collision name="collision">
           <geometry><sphere><radius>0.3</radius></sphere></geometry>
         </collision>
@@ -85,6 +84,7 @@
         </visual>
       </link>
     </model>
+
 
   </world>
 </sdf>
