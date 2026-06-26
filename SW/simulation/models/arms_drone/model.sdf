@@ -1,29 +1,45 @@
 <?xml version="1.0"?>
 <!--
   arms_drone model for Gazebo Harmonic (SDF 1.9)
-  Based on PX4 x500 quadrotor.
+  PX4 내장 x500을 그대로 include하고, ARMS 전용 센서/외형만 추가.
 
-  Additions over the base x500:
-    1. upward_camera_link  — camera sensor pointing to the sky (+Z body)
-    2. upward_ray_link     — GPU ray sensor pointing to the sky, range 0~50 m
+  추가 요소:
+    1. arms_body_visual    — 커스텀 동체 메시 (ver_ksh_assembly.stl)
+    2. upward_camera_link  — 위쪽 카메라 센서 (+Z body)
+    3. upward_ray_link     — 위쪽 ray 센서, 0~50m
 
-  Sensor topics (Gazebo internal):
+  Gazebo 토픽:
     /arms_drone/upward_camera/image   (gz.msgs.Image)
     /arms_drone/upward_ray/scan       (gz.msgs.LaserScan)
-
-  These are bridged to ROS2 by simulation/launch/bridge.launch.py.
-
-  NOTE: The base x500 SDF is included by reference from the PX4-Autopilot
-  gazebo models directory. This file extends it by merging links and sensors.
-  For standalone use, replace the <include> with the full x500 SDF content.
 -->
 <sdf version="1.9">
   <model name="arms_drone">
 
-    <!-- Include the base x500 model from PX4 -->
+    <!-- PX4 내장 x500 그대로 사용 (x500_base 포함) -->
     <include merge="true">
       <uri>model://x500</uri>
     </include>
+
+    <!-- ================================================================
+         ARMS 커스텀 동체 메시 (SolidWorks STL)
+         scale 0.003: mm→m / roll -90°: Y-up→Z-up / yaw 45°: 정면 보정
+         ================================================================ -->
+    <link name="base_link">
+      <visual name="arms_body_visual">
+        <pose>0 0 0.1 -1.5708 0 0.7854</pose>
+        <geometry>
+          <mesh>
+            <scale>0.003 0.003 0.003</scale>
+            <uri>model://arms_drone/meshes/ver_ksh_assembly.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.1 0.35 0.1 1</ambient>
+          <diffuse>0.15 0.55 0.15 1</diffuse>
+          <specular>0.2 0.3 0.2 1</specular>
+        </material>
+      </visual>
+    </link>
 
     <!-- ================================================================
          Upward-facing camera
@@ -40,7 +56,7 @@
         <always_on>true</always_on>
         <update_rate>30</update_rate>
         <camera>
-          <horizontal_fov>1.047</horizontal_fov>  <!-- 60 deg -->
+          <horizontal_fov>1.047</horizontal_fov>
           <image>
             <width>320</width>
             <height>240</height>
@@ -78,7 +94,7 @@
           <scan>
             <horizontal>
               <samples>8</samples>
-              <min_angle>-0.26</min_angle>   <!-- ±15° 콘: 머리 위 근처 풍선을 놓치지 않게 -->
+              <min_angle>-0.26</min_angle>
               <max_angle>0.26</max_angle>
             </horizontal>
             <vertical>

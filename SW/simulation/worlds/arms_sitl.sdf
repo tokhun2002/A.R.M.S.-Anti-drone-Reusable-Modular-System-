@@ -8,9 +8,14 @@
 <sdf version="1.9">
   <world name="arms_sitl">
 
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- 지구 중력/자기장/위치 설정 (PX4가 EKF2에서 사용) -->
     <gravity>0 0 -9.8</gravity>
     <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
-
     <spherical_coordinates>
       <surface_model>EARTH_WGS84</surface_model>
       <world_frame_orientation>ENU</world_frame_orientation>
@@ -19,11 +24,6 @@
       <elevation>488.0</elevation>
       <heading_deg>0</heading_deg>
     </spherical_coordinates>
-
-    <physics name="1ms" type="ignored">
-      <max_step_size>0.001</max_step_size>
-      <real_time_factor>1.0</real_time_factor>
-    </physics>
 
     <!-- 핵심 시스템 플러그인 -->
     <plugin filename="gz-sim-physics-system"            name="gz::sim::systems::Physics"/>
