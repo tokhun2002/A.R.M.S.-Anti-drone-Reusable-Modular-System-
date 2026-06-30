@@ -23,10 +23,12 @@ double PIDController::compute(double error, double dt)
     integral_ = i_clamped / ki_;
   }
 
-  // Derivative (skip on first call to avoid derivative kick)
+  // Derivative (skip on first call to avoid derivative kick) + 저역통과 필터
   double d = 0.0;
   if (!first_call_) {
-    d = kd_ * (error - prev_error_) / dt;
+    double d_raw = (error - prev_error_) / dt;
+    d_filt_ = deriv_alpha_ * d_raw + (1.0 - deriv_alpha_) * d_filt_;
+    d = kd_ * d_filt_;
   }
   first_call_ = false;
   prev_error_ = error;
@@ -40,6 +42,7 @@ void PIDController::reset()
   integral_   = 0.0;
   prev_error_ = 0.0;
   first_call_ = true;
+  d_filt_     = 0.0;
 }
 
 }  // namespace arms_control

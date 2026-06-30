@@ -53,12 +53,22 @@ public:
     declare_parameter("control.roll_sign",             1.0);
     declare_parameter("control.pitch_sign",            1.0);
     declare_parameter("control.error_lpf_alpha",       0.3);
+    // err 기반 P 자동조절: |err| 크면 P 낮춤(발산 방지), 작으면 풀 P(빠른 마무리)
+    declare_parameter("control.err_sched_enable",   true);   // 켜고 끄기
+    declare_parameter("control.err_sched_full_err", 0.06);   // 이 오차 이하 = 풀 P
+    declare_parameter("control.err_sched_big_err",  0.35);   // 이 오차 이상 = 최소 P
+    declare_parameter("control.err_sched_min_ratio",0.30);   // 큰 오차일 때 P 비율(30%)
     declare_parameter("control.control_rate_hz",       30.0);
 
     // ---- 시간 기반 P 램프 (시작 약한 P → 설정 시간 동안 최대 P까지 증가) ----
     declare_parameter("control.kp_start",      60.0);   // TRACK 진입 시 P (약하게 시작 — 중심 안 잃게)
     declare_parameter("control.kp_max",        150.0);  // 램프 끝(최대) P
     declare_parameter("control.kp_ramp_sec",   5.0);    // kp_start→kp_max 증가 시간 [s] (패널 조절)
+    // ---- 중앙 데드존 + 미분필터 + 거리 게인 스케줄링 (B/C 해결) ----
+    declare_parameter("control.deadzone",            0.04);  // |오차|<이 값이면 명령 0 (중앙 박스)
+    declare_parameter("control.deriv_lpf_alpha",     0.25);  // 미분항 LPF (작을수록 부드러움)
+    declare_parameter("control.gain_sched_near_m",   4.0);   // 이 거리 안으로 들어오면 P 감쇠 시작 [m]
+    declare_parameter("control.gain_sched_min_ratio",0.35);  // 가장 가까울 때 P 비율 (1.0=감쇠끔)
 
     declare_parameter("mission.sitl_auto_launch",      false);
     declare_parameter("mission.auto_launch_delay_sec", 1.0);
@@ -118,11 +128,21 @@ public:
     roll_sign_      = get_parameter("control.roll_sign").as_double();
     pitch_sign_     = get_parameter("control.pitch_sign").as_double();
     error_lpf_alpha_= get_parameter("control.error_lpf_alpha").as_double();
+    err_sched_enable_    = get_parameter("control.err_sched_enable").as_bool();
+    err_sched_full_err_  = get_parameter("control.err_sched_full_err").as_double();
+    err_sched_big_err_   = get_parameter("control.err_sched_big_err").as_double();
+    err_sched_min_ratio_ = get_parameter("control.err_sched_min_ratio").as_double();
     control_rate_hz_= get_parameter("control.control_rate_hz").as_double();
 
     kp_start_       = get_parameter("control.kp_start").as_double();
     kp_max_         = get_parameter("control.kp_max").as_double();
     kp_ramp_sec_    = get_parameter("control.kp_ramp_sec").as_double();
+    deadzone_           = get_parameter("control.deadzone").as_double();
+    deriv_lpf_alpha_    = get_parameter("control.deriv_lpf_alpha").as_double();
+    gain_sched_near_m_  = get_parameter("control.gain_sched_near_m").as_double();
+    gain_sched_min_ratio_ = get_parameter("control.gain_sched_min_ratio").as_double();
+    pid_roll_->set_deriv_alpha(deriv_lpf_alpha_);
+    pid_pitch_->set_deriv_alpha(deriv_lpf_alpha_);
 
     sitl_auto_launch_     = get_parameter("mission.sitl_auto_launch").as_bool();
     auto_launch_delay_sec_= get_parameter("mission.auto_launch_delay_sec").as_double();
@@ -162,6 +182,14 @@ public:
           else if (n == "control.kp_start")  kp_start_       = p.as_double();
           else if (n == "control.kp_max")    kp_max_         = p.as_double();
           else if (n == "control.kp_ramp_sec") kp_ramp_sec_  = p.as_double();
+          else if (n == "control.deadzone")            deadzone_             = p.as_double();
+          else if (n == "control.gain_sched_near_m")   gain_sched_near_m_    = p.as_double();
+          else if (n == "control.gain_sched_min_ratio")gain_sched_min_ratio_ = p.as_double();
+          else if (n == "control.deriv_lpf_alpha") {
+            deriv_lpf_alpha_ = p.as_double();
+            pid_roll_->set_deriv_alpha(deriv_lpf_alpha_);
+            pid_pitch_->set_deriv_alpha(deriv_lpf_alpha_);
+          }
           else if (n == "control.roll_pid.kp")  { rkp_ = p.as_double(); pid_changed = true; }
           else if (n == "control.roll_pid.ki")  { rki_ = p.as_double(); pid_changed = true; }
           else if (n == "control.roll_pid.kd")  { rkd_ = p.as_double(); pid_changed = true; }
@@ -195,6 +223,7 @@ public:
     sub_distance_ = create_subscription<sensor_msgs::msg::Range>(
       "/arms/distance", best_effort_qos,
       [this](sensor_msgs::msg::Range::SharedPtr msg) {
+        cache_distance(msg->range);
         sm_->on_distance(msg->range);
       });
 
@@ -210,6 +239,7 @@ public:
           }
         }
         if (std::isfinite(best)) {
+          cache_distance(best);
           sm_->on_distance(best);
         }
       });
@@ -316,6 +346,31 @@ private:
   }
 
   // ----------------------------------------------------------------
+  // 거리 캐시 + 데드존 헬퍼 (게인 스케줄링/중앙박스용)
+  // ----------------------------------------------------------------
+  void cache_distance(double d)
+  {
+    if (std::isfinite(d) && d > 0.0) {
+      last_distance_      = d;
+      last_distance_time_ = now();
+    }
+  }
+  // 최근 0.5초 안에 유효 거리값을 받았는가
+  bool distance_valid()
+  {
+    if (last_distance_ <= 0.0) return false;
+    return (now() - last_distance_time_).seconds() < 0.5;
+  }
+  // 소프트 데드존: |e|<dz → 0, 넘으면 dz 만큼 빼서 연속적으로
+  static double apply_deadzone(double e, double dz)
+  {
+    if (dz <= 0.0) return e;
+    if (e >  dz) return e - dz;
+    if (e < -dz) return e + dz;
+    return 0.0;
+  }
+
+  // ----------------------------------------------------------------
   // 30 Hz control loop
   // ----------------------------------------------------------------
   void control_loop()
@@ -387,19 +442,53 @@ private:
                        ? std::clamp(elapsed / kp_ramp_sec_, 0.0, 1.0)
                        : 1.0;   // 시간 0이면 즉시 최대 P
       kp_now_ = kp_start_ + ramp_t * (kp_max_ - kp_start_);
-      // kd/ki/limit 은 기존 저장값 유지, kp 만 램프 값으로 교체
-      pid_roll_->set_gains(kp_now_, rki_, rkd_, rlim_);
-      pid_pitch_->set_gains(kp_now_, pki_, pkd_, plim_);
 
-      roll_deg  = roll_sign_  * pid_roll_->compute(filt_err_x_, dt);
-      pitch_deg = pitch_sign_ * pid_pitch_->compute(filt_err_y_, dt);
+      // ---- 거리 게인 스케줄링 (C: 근접 발산 방지) ----
+      //   가까울수록 픽셀당 각도가 커져 발산 → 거리 가까우면 P 자동 감쇠.
+      //   거리 신호 없으면(센서 미수신) 비율 1.0 = 풀게인(안전 폴백).
+      double ratio = 1.0;
+      if (distance_valid() && gain_sched_near_m_ > 1e-3 && gain_sched_min_ratio_ < 0.999) {
+        double tt = std::clamp(last_distance_ / gain_sched_near_m_, 0.0, 1.0);
+        ratio = gain_sched_min_ratio_ + tt * (1.0 - gain_sched_min_ratio_);
+      }
+      gain_ratio_filt_ = 0.15 * ratio + 0.85 * gain_ratio_filt_;  // 부드럽게
+      double kp_eff = kp_now_ * gain_ratio_filt_;
+
+      // ---- err 기반 P 자동조절 (핵심: 어떤 err 이든 안 터지고 중앙으로) ----
+      //   |err| 이 클수록 P 를 낮춰서 발산 방지. 중앙 가까우면 풀 P 로 빠르게 마무리.
+      //   err_mag(현재 오차 크기) 를 full_err~big_err 구간에서 1.0~min_ratio 로 선형 매핑.
+      if (err_sched_enable_) {
+        double err_mag = std::hypot(filt_err_x_, filt_err_y_);
+        double er = 1.0;  // err 비율 (1.0=풀P, min_ratio=최소P)
+        if (err_sched_big_err_ > err_sched_full_err_ + 1e-6) {
+          double u = std::clamp(
+              (err_mag - err_sched_full_err_) /
+              (err_sched_big_err_ - err_sched_full_err_), 0.0, 1.0);
+          er = 1.0 - u * (1.0 - err_sched_min_ratio_);
+        }
+        err_ratio_filt_ = 0.2 * er + 0.8 * err_ratio_filt_;  // 급변 방지(부드럽게)
+        kp_eff *= err_ratio_filt_;
+      }
+
+      // kp 만 (램프×거리감쇠) 값으로 교체, kd/ki/limit 유지
+      pid_roll_->set_gains(kp_eff, rki_, rkd_, rlim_);
+      pid_pitch_->set_gains(kp_eff, pki_, pkd_, plim_);
+
+      // ---- 중앙 데드존 박스 (B: 중앙 미세떨림/헌팅 방지) ----
+      //   |오차|<deadzone 이면 0, 넘으면 deadzone 만큼 빼서 연속적으로(소프트).
+      double ex = apply_deadzone(filt_err_x_, deadzone_);
+      double ey = apply_deadzone(filt_err_y_, deadzone_);
+
+      roll_deg  = roll_sign_  * pid_roll_->compute(ex, dt);
+      pitch_deg = pitch_sign_ * pid_pitch_->compute(ey, dt);
       thrust    = static_cast<float>(track_throttle_);
 
-      // 디버그: 명령 + 램프 경과/현재 kp 를 0.2초마다 출력
+      // 디버그: 명령 + 거리/감쇠비율 을 0.2초마다 출력
       if (++dbg_count_ % 6 == 0) {
         RCLCPP_INFO(get_logger(),
-          "TRACK err=(%.2f,%.2f) t=%.1fs kp=%.1f -> roll=%.1f pitch=%.1f thr=%.2f",
-          filt_err_x_, filt_err_y_, elapsed, kp_now_, roll_deg, pitch_deg, thrust);
+          "TRACK err=(%.2f,%.2f) kp=%.1f(errx%.2f) d=%.1fm -> roll=%.1f pitch=%.1f",
+          filt_err_x_, filt_err_y_, kp_eff, err_ratio_filt_,
+          distance_valid() ? last_distance_ : -1.0, roll_deg, pitch_deg);
       }
     } else {
       // IDLE / SEARCH / LOCK / RTL : 프로펠러 OFF (지상 발사 대기)
@@ -498,6 +587,19 @@ private:
   double kp_max_{150.0};
   double kp_ramp_sec_{5.0};
   double kp_now_{60.0};
+  // 데드존 / 미분필터 / 거리 게인 스케줄링
+  double deadzone_{0.04};
+  double deriv_lpf_alpha_{0.25};
+  double gain_sched_near_m_{4.0};
+  double gain_sched_min_ratio_{0.35};
+  double gain_ratio_filt_{1.0};
+  bool   err_sched_enable_{true};
+  double err_sched_full_err_{0.06};
+  double err_sched_big_err_{0.35};
+  double err_sched_min_ratio_{0.30};
+  double err_ratio_filt_{1.0};
+  double last_distance_{0.0};
+  rclcpp::Time last_distance_time_;
   rclcpp::Time track_enter_time_;
   int    dbg_count_{0};
   double control_rate_hz_{30.0};

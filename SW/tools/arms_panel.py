@@ -86,11 +86,11 @@ class PanelGUI:
         self.node = node
         self.q = q
         self.roll_sign = 1.0
-        self.pitch_sign = 1.0
+        self.pitch_sign = -1.0   # 확정값(yaml)과 일치
 
         root.title("A.R.M.S. Control Panel")
         root.configure(bg="#1e1e1e")
-        root.geometry("400x1000")
+        root.geometry("400x1060")
 
         tk.Label(root, text="MISSION STATE", fg="#aaaaaa", bg="#1e1e1e",
                  font=("Arial", 11)).pack(pady=(10, 2))
@@ -128,7 +128,7 @@ class PanelGUI:
         sfrm.pack(pady=6)
         self.roll_btn = tk.Button(sfrm, text="Roll sign: +", width=14, command=self.flip_roll)
         self.roll_btn.grid(row=0, column=0, padx=4)
-        self.pitch_btn = tk.Button(sfrm, text="Pitch sign: +", width=14, command=self.flip_pitch)
+        self.pitch_btn = tk.Button(sfrm, text="Pitch sign: -", width=14, command=self.flip_pitch)
         self.pitch_btn.grid(row=0, column=1, padx=4)
 
         tk.Label(root, text="P 게인 (시간 램프)", fg="#aaaaaa",
@@ -136,14 +136,14 @@ class PanelGUI:
         self.kp_start = tk.Scale(root, from_=0, to=150, resolution=1, orient="horizontal",
                                  length=300, bg="#1e1e1e", fg="white", label="시작 P (약하게)",
                                  highlightthickness=0, troughcolor="#444")
-        self.kp_start.set(60)
+        self.kp_start.set(8)
         self.kp_start.pack()
         self.kp_start.bind("<ButtonRelease-1>",
                            lambda e: ros_param_set("control.kp_start", float(self.kp_start.get())))
-        self.kp_max = tk.Scale(root, from_=0, to=200, resolution=1, orient="horizontal",
+        self.kp_max = tk.Scale(root, from_=0, to=160, resolution=1, orient="horizontal",
                                length=300, bg="#1e1e1e", fg="white", label="최대 P (램프 끝)",
                                highlightthickness=0, troughcolor="#444")
-        self.kp_max.set(150)
+        self.kp_max.set(25)
         self.kp_max.pack()
         self.kp_max.bind("<ButtonRelease-1>",
                          lambda e: ros_param_set("control.kp_max", float(self.kp_max.get())))
@@ -157,14 +157,21 @@ class PanelGUI:
         self.kd = tk.Scale(root, from_=0, to=2, resolution=0.05, orient="horizontal",
                            length=300, bg="#1e1e1e", fg="white", label="kd (roll/pitch)",
                            highlightthickness=0, troughcolor="#444")
-        self.kd.set(0.1)
+        self.kd.set(0.6)
         self.kd.pack()
         self.kd.bind("<ButtonRelease-1>", lambda e: self.set_pid_kd(self.kd.get()))
+
+        self.ki = tk.Scale(root, from_=0.0, to=2.0, resolution=0.1, orient="horizontal",
+                           length=300, bg="#1e1e1e", fg="white", label="ki (적분 - 중앙오차 제거)",
+                           highlightthickness=0, troughcolor="#444")
+        self.ki.set(0.8)
+        self.ki.pack()
+        self.ki.bind("<ButtonRelease-1>", lambda e: self.set_pid_ki(self.ki.get()))
 
         self.maxang = tk.Scale(root, from_=30, to=120, resolution=5, orient="horizontal",
                                length=300, bg="#1e1e1e", fg="white", label="최대 각도 [deg]",
                                highlightthickness=0, troughcolor="#444")
-        self.maxang.set(90)
+        self.maxang.set(30)
         self.maxang.pack()
         self.maxang.bind("<ButtonRelease-1>", lambda e: self.set_max_angle(self.maxang.get()))
 
@@ -182,10 +189,18 @@ class PanelGUI:
                  font=("Arial", 10)).pack(pady=(8, 2))
         bbtn = tk.Frame(root, bg="#1e1e1e")
         bbtn.pack(pady=4)
-        tk.Button(bbtn, text="풍선 비행 시작", width=14, font=("Arial", 10, "bold"),
-                  bg="#9c27b0", fg="white", command=self.ball_start).grid(row=0, column=0, padx=3)
-        tk.Button(bbtn, text="풍선 정지", width=10,
-                  command=self.ball_stop).grid(row=0, column=1, padx=3)
+        self.ball_fly_btn = tk.Button(bbtn, text="풍선 비행 시작", width=14, font=("Arial", 10, "bold"),
+                  command=self.ball_start)
+        self.ball_fly_btn.grid(row=0, column=0, padx=3)
+        self.ball_stop_btn = tk.Button(bbtn, text="풍선 정지", width=10,
+                  command=self.ball_stop)
+        self.ball_stop_btn.grid(row=0, column=1, padx=3)
+        # 현재 풍선 상태 표시 라벨
+        self.ball_state_lbl = tk.Label(root, text="풍선 상태: ? (버튼을 눌러 설정)",
+                                       fg="white", bg="#555555", font=("Arial", 11, "bold"),
+                                       width=30)
+        self.ball_state_lbl.pack(pady=(2, 0), ipady=4)
+        self._refresh_ball_btns()
 
         # 풍선 고도 슬라이더 (referee alt 파라미터 실시간 변경)
         self.alt = tk.Scale(root, from_=2, to=100, resolution=1, orient="horizontal",
@@ -225,6 +240,10 @@ class PanelGUI:
         ros_param_set("control.roll_pid.kd", float(v))
         ros_param_set("control.pitch_pid.kd", float(v))
 
+    def set_pid_ki(self, v):
+        ros_param_set("control.roll_pid.ki", float(v))
+        ros_param_set("control.pitch_pid.ki", float(v))
+
     def set_max_angle(self, v):
         ros_param_set("control.roll_pid.output_limit", float(v))
         ros_param_set("control.pitch_pid.output_limit", float(v))
@@ -232,9 +251,29 @@ class PanelGUI:
     def ball_start(self):
         # referee 켜기 → 풍선이 알아서 랜덤 곡선기동 비행 (위빙+고도변화)
         ros_param_set_node(REFEREE_NODE, "enabled", "true")
+        self.ball_flying = True
+        self._refresh_ball_btns()
 
     def ball_stop(self):
         ros_param_set_node(REFEREE_NODE, "enabled", "false")
+        self.ball_flying = False
+        self._refresh_ball_btns()
+
+    def _refresh_ball_btns(self):
+        # 현재 풍선 상태에 맞게 버튼 강조 + 라벨 갱신
+        flying = getattr(self, "ball_flying", None)
+        if flying is True:
+            self.ball_state_lbl.config(text="풍선 상태: 비행 중 (움직임)", bg="#9c27b0")
+            self.ball_fly_btn.config(bg="#9c27b0", fg="white", relief="sunken")
+            self.ball_stop_btn.config(bg="#333333", fg="#cccccc", relief="raised")
+        elif flying is False:
+            self.ball_state_lbl.config(text="풍선 상태: 정지 (멈춤)", bg="#2e7d32")
+            self.ball_fly_btn.config(bg="#333333", fg="#cccccc", relief="raised")
+            self.ball_stop_btn.config(bg="#2e7d32", fg="white", relief="sunken")
+        else:
+            self.ball_state_lbl.config(text="풍선 상태: ? (버튼을 눌러 설정)", bg="#555555")
+            self.ball_fly_btn.config(bg="#9c27b0", fg="white", relief="raised")
+            self.ball_stop_btn.config(bg="#333333", fg="#cccccc", relief="raised")
 
     def _poll(self):
         try:

@@ -4,46 +4,46 @@ arms_control_node:
       detection_confidence_threshold: 0.65
       lock_duration_sec: 2.0        # continuous detection duration to enter LOCK [s]
       lost_frames_threshold: 10     # frames without detection -> back to SEARCH
-      lock_box_tolerance: 0.15      # not yet used in SM, reserved for bbox center check
+      lock_box_tolerance: 0.15
       fire_distance_m: 5.0          # ray sensor distance threshold [m]
-      sitl_auto_launch: false       # false: 패널 LAUNCH 버튼으로 발사 (네 설계)
+      sitl_auto_launch: false       # false: 패널 LAUNCH 버튼으로 발사
       auto_launch_delay_sec: 1.0
-      boost_duration_sec: 0.0       # 발사 후 고정각 풀스로틀 직진 시간 [s]
-
+      boost_duration_sec: 0.0       # 0 = BOOST 스킵, 즉시 PID 추적
     control:
       roll_pid:
-        kp: 25.0                     # P게인 (과하면 진동/오버슈트)
-        ki: 0.0                     # 0: 움직이는 타겟엔 적분 와인드업만 됨
-        kd: 0.1                     # D게인 (감쇠, 과하면 떨림/노이즈 증폭)
-        output_limit: 90.0          # 최대 자세각[deg]. 요격드론이라 90까지 허용(패널 슬라이더로 조절)
+        kp: 20.0
+        ki: 0.8                     # 적분 (중앙오차 제거)
+        kd: 0.6                     # D게인 (미분 LPF 적용돼 노이즈 안정 → 실사용 가능)
+        output_limit: 95.0          # 최대 자세각[deg]
       pitch_pid:
-        kp: 25.0
-        ki: 0.0
-        kd: 0.1
-        output_limit: 90.0
+        kp: 20.0
+        ki: 0.8                     # 적분 (중앙오차 제거)
+        kd: 0.6
+        output_limit: 95.0          # 최대 자세각[deg]
       throttle: 0.55                # hover
-      track_throttle: 0.85          # TRACK/FIRE 상승(위치보정 단계)
-      boost_throttle: 1.0          # 발사 부스트 풀스로틀
-      boost_kp: 8.0                 # 발사각 = 캡처 픽셀오차 × 이 값
-      boost_angle_limit: 15.0       # 발사각 최대 [deg]
-      boost_deviation_thresh: 0.25  # 발사각에서 이만큼 빗나가면 즉시 위치보정 전환
-      roll_sign: 1.0
-      pitch_sign: 1.0
-      error_lpf_alpha: 0.3          # 픽셀 에러 부드럽게 (작을수록 부드러움)
+      track_throttle: 0.82          # TRACK/FIRE 상승
+      boost_throttle: 1.0
+      boost_kp: 8.0
+      boost_angle_limit: 15.0
+      boost_deviation_thresh: 0.25
+      roll_sign: 1.0                # 확정: roll +
+      pitch_sign: -1.0              # 확정: pitch -  (화살표 정렬되는 방향)
+      error_lpf_alpha: 0.3          # 픽셀 에러 LPF (작을수록 부드러움)
       control_rate_hz: 30.0
-
-      # --- 시간 기반 P 램프 (시작 약한 P → 설정 시간 동안 최대 P까지 증가) ---
-      kp_start: 60.0               # TRACK 진입 시 P (약하게 시작 — 중심 안 잃게)
-      kp_max: 150.0                # 램프 끝(최대) P
-      kp_ramp_sec: 5.0             # kp_start→kp_max 증가 시간 [s] (패널 슬라이더로 조절)
-
+      # --- 시간 기반 P 램프 ---
+      kp_start: 33.0                # TRACK 진입 시 P
+      kp_max: 130.0                 # 램프 끝(최대) P
+      kp_ramp_sec: 5.0              # kp_start->kp_max 증가 시간 [s]
+      # --- 중앙 데드존 + 미분필터 + 거리 게인 스케줄링 ---
+      deadzone: 0.04                # |오차|<이 값이면 명령 0 (중앙 박스). 0=끔
+      deriv_lpf_alpha: 0.25         # 미분항 LPF (작을수록 부드러움)
+      gain_sched_near_m: 4.0        # 이 거리[m] 안으로 들어오면 P 감쇠 시작
+      gain_sched_min_ratio: 0.35    # 가장 가까울 때 P 비율 (1.0=감쇠 끔)
     mavlink:
-      connection: "udp://:14540"          # SITL (MAVSDK v2 형식)
-      # connection: "serial:///dev/ttyTHS1:921600"   # real drone (Jetson UART)
+      connection: "udp://:14540"
       baud: 115200
       system_id: 255
       component_id: 1
-
     gpio:
-      enabled: false          # set true on real Jetson hardware
-      launch_button_pin: 18   # BOARD pin number
+      enabled: false
+      launch_button_pin: 18
