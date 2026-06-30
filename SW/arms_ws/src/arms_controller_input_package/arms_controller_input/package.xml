@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>arms_controller_input</name>
+  <version>0.1.0</version>
+  <description>Jetson controller input node: ADS1115 joystick axes + GPIO switches to sensor_msgs/Joy.</description>
+  <maintainer email="dev@arms.local">arms</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

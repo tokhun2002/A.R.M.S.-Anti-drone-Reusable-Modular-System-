@@ -1,0 +1,30 @@
+controller_input_node:
+  ros__parameters:
+    # true: no hardware required. Publishes simulated ADS1115-like raw values.
+    # false: read /dev/i2c-1 ADS1115 and GPIO switch inputs.
+    fake_mode: true
+
+    topic_name: /joy
+    publish_rate_hz: 50.0
+
+    i2c.device: /dev/i2c-1
+    i2c.address: 72          # 0x48, ADS1115 ADDR -> GND
+
+    # ADS1115 PGA ±4.096 V, joystick supplied by 3.3 V:
+    # 0.0 V  ≈ 0
+    # 1.65 V ≈ 13200
+    # 3.3 V  ≈ 26400
+    adc.raw_min: [0, 0, 0, 0]
+    adc.raw_center: [13200, 13200, 13200, 13200]
+    adc.raw_max: [26400, 26400, 26400, 26400]
+
+    # Change true/false later if a stick direction is reversed.
+    adc.invert_axes: [false, false, false, false]
+
+    # libgpiod GPIO line offsets, NOT 40-pin BOARD numbers.
+    # Your wiring uses BOARD 29, 31, 33, but line offsets must be checked on Jetson with gpioinfo/gpiofind.
+    # Keep [-1, -1, -1] while fake_mode=true.
+    gpio.chip: gpiochip0
+    gpio.lines: [-1, -1, -1]   # [kill, emergency_land, mode]
+    gpio.active_low: true      # switch to GND: LOW means ON/pressed
+    gpio.request_pullup: true
