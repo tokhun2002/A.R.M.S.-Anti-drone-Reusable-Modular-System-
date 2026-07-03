@@ -17,9 +17,14 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
+      # Force UDP-only FastDDS transport. SHM transport fails between container
+      # and host because FastDDS SHM requires FD passing via Unix socket, which
+      # does not work across the container boundary even with ipc: host.
+      - FASTRTPS_DEFAULT_PROFILES_FILE=/fastdds_udp.xml
       - ARMS_MODEL=${ARMS_MODEL:-/models/best.onnx}
       - ARMS_CONF=${ARMS_CONF:-0.5}
       - ARMS_IOU=${ARMS_IOU:-0.45}
     volumes:
       - ./models:/models:ro # place .onnx model file here
+      - ./fastdds_udp.xml:/fastdds_udp.xml:ro
     restart: unless-stopped
