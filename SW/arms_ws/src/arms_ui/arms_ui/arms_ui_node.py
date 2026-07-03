@@ -47,6 +47,7 @@ class ArmsUINode(Node):
         )
 
         self.create_subscription(Image, "/arms/image_raw", self._cb_image, best_effort_qos)
+        self.create_subscription(Image, "/arms/roi_image", self._cb_roi_image, best_effort_qos)
         self.create_subscription(DetectionArray, "/arms/detections", self._cb_detections, 10)
         self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
         self.create_subscription(Vector3, "/arms/control_debug", self._cb_debug, 10)
@@ -54,6 +55,7 @@ class ArmsUINode(Node):
         self._latest_detections = DetectionArray()
         self._latest_state = MissionState()
         self._latest_cmd = Vector3()
+        self._latest_roi_img = None   # cv2 BGR ndarray, ROI 활성 시만 갱신
 
         # 창 크기 조절 가능 (검출 해상도는 작게 유지, 화면만 크게)
         cv2.namedWindow("A.R.M.S.", cv2.WINDOW_NORMAL)
@@ -64,6 +66,12 @@ class ArmsUINode(Node):
     # ------------------------------------------------------------------
     # Callbacks
     # ------------------------------------------------------------------
+
+    def _cb_roi_image(self, msg: Image):
+        try:
+            self._latest_roi_img = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        except Exception as e:
+            self.get_logger().warn(f"roi_image cv_bridge error: {e}")
 
     def _cb_detections(self, msg: DetectionArray):
         self._latest_detections = msg
@@ -82,6 +90,7 @@ class ArmsUINode(Node):
             return
 
         self._draw_overlay(frame)
+        self._draw_roi_pip(frame)
         cv2.imshow("A.R.M.S.", frame)
         cv2.waitKey(1)
 
@@ -160,6 +169,31 @@ class ArmsUINode(Node):
 
         # --- State border ---
         cv2.rectangle(frame, (0, 0), (w - 1, h - 1), color, 3)
+
+    def _draw_roi_pip(self, frame):
+        """검출 중일 때만 우측 하단에 ROI 크롭 PiP 표시."""
+        if self._latest_roi_img is None:
+            return
+        if not self._latest_detections.detections:
+            return
+
+        h, w = frame.shape[:2]
+        rh, rw = self._latest_roi_img.shape[:2]
+        if rw == 0 or rh == 0:
+            return
+
+        pip_w = max(80, w // 5)
+        pip_h = int(pip_w * rh / rw)
+        pip = cv2.resize(self._latest_roi_img, (pip_w, pip_h))
+
+        margin = 10
+        x1 = w - pip_w - margin
+        y1 = h - pip_h - margin
+
+        frame[y1:y1 + pip_h, x1:x1 + pip_w] = pip
+        cv2.rectangle(frame, (x1 - 1, y1 - 1), (x1 + pip_w, y1 + pip_h), (255, 100, 0), 1)
+        cv2.putText(frame, "ROI", (x1, y1 - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 100, 0), 1, cv2.LINE_AA)
 
 
 def main(args=None):
