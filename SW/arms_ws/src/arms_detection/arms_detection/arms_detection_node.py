@@ -14,19 +14,27 @@ fusion_detector.py — A.R.M.S. YOLO + CV(대비기반) 융합 검출기
   - 둘 다 잡히면 두 중심의 평균을 target 으로, 하나만 잡혀도 작동,
     둘 다 없으면 빈 DetectionArray(타겟 상실).
 
+ROI 추적
+  - 타겟 검출 후 중심 주변에 여유 있는 ROI 생성 → 다음 프레임은 ROI 내 검출 우선.
+  - ROI 내 연속 미검출 roi_miss_limit 회 후 full scan 으로 복귀.
+  - ROI 크롭 이미지는 /arms/roi_image 로 발행 (ROI 활성 시만).
+
 토픽
   구독 : /arms/image_raw        (sensor_msgs/Image)
   구독 : /arms/yolo_detections  (arms_msgs/DetectionArray)  ← YOLO 도커가 발행
   발행 : /arms/detections       (arms_msgs/DetectionArray)  ← control 노드가 받음
   발행 : /arms/debug_image      (sensor_msgs/Image, bgr8)   ← bbox 시각화
+  발행 : /arms/roi_image        (sensor_msgs/Image, bgr8)   ← ROI 크롭 (ROI 활성 시)
 
-파라미터(ros2 param set /fusion_detector ...)
+파라미터(ros2 param set /arms_detection_node ...)
   mode                : "both" | "yolo" | "cv"      (기본 both)
   cv.diff_thresh      : 대비 임계값 (기본 18)
   cv.bg_blur          : 배경 추정 블러 커널 (기본 21, 홀수)
   cv.min_area_ratio   : 최소 blob 면적비 (기본 0.00002 — 아주 작은 점도 허용)
   cv.max_area_ratio   : 최대 blob 면적비 (기본 0.05 — 너무 큰 건 배경/근접물 제외)
   publish_debug       : 디버그 영상 발행 (기본 True)
+  roi_margin          : ROI 여백 배율 (기본 0.30 — bbox 크기의 30% 추가)
+  roi_miss_limit      : 연속 미검출 후 full scan 복귀 횟수 (기본 3)
 
 실행
   source /opt/ros/humble/setup.bash
@@ -80,12 +88,18 @@ class FusionDetector(Node):
         self.declare_parameter("cv.pre_blur", 3)           # 노이즈 제거 가우시안
         self.declare_parameter("cv.max_area_ratio", 0.05)  # 너무 큰 건 배경/근접물 제외
         self.declare_parameter("publish_debug", True)
+        self.declare_parameter("roi_margin", 0.30)     # ROI 여백: bbox 크기의 배율
+        self.declare_parameter("roi_miss_limit", 3)    # 연속 미검출 N회 후 full scan 복귀
 
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                          history=HistoryPolicy.KEEP_LAST, depth=1)
 
         # 최신 YOLO 검출 캐시 (이미지 콜백에서 합침)
         self._yolo_dets = []          # list[BoundingBox]
+
+        # ROI 상태
+        self._roi = None              # (x1, y1, x2, y2) 풀프레임 픽셀, None = full scan
+        self._roi_miss = 0            # ROI 내 연속 미검출 카운트
 
         self.sub_img = self.create_subscription(
             Image, "/arms/image_raw", self.cb_image, qos)
@@ -94,12 +108,46 @@ class FusionDetector(Node):
 
         self.pub_det = self.create_publisher(DetectionArray, "/arms/detections", 10)
         self.pub_dbg = self.create_publisher(Image, "/arms/debug_image", 10)
+        self.pub_roi = self.create_publisher(Image, "/arms/roi_image", 10)
 
         self.get_logger().info("fusion_detector ready (YOLO + contrast-CV, no color).")
 
     # -- YOLO 결과 캐시 --
     def cb_yolo(self, msg: DetectionArray):
         self._yolo_dets = list(msg.detections)
+
+    # -----------------------------------------------------------------
+    # ROI 헬퍼
+    # -----------------------------------------------------------------
+    def _make_roi(self, box: BoundingBox, img_w: int, img_h: int, margin: float):
+        """검출된 bbox 주변에 margin 배율의 여유를 줘서 ROI 반환 (픽셀, 클리핑)."""
+        cx = box.x_center * img_w
+        cy = box.y_center * img_h
+        bw = max(box.width * img_w, 20)
+        bh = max(box.height * img_h, 20)
+        half_w = bw / 2 * (1.0 + margin)
+        half_h = bh / 2 * (1.0 + margin)
+        x1 = int(max(0,     cx - half_w))
+        y1 = int(max(0,     cy - half_h))
+        x2 = int(min(img_w, cx + half_w))
+        y2 = int(min(img_h, cy + half_h))
+        return (x1, y1, x2, y2)
+
+    def _to_full_frame(self, box: BoundingBox, roi, img_w: int, img_h: int) -> BoundingBox:
+        """ROI-상대 정규화 좌표 → 풀프레임 정규화 좌표로 변환."""
+        if roi is None:
+            return box
+        x1, y1, x2, y2 = roi
+        rw, rh = x2 - x1, y2 - y1
+        b = BoundingBox()
+        b.x_center   = (x1 + box.x_center * rw) / img_w
+        b.y_center   = (y1 + box.y_center * rh) / img_h
+        b.width      = box.width  * rw / img_w
+        b.height     = box.height * rh / img_h
+        b.confidence = box.confidence
+        b.class_id   = box.class_id
+        b.class_name = box.class_name
+        return b
 
     # -----------------------------------------------------------------
     # CV: HSV 색 검출 (빨간 풍선 색으로 찾기 — 옛 redball 방식)
@@ -193,18 +241,37 @@ class FusionDetector(Node):
             return
 
         h, w = bgr.shape[:2]
-        # 검출기 3개 독립 토글 (여러 개 켜져 있으면 전부 돌려서 융합)
+        margin = float(self.get_parameter("roi_margin").value)
+        miss_limit = int(self.get_parameter("roi_miss_limit").value)
+
+        # 검출기 3개 독립 토글
         want_hsv     = bool(self.get_parameter("use_hsv").value)
         want_yolo    = bool(self.get_parameter("use_yolo").value)
         want_absdiff = bool(self.get_parameter("use_absdiff").value)
 
-        # --- 각 검출기 결과 ---
+        # ROI 크롭 준비
+        roi = self._roi
+        if roi is not None:
+            rx1, ry1, rx2, ry2 = roi
+            crop = bgr[ry1:ry2, rx1:rx2]
+            if crop.size == 0:          # 혹시 빈 크롭이면 full scan 으로
+                roi = None
+                crop = bgr
+        else:
+            crop = bgr
+
+        # --- 각 검출기 결과 (CV 계열은 crop 기준) ---
         yolo_box = None
         if want_yolo and self._yolo_dets:
+            # YOLO는 풀프레임 캐시 그대로 사용
             yolo_box = max(self._yolo_dets, key=lambda b: b.confidence)
 
-        hsv_box = self.detect_hsv(bgr) if want_hsv else None
-        cv_box = self.detect_cv(bgr) if want_absdiff else None
+        hsv_box_crop = self.detect_hsv(crop) if want_hsv else None
+        cv_box_crop  = self.detect_cv(crop)  if want_absdiff else None
+
+        # ROI 상대 좌표 → 풀프레임 좌표로 변환
+        hsv_box = self._to_full_frame(hsv_box_crop, roi, w, h) if hsv_box_crop else None
+        cv_box  = self._to_full_frame(cv_box_crop,  roi, w, h) if cv_box_crop  else None
 
         # --- target 결정: 켜진 검출기 중 잡힌 것들을 융합(중심 평균, 최고신뢰 박스) ---
         cands = [b for b in (yolo_box, hsv_box, cv_box) if b is not None]
@@ -215,18 +282,36 @@ class FusionDetector(Node):
         else:
             target = self._fuse_all(cands)
 
+        # --- ROI 상태 갱신 ---
+        if target is not None:
+            self._roi = self._make_roi(target, w, h, margin)
+            self._roi_miss = 0
+        elif roi is not None:
+            # ROI 내 미검출
+            self._roi_miss += 1
+            if self._roi_miss >= miss_limit:
+                self._roi = None
+                self._roi_miss = 0
+        else:
+            # full scan도 미검출 → 유지
+            self._roi_miss = 0
+
         out = DetectionArray()
         out.header = msg.header
         if target is not None:
             out.detections.append(target)
         self.pub_det.publish(out)
 
+        # --- ROI 크롭 이미지 발행 (ROI 활성 + 구독자 있을 때만) ---
+        if roi is not None and self.pub_roi.get_subscription_count() > 0:
+            self.pub_roi.publish(bgr_to_imgmsg(crop, msg.header))
+
         # --- 디버그 영상 ---
         if bool(self.get_parameter("publish_debug").value):
             label = "+".join(
                 n for n, on in (("HSV", want_hsv), ("YOLO", want_yolo), ("ABSDIFF", want_absdiff)) if on
             ) or "OFF"
-            self._publish_debug(bgr, msg.header, yolo_box, hsv_box, cv_box, target, label)
+            self._publish_debug(bgr, msg.header, yolo_box, hsv_box, cv_box, target, label, roi)
 
     # -----------------------------------------------------------------
     def _fuse_all(self, boxes):
@@ -243,7 +328,7 @@ class FusionDetector(Node):
         return t
 
     # -----------------------------------------------------------------
-    def _publish_debug(self, bgr, header, yolo_box, hsv_box, cv_box, target, mode):
+    def _publish_debug(self, bgr, header, yolo_box, hsv_box, cv_box, target, mode, roi):
         img = bgr.copy()
         h, w = img.shape[:2]
 
@@ -275,6 +360,13 @@ class FusionDetector(Node):
                            cv2.MARKER_CROSS, 22, 2)
             cv2.putText(img, "TARGET", (tx + 10, ty),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2, cv2.LINE_AA)
+
+        # ROI 박스 (파란색)
+        if roi is not None:
+            rx1, ry1, rx2, ry2 = roi
+            cv2.rectangle(img, (rx1, ry1), (rx2, ry2), (255, 100, 0), 1)
+            cv2.putText(img, "ROI", (rx1, max(12, ry1 - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 100, 0), 1, cv2.LINE_AA)
 
         # 화면 중앙 십자(조준 기준)
         cv2.drawMarker(img, (w // 2, h // 2), (180, 180, 180),
