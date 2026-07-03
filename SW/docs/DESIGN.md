@@ -81,6 +81,7 @@ graph TD
     end
 
     DETECTIONS(["/arms/detections"])
+    ROI_IMAGE(["/arms/roi_image"])
     LAUNCH_CMD(["/arms/launch_cmd"])
     MISSION_STATE(["/arms/mission_state"])
 
@@ -103,8 +104,10 @@ graph TD
     IMAGE --> DN_FUSION
     IMAGE --> UN
     DN_FUSION --> DETECTIONS
+    DN_FUSION --> ROI_IMAGE
     DETECTIONS --> CN
     DETECTIONS --> UN
+    ROI_IMAGE --> UN
     CMD_GUI --> LAUNCH_CMD
     CMD_GPIO --> LAUNCH_CMD
     LAUNCH_CMD --> CN
@@ -117,11 +120,11 @@ graph TD
 | --------------------------- | ----------------------------------------------------------------------------- | ------------------------- |
 | `arms_video_node`           | —                                                                             | `/arms/image_raw`         |
 | `arms_yolo_detection_node`  | `/arms/image_raw`                                                             | `/arms/yolo_detections`   |
-| `arms_detection_node`       | `/arms/image_raw`<br/>`/arms/yolo_detections`                                 | `/arms/detections`        |
+| `arms_detection_node`       | `/arms/image_raw`<br/>`/arms/yolo_detections`                                 | `/arms/detections`<br/>`/arms/roi_image`        |
 | `arms_command_node`         | `/arms/mission_state`                                                         | `/arms/launch_cmd`        |
 | `arms_command_gpio_node`    | `/arms/mission_state`                                                         | `/arms/launch_cmd`        |
 | `arms_control_node`         | `/arms/detections`<br/>`/arms/launch_cmd`                                     | `/arms/mission_state`     |
-| `arms_ui_node`              | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`            | —                         |
+| `arms_ui_node`              | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/roi_image` | —          |
 | `gz_scan_bridge`            | `/arms_drone/upward_ray/scan` (gz)                                            | `/arms/scan_raw`          |
 
 ### 3.2 노드별 역할
