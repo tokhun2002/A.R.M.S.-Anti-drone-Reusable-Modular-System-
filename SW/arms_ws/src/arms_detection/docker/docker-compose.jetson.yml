@@ -7,14 +7,16 @@ services:
     image: arms/detection:jetson
 
     # network_mode: host — container shares the host network stack.
-    # DDS (FastDDS / CycloneDDS) multicast discovery works without any extra config.
+    # ipc: host — FastDDS shared memory transport가 호스트 프로세스와 같은
+    #             IPC 네임스페이스를 쓰도록 강제.
     network_mode: host
+    ipc: host
 
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
-      # - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
       - ARMS_MODEL=${ARMS_MODEL:-/models/best.onnx}
       - ARMS_CONF=${ARMS_CONF:-0.5}
       - ARMS_IOU=${ARMS_IOU:-0.45}
