@@ -331,23 +331,27 @@ private:
     double pitch_deg = 0.0;
     float  thrust    = 0.f;
 
-    // ---- BOOST 진입 감지: 발사 순간 풍선 각도 캡처 ----
+    // ---- BOOST 진입 감지 ----
     if (state == State::BOOST && prev_state_ != State::BOOST) {
-      boost_start_time_ = now_t;
-      launch_err_x_ = sm_->current_error_x();
-      launch_err_y_ = sm_->current_error_y();
-      // 발사 각도 = 캡처한 픽셀 오차 × boost_kp (clamp), 부호 적용
-      boost_roll_  = roll_sign_  * std::clamp(boost_kp_ * launch_err_x_,
-                                              -boost_angle_limit_, boost_angle_limit_);
-      boost_pitch_ = pitch_sign_ * std::clamp(boost_kp_ * launch_err_y_,
-                                              -boost_angle_limit_, boost_angle_limit_);
-      pid_roll_->reset();
-      pid_pitch_->reset();
-      filt_err_x_ = launch_err_x_;
-      filt_err_y_ = launch_err_y_;
-      RCLCPP_INFO(get_logger(),
-        "BOOST 발사: roll=%.1f pitch=%.1f throttle=%.2f (각도 고정 직진)",
-        boost_roll_, boost_pitch_, boost_throttle_);
+      // TODO: BOOST 활성화 시 아래 주석 해제
+      // boost_start_time_ = now_t;
+      // launch_err_x_ = sm_->current_error_x();
+      // launch_err_y_ = sm_->current_error_y();
+      // boost_roll_  = roll_sign_  * std::clamp(boost_kp_ * launch_err_x_,
+      //                                         -boost_angle_limit_, boost_angle_limit_);
+      // boost_pitch_ = pitch_sign_ * std::clamp(boost_kp_ * launch_err_y_,
+      //                                         -boost_angle_limit_, boost_angle_limit_);
+      // pid_roll_->reset();
+      // pid_pitch_->reset();
+      // filt_err_x_ = launch_err_x_;
+      // filt_err_y_ = launch_err_y_;
+      // RCLCPP_INFO(get_logger(),
+      //   "BOOST 발사: roll=%.1f pitch=%.1f throttle=%.2f (각도 고정 직진)",
+      //   boost_roll_, boost_pitch_, boost_throttle_);
+
+      RCLCPP_INFO(get_logger(), "BOOST 진입 → 즉시 TRACK 전환 (boost 비활성)");
+      sm_->on_boost_complete();
+      state = sm_->state();
     }
     // ---- TRACK 진입 감지: P 램프 타이머 리셋 (FIRE 로 넘어갈 땐 유지) ----
     if (state == State::TRACK && prev_state_ != State::TRACK && prev_state_ != State::FIRE) {

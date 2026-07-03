@@ -43,12 +43,13 @@ _Anti-drone Reusable Modular System — Software Architecture_
 ```
 arms_ws/
 └── src/
-    ├── arms_bringup/          # launch files, top-level config
-    ├── arms_video/            # V4L2 -> ROS Image topic
-    ├── arms_detection/        # YOLO Docker bridge + detection topic
-    ├── arms_control/          # State machine + PID controller + MAVLink telemetry
-    ├── arms_ui/               # Operator display (rqt plugin or OpenCV window)
-    └── arms_msgs/             # Custom message/service definitions
+    ├── arms_bringup/          # 최상위 런치 파일 및 설정
+    ├── arms_video/            # 영상 소스 추상화 (usb_cam / gz_ros2_bridge)
+    ├── arms_detection/        # 융합 검출 노드 + YOLO Docker 노드
+    ├── arms_command/          # 발사 명령 인터페이스 (tkinter GUI / GPIO 버튼)
+    ├── arms_control/          # 상태 머신 + PID 제어 + MAVLink
+    ├── arms_ui/               # 오퍼레이터 디스플레이 (OpenCV 오버레이)
+    └── arms_msgs/             # 커스텀 메시지 정의
 ```
 
 ## 3. 노드 및 토픽 구조
@@ -57,44 +58,84 @@ arms_ws/
 
 ```mermaid
 graph TD
-    V4L2["/dev/video0<br/>(USB FPV Receiver)<br/>실기체"]
+    V4L2["/dev/video0<br/>(USB FPV Receiver)"]
     GAZEBO["Gazebo Camera<br/>(SITL)"]
     GPIO["Jetson GPIO<br/>(Launch Button)"]
 
-    VN["arms_video_node<br/>실기체: usb_cam<br/>SITL: gz_ros2_bridge"]
-    DN["arms_detection_node<br/>(YOLO Inference in Docker)"]
-    CN["arms_control_node<br/>(arms_control)<br/>---<br/>GPIO + State Machine<br/>+ PID + MAVLink"]
-    UN["arms_ui_node<br/>(arms_ui)"]
+    subgraph arms_video ["arms_video"]
+        VN_REAL["arms_video_node<br/>(usb_cam) 실기체"]
+        VN_SITL["arms_video_node<br/>(gz_ros2_bridge) SITL"]
+    end
+
+    IMAGE(["/arms/image_raw"])
+
+    subgraph arms_detection ["arms_detection"]
+        DN_YOLO["arms_yolo_detection_node<br/>(YOLO · Docker) 선택"]
+        DN_FUSION["arms_detection_node<br/>(fusion: HSV + absdiff + YOLO)"]
+        DN_YOLO -->|/arms/yolo_detections| DN_FUSION
+    end
+
+    subgraph arms_command ["arms_command"]
+        CMD_GUI["arms_command_node<br/>(tkinter GUI) SITL"]
+        CMD_GPIO["arms_command_gpio_node<br/>(GPIO 버튼) 실기체"]
+    end
+
+    DETECTIONS(["/arms/detections"])
+    LAUNCH_CMD(["/arms/launch_cmd"])
+    MISSION_STATE(["/arms/mission_state"])
+
+    subgraph arms_control ["arms_control"]
+        CN["arms_control_node<br/>State Machine + PID + MAVLink"]
+    end
+
+    subgraph arms_ui ["arms_ui"]
+        UN["arms_ui_node"]
+    end
+
     FC["Flight Controller<br/>(MAVLink UART/UDP)"]
 
-    V4L2 -->|V4L2 capture| VN
-    GAZEBO -->|gz topic| VN
-    GPIO -->|direct read / interrupt| CN
-    VN -->|/arms/image_raw<br/>sensor_msgs/Image| DN
-    VN -->|/arms/image_raw| UN
-    DN -->|/arms/detections<br/>arms_msgs/DetectionArray| CN
-    DN -->|/arms/detections| UN
-    CN -->|/arms/mission_state<br/>arms_msgs/MissionState| UN
+    V4L2 -->|V4L2 capture| VN_REAL
+    GAZEBO -->|gz topic| VN_SITL
+    GPIO --> CMD_GPIO
+    VN_REAL --> IMAGE
+    VN_SITL --> IMAGE
+    IMAGE --> DN_YOLO
+    IMAGE --> DN_FUSION
+    IMAGE --> UN
+    DN_FUSION --> DETECTIONS
+    DETECTIONS --> CN
+    DETECTIONS --> UN
+    CMD_GUI --> LAUNCH_CMD
+    CMD_GPIO --> LAUNCH_CMD
+    LAUNCH_CMD --> CN
+    CN --> MISSION_STATE
+    MISSION_STATE --> UN
     CN -->|MAVLink UART/UDP| FC
 ```
 
-| 노드                  | subscribe                                                          | publish               |
-| --------------------- | ------------------------------------------------------------------ | --------------------- |
-| `arms_video_node`     | —                                                                  | `/arms/image_raw`     |
-| `arms_detection_node` | `/arms/image_raw`                                                  | `/arms/detections`    |
-| `arms_control_node`   | `/arms/detections`                                                 | `/arms/mission_state` |
-| `arms_ui_node`        | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state` | —                     |
-| `gz_scan_bridge`      | `/arms_drone/upward_ray/scan` (gz)                                 | `/arms/scan_raw`      |
+| 노드                        | subscribe                                                                     | publish                   |
+| --------------------------- | ----------------------------------------------------------------------------- | ------------------------- |
+| `arms_video_node`           | —                                                                             | `/arms/image_raw`         |
+| `arms_yolo_detection_node`  | `/arms/image_raw`                                                             | `/arms/yolo_detections`   |
+| `arms_detection_node`       | `/arms/image_raw`<br/>`/arms/yolo_detections`                                 | `/arms/detections`        |
+| `arms_command_node`         | `/arms/mission_state`                                                         | `/arms/launch_cmd`        |
+| `arms_command_gpio_node`    | `/arms/mission_state`                                                         | `/arms/launch_cmd`        |
+| `arms_control_node`         | `/arms/detections`<br/>`/arms/launch_cmd`                                     | `/arms/mission_state`     |
+| `arms_ui_node`              | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`            | —                         |
+| `gz_scan_bridge`            | `/arms_drone/upward_ray/scan` (gz)                                            | `/arms/scan_raw`          |
 
 ### 3.2 노드별 역할
 
-| 노드                  | 패키지           | 역할                                                                                                                                                           | 실행 환경 |
-| --------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| `arms_video_node`     | `arms_video`     | 영상 소스 추상화. 실기체는 usb_cam으로 USB 캡처 카드 수신, SITL은 gz_ros2_bridge로 Gazebo 카메라 수신.                                                         | 호스트    |
-| `arms_detection_node` | `arms_detection` | YOLO 추론 수행 후 바운딩박스 발행. **Docker 컨테이너 안에서 실행**되며 `network_mode: host`로 ROS2 DDS 네트워크에 직접 참여                                    | Docker    |
-| `arms_control_node`   | `arms_control`   | 상태 머신, PID 제어, MAVLink 통신 담당. 감지 결과로 상태 전이 판단, PID로 roll/pitch 명령 계산, MAVLink로 FC에 자세 명령 전송. GPIO로 발사 버튼 입력 직접 읽음 | 호스트    |
-| `arms_ui_node`        | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                                         | 호스트    |
-| `gz_scan_bridge`      | `ros_gz_bridge`  | SITL 전용. Gazebo 거리 센서 토픽을 ROS2로 브릿지. arms_sitl.launch.py에서 직접 실행                                                                            | 호스트    |
+| 노드                       | 패키지           | 역할                                                                                                   | 실행 환경    |
+| -------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------ | ------------ |
+| `arms_video_node`          | `arms_video`     | 영상 소스 추상화. 실기체는 usb_cam, SITL은 gz_ros2_bridge로 `/arms/image_raw` 발행                     | 호스트       |
+| `arms_yolo_detection_node` | `arms_detection` | YOLO 추론 후 `/arms/yolo_detections` 발행. **선택적** — Docker 컨테이너 안에서 실행                    | Docker (선택)|
+| `arms_detection_node`      | `arms_detection` | HSV·absdiff·YOLO 결과를 융합해 `/arms/detections` 발행. YOLO 노드 없이도 독립 동작 가능               | 호스트       |
+| `arms_command_node`        | `arms_command`   | SITL용 tkinter GUI 패널. 발사 명령·검출 모드·PID 게인 등을 ROS2 파라미터/토픽으로 제어                 | 호스트       |
+| `arms_command_gpio_node`   | `arms_command`   | 실기체용 GPIO 버튼 입력. `arms_command_node`와 동일한 토픽 인터페이스                                  | 호스트       |
+| `arms_control_node`        | `arms_control`   | 상태 머신, PID 제어, MAVLink 통신 담당. 발사 명령은 `/arms/launch_cmd`로 수신                          | 호스트       |
+| `arms_ui_node`             | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                 | 호스트       |
+| `gz_scan_bridge`           | `ros_gz_bridge`  | SITL 전용. Gazebo 거리 센서 토픽을 ROS2로 브릿지                                                       | 호스트       |
 
 ### 3.3 커스텀 메시지 정의
 
@@ -129,6 +170,18 @@ bool            target_locked
 
 ### 4.1 상태별 동작 정의
 
+| 상태       | 드론 동작                         | 제어 출력                                      | UI 표시                   |
+| ---------- | --------------------------------- | ---------------------------------------------- | ------------------------- |
+| **IDLE**   | 정지 대기                         | thrust=0, roll/pitch=0                         | 회색 테두리               |
+| **SEARCH** | Arm 완료, 타겟 탐색 중            | thrust=0, roll/pitch=0                         | 노란색, "Searching..."    |
+| **LOCK**   | 타겟 포착 확인 중 (잠금 타이머)   | thrust=0, roll/pitch=0                         | 주황색 박스, "Locking..." |
+| **BOOST**  | 발사 순간 각도 고정 풀스로틀 직진 | boost_kp × 발사 시점 오차 + boost_throttle     | 빨간 박스, "BOOST"        |
+| **TRACK**  | 위치 보정 추적                    | PID (P 램프 kp_start→kp_max) + track_throttle | 빨간 박스, "LOCKED"       |
+| **FIRE**   | 추적 유지 + 페이로드 즉시 발사    | PID 유지 + 페이로드 트리거 (1회)               | 빨간 박스, "FIRED!"       |
+| **RTL**    | 귀환                              | MAVLink RTL 명령                               | "Returning..."            |
+
+### 4.2 상태 전이 다이어그램
+
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
@@ -136,53 +189,55 @@ stateDiagram-v2
     SEARCH --> IDLE
     SEARCH --> LOCK
     LOCK --> SEARCH
-    LOCK --> TRACK
+    LOCK --> BOOST
+    BOOST --> TRACK
     TRACK --> SEARCH
     TRACK --> FIRE
     FIRE --> RTL
     RTL --> IDLE
 ```
 
-| 상태       | 드론 동작                    | 제어 출력                 | UI 표시                   |
-| ---------- | ---------------------------- | ------------------------- | ------------------------- |
-| **IDLE**   | 정지 대기                    | 제어 없음 (Disarmed)      | 회색 테두리               |
-| **SEARCH** | Arm                          | 고정 스로틀, roll/pitch=0 | 노란색, "Searching..."    |
-| **LOCK**   | 목표 추적 시작, 잠금 확인 중 | PID 활성화 (약한 스로톨)  | 주황색 박스, "Locking..." |
-| **TRACK**  | 완전 추적                    | PID 활성화 (풀 스로틀)    | 빨간 박스, "LOCKED"       |
-| **FIRE**   | 추적 유지 + 발사             | PID 유지 + 발사 트리거    | 빨간 박스, "FIRED!"       |
-| **RTL**    | 귀환                         | MAVLink RTL 명령          | "Returning..."            |
-
-### 4.2 상태 전이 다이어그램 (조건 포함)
+### 4.3 상태 전이 조건
 
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE
 
-    IDLE --> SEARCH : arm_command received
-    SEARCH --> IDLE : disarm_command
+    IDLE --> SEARCH : MAVLink arm + offboard 설정<br/>(SITL: 자동, 실기체: GPIO arm)
+    SEARCH --> IDLE : disarm
 
-    SEARCH --> LOCK : continuous detection >= T_lock<br/>(confidence > threshold)
-    LOCK --> SEARCH : target lost<br/>(no detection N frames)
+    SEARCH --> LOCK : 연속 감지 >= lock_duration_sec<br/>(confidence > threshold)
+    LOCK --> SEARCH : 타겟 소실 lost_frames_threshold 프레임
 
-    LOCK --> TRACK : launch button pressed<br/>(GPIO / human input)
-    TRACK --> SEARCH : target lost
+    LOCK --> BOOST : /arms/launch_cmd 수신<br/>(또는 sitl_auto_launch 타이머)
+    BOOST --> TRACK : boost_duration_sec 경과<br/>또는 발사각 편차 > 임계값
+    TRACK --> SEARCH : 타겟 소실
 
-    TRACK --> FIRE : distance < D_fire<br/>(ultrasonic sensor)
-    FIRE --> RTL : net launched<br/>(payload trigger sent)
+    TRACK --> FIRE : 거리 < fire_distance_m<br/>(ray 센서 / 초음파)
+    FIRE --> RTL : 페이로드 트리거 즉시
 
-    RTL --> IDLE : drone landed /<br/> mission complete
+    RTL --> IDLE : 착륙 완료
 ```
 
-### 4.3 전이 조건 파라미터
+> `/arms/reset_cmd` 수신 시 어느 상태에서든 SEARCH로 강제 복귀.
+
+### 4.4 전이 조건 파라미터
 
 ```yaml
-# arms_control/config/control_params.yaml (mission section)
+# arms_control/config/control_params.yaml
 mission:
-  detection_confidence_threshold: 0.65
-  lock_duration_sec: 2.0 # continuous detection duration required to enter LOCK [s]
-  lost_frames_threshold: 10 # frames without detection -> back to SEARCH
-  lock_box_tolerance: 0.15 # normalized bbox center tolerance from frame center
-  fire_distance_m: 3.0 # ultrasonic distance threshold to trigger FIRE (net launch) [m]
+  detection_confidence_threshold: 0.65  # 이 이상이어야 감지로 인정
+  lock_duration_sec: 2.0                # SEARCH→LOCK: 연속 감지 유지 시간 [s]
+  lost_frames_threshold: 10             # 소실 프레임 수 초과 시 SEARCH 복귀
+  fire_distance_m: 5.0                  # TRACK→FIRE: ray 센서 거리 임계값 [m]
+  sitl_auto_launch: false               # true: LOCK 후 auto_launch_delay_sec 뒤 자동 발사
+  auto_launch_delay_sec: 1.0
+
+control:
+  track_throttle: 0.85                  # TRACK/FIRE 스로틀
+  kp_start: 60.0                        # TRACK 진입 시 초기 P (약하게 시작)
+  kp_max: 150.0                         # 램프 끝 최대 P
+  kp_ramp_sec: 5.0                      # kp_start→kp_max 선형 증가 시간 [s]
 ```
 
 ## 5. 영상 수신 (arms_video)
