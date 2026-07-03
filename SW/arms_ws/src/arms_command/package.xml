@@ -1,15 +1,14 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>arms_detection</name>
+  <name>arms_command</name>
   <version>0.1.0</version>
-  <description>A.R.M.S. detection nodes (fusion detector, YOLO docker)</description>
+  <description>A.R.M.S. command interface (GUI panel, GPIO button)</description>
   <maintainer email="dev@arms.local">arms</maintainer>
   <license>MIT</license>
 
   <exec_depend>rclpy</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend>arms_msgs</exec_depend>
-  <exec_depend>python3-opencv</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

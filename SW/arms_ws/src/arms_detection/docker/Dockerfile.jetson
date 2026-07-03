@@ -36,10 +36,10 @@ RUN bash -c "source /opt/ros/humble/setup.bash && \
     colcon build --packages-select arms_msgs --cmake-args -DCMAKE_BUILD_TYPE=Release"
 
 # ---- Copy detection node ----
-COPY arms_detection/docker/arms_detection_node.py /ros_ws/arms_detection_node.py
+COPY arms_detection/docker/arms_yolo_detection_node.py /ros_ws/arms_yolo_detection_node.py
 
 # ---- Entry point ----
 CMD ["bash", "-c", \
     "source /opt/ros/humble/setup.bash && \
      source /ros_ws/install/setup.bash && \
-     python3 /ros_ws/arms_detection_node.py"]
+     python3 /ros_ws/arms_yolo_detection_node.py"]

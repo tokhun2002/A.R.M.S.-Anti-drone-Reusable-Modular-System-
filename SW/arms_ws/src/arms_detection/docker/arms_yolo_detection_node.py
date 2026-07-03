@@ -49,9 +49,9 @@ def imgmsg_to_numpy(msg: Image) -> np.ndarray:
         return img
 
 
-class ArmsDetectionNode(Node):
+class ArmsYoloDetectionNode(Node):
     def __init__(self):
-        super().__init__("arms_detection_node")
+        super().__init__("arms_yolo_detection_node")
 
         self.get_logger().info(f"Loading YOLO model from {MODEL_PATH} ...")
         self.model = YOLO(MODEL_PATH, task="detect")
@@ -100,7 +100,7 @@ class ArmsDetectionNode(Node):
 
 def main():
     rclpy.init()
-    node = ArmsDetectionNode()
+    node = ArmsYoloDetectionNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
