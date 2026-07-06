@@ -17,7 +17,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 
 
 # ---------------------------------------------------------------------------
@@ -94,62 +93,46 @@ def run_kalman(times: np.ndarray, xs: np.ndarray, ys: np.ndarray,
 # 그래프
 # ---------------------------------------------------------------------------
 
+# upward camera resolution → aspect ratio for normalized coords
+CAM_W, CAM_H = 1280, 720
+
+
 def plot(df: pd.DataFrame, kf_x: np.ndarray, kf_y: np.ndarray,
          save_path: Path | None = None):
-    t  = df["time_sec"].values
     rx = df["x_center"].values
     ry = df["y_center"].values
 
-    fig = plt.figure(figsize=(14, 10))
-    fig.suptitle("Detection Raw vs CA-KF", fontsize=14, fontweight="bold")
-    gs = gridspec.GridSpec(2, 2, figure=fig, hspace=0.4, wspace=0.35)
+    # figure size: width fixed, height scaled to camera aspect ratio
+    fig_w = 9
+    fig_h = fig_w * CAM_H / CAM_W
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
-    # --- x(t) ---
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax1.plot(t, rx,  alpha=0.4, linewidth=0.8, label="raw",  color="steelblue")
-    ax1.plot(t, kf_x, linewidth=1.5,           label="KF",   color="tomato")
-    ax1.set_xlabel("time [s]")
-    ax1.set_ylabel("x_center (normalized)")
-    ax1.set_title("X(t)")
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
+    ax.plot(rx, ry, color="blue", linewidth=1.0, label="raw")
+    ax.plot(kf_x, kf_y, color="tomato", linewidth=1.5, label="CA-KF")
 
-    # --- y(t) ---
-    ax2 = fig.add_subplot(gs[0, 1])
-    ax2.plot(t, ry,  alpha=0.4, linewidth=0.8, label="raw",  color="steelblue")
-    ax2.plot(t, kf_y, linewidth=1.5,           label="KF",   color="tomato")
-    ax2.set_xlabel("time [s]")
-    ax2.set_ylabel("y_center (normalized)")
-    ax2.set_title("Y(t)")
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.invert_yaxis()   # image coord: y+ is downward
+    ax.set_aspect("equal")
+    ax.set_xlabel("x_center")
+    ax.set_ylabel("y_center")
+    ax.set_title("Detection Trajectory: Raw vs CA-KF")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
 
-    # --- x-y 궤적 ---
-    ax3 = fig.add_subplot(gs[1, :])
-    sc = ax3.scatter(rx, ry, c=t, cmap="Blues", s=4, alpha=0.5, label="raw")
-    ax3.plot(kf_x, kf_y, color="tomato", linewidth=1.5, label="KF")
-    plt.colorbar(sc, ax=ax3, label="time [s]")
-    ax3.set_xlabel("x_center")
-    ax3.set_ylabel("y_center")
-    ax3.set_title("X-Y 궤적  (색 = 시간 경과)")
-    ax3.invert_yaxis()   # 이미지 좌표계: y 아래가 +
-    ax3.legend()
-    ax3.grid(True, alpha=0.3)
+    # stats
+    res_x = rx - kf_x
+    res_y = ry - kf_y
+    print("\n=== residual (raw - KF) ===")
+    print(f"  x  RMSE: {np.sqrt(np.mean(res_x**2)):.5f}  "
+          f"std: {res_x.std():.5f}  max: {np.abs(res_x).max():.5f}")
+    print(f"  y  RMSE: {np.sqrt(np.mean(res_y**2)):.5f}  "
+          f"std: {res_y.std():.5f}  max: {np.abs(res_y).max():.5f}")
 
-    # --- 통계 출력 ---
-    residual_x = rx - kf_x
-    residual_y = ry - kf_y
-    print(f"\n=== 잔차 통계 (raw - KF) ===")
-    print(f"  x  RMSE: {np.sqrt(np.mean(residual_x**2)):.5f}  "
-          f"std: {residual_x.std():.5f}  "
-          f"max: {np.abs(residual_x).max():.5f}")
-    print(f"  y  RMSE: {np.sqrt(np.mean(residual_y**2)):.5f}  "
-          f"std: {residual_y.std():.5f}  "
-          f"max: {np.abs(residual_y).max():.5f}")
-
+    fig.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
-        print(f"\n그래프 저장: {save_path}")
+        print(f"\nsaved: {save_path}")
     else:
         plt.show()
 
