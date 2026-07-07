@@ -75,7 +75,7 @@ def generate_launch_description():
             ExecuteProcess(cmd=["python3", str(tools / "pose_relay.py")], output="screen"),
             ExecuteProcess(cmd=["python3", str(tools / "fusion_detector.py")], output="screen"),
             ExecuteProcess(cmd=["python3", str(tools / "balloon_referee.py")], output="screen"),
-        )
+        ]
     else:
         actions.append(LogInfo(msg=(
             "[arms_sitl_flying] ARMS_SW 환경변수가 안 잡혀서 풍선을 못 띄웠음. "
