@@ -12,7 +12,7 @@ set -e
 
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
 SW_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-AIRFRAME_SRC="$SW_DIR/simulation/airframes/4021_gz_arms_drone"
+AIRFRAME_SRC="$SW_DIR/simulation/airframes/4022_gz_arms_drone"
 PX4_AIRFRAME_DIR="$PX4_DIR/ROMFS/px4fmu_common/init.d-posix/airframes"
 PX4_MODELS_DIR="$PX4_DIR/Tools/simulation/gz/models"
 CMAKE="$PX4_AIRFRAME_DIR/CMakeLists.txt"
@@ -25,13 +25,15 @@ if [ ! -d "$PX4_DIR" ]; then
   exit 1
 fi
 
-echo "[1/5] airframe 복사 (4021_gz_arms_drone)"
+echo "[1/5] airframe 복사 (4022_gz_arms_drone)"
+# 구버전 4021 잔재 제거 (x500_flow와 번호 충돌 방지)
+rm -f "$PX4_AIRFRAME_DIR/4021_gz_arms_drone"
 cp "$AIRFRAME_SRC" "$PX4_AIRFRAME_DIR/"
 
 echo "[2/5] airframe CMake 등록"
-if ! grep -q "4021_gz_arms_drone" "$CMAKE"; then
+if ! grep -q "4022_gz_arms_drone" "$CMAKE"; then
   if grep -q "4001_gz_x500" "$CMAKE"; then
-    sed -i 's/\(4001_gz_x500\)/\1\n\t4021_gz_arms_drone/' "$CMAKE"
+    sed -i 's/\(4001_gz_x500\)/\1\n\t4022_gz_arms_drone/' "$CMAKE"
     echo "      추가됨"
   else
     echo "      !! 경고: CMakeLists 에 4001_gz_x500 패턴 없음 → 수동 등록 필요"
