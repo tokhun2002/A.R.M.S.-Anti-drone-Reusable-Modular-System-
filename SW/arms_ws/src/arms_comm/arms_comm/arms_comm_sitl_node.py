@@ -165,15 +165,14 @@ class ArmsSITLCommNode(Node):
     def _send_set_mode(self, main_mode: int, sub_mode: int = 0):
         if self._mav is None:
             return
-        # PX4: custom_mode packs as (sub_mode << 16) | (main_mode << 8)
-        custom_mode = (sub_mode << 16) | (main_mode << 8)
         self._mav.mav.command_long_send(
             self._mav.target_system, self._mav.target_component,
             mavutil.mavlink.MAV_CMD_DO_SET_MODE,
             0,
-            PX4_BASE_MODE_CUSTOM,
-            custom_mode,
-            0, 0, 0, 0, 0,
+            float(PX4_BASE_MODE_CUSTOM),  # param1: base_mode
+            float(main_mode),              # param2: custom_main_mode (직접 값)
+            float(sub_mode),               # param3: custom_sub_mode (직접 값)
+            0, 0, 0, 0,
         )
 
     def _send_set_mode_rtl(self):
