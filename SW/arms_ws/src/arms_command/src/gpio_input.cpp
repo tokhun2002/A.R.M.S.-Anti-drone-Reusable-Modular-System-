@@ -1,4 +1,4 @@
-#include "arms_controller_input/gpio_input.hpp"
+#include "arms_command/gpio_input.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -7,7 +7,7 @@
 #include <gpiod.h>
 #endif
 
-namespace arms_controller_input
+namespace arms_command
 {
 
 struct GpioInput::Impl
@@ -69,7 +69,7 @@ void GpioInput::openDevice()
       throw std::runtime_error("Failed to get GPIO line offset: " + std::to_string(line_offsets_[i]));
     }
 
-    const int rc = gpiod_line_request_input_flags(impl_->lines[i], "arms_controller_input", flags);
+    const int rc = gpiod_line_request_input_flags(impl_->lines[i], "arms_command", flags);
     if (rc < 0) {
       closeDevice();
       throw std::runtime_error("Failed to request GPIO input line offset: " + std::to_string(line_offsets_[i]));
@@ -143,4 +143,4 @@ SwitchState GpioInput::readSwitches()
   return state;
 }
 
-}  // namespace arms_controller_input
+}  // namespace arms_command

@@ -47,7 +47,7 @@ arms_ws/
     ├── arms_bringup/          # 최상위 런치 파일 및 설정
     ├── arms_video/            # 영상 소스 추상화 (usb_cam / gz_ros2_bridge)
     ├── arms_detection/        # 융합 검출 노드 + YOLO Docker 노드
-    ├── arms_command/          # 발사 명령 인터페이스 (tkinter GUI / GPIO 버튼)
+    ├── arms_command/          # 발사 명령 인터페이스 (tkinter GUI / GPIO 버튼 / ADS1115 조종기 입력)
     ├── arms_control/          # 상태 머신 + PID 제어 → /arms/ctrl_cmd 발행
     ├── arms_comm/             # 통신 레이어 (SITL: pymavlink, 실기체: CRSF/ELRS)
     ├── arms_ui/               # 오퍼레이터 디스플레이 (OpenCV 오버레이)
@@ -80,7 +80,12 @@ graph TD
     subgraph arms_command ["arms_command"]
         CMD_GUI["arms_command_node<br/>(tkinter GUI) SITL"]
         CMD_GPIO["arms_command_gpio_node<br/>(GPIO 버튼) 실기체"]
+        CMD_JOY["controller_input_node<br/>(ADS1115 + GPIO) 실기체"]
     end
+
+    ADS1115["ADS1115 ADC<br/>(I2C 짐벌 4축)"]
+    SWGPIO["GPIO 스위치 3개"]
+    JOY(["/joy"])
 
     DETECTIONS(["/arms/detections"])
     ROI_IMAGE(["/arms/roi_image"])
@@ -107,6 +112,10 @@ graph TD
     V4L2 -->|V4L2 capture| VN_REAL
     GAZEBO -->|gz topic| VN_SITL
     GPIO --> CMD_GPIO
+    ADS1115 -->|I2C| CMD_JOY
+    SWGPIO --> CMD_JOY
+    CMD_JOY --> JOY
+    JOY --> CMD_GUI
     VN_REAL --> IMAGE
     VN_SITL --> IMAGE
     IMAGE --> DN_YOLO
@@ -136,8 +145,9 @@ graph TD
 | `arms_video_node`          | —                                                                                        | `/arms/image_raw`                                                    |
 | `arms_yolo_detection_node` | `/arms/image_raw`                                                                        | `/arms/yolo_detections`                                              |
 | `arms_detection_node`      | `/arms/image_raw`<br/>`/arms/yolo_detections`                                            | `/arms/detections`<br/>`/arms/roi_image`                             |
-| `arms_command_node`        | `/arms/mission_state`                                                                    | `/arms/launch_cmd`                                                   |
+| `arms_command_node`        | `/arms/mission_state`<br/>`/joy`                                                         | `/arms/launch_cmd`                                                   |
 | `arms_command_gpio_node`   | `/arms/mission_state`                                                                    | `/arms/launch_cmd`                                                   |
+| `controller_input_node`    | —                                                                                        | `/joy`                                                               |
 | `arms_control_node`        | `/arms/detections`<br/>`/arms/launch_cmd`<br/>`/arms/scan_raw`                           | `/arms/ctrl_cmd`<br/>`/arms/mission_state`<br/>`/arms/control_debug` |
 | `arms_comm_sitl_node`      | `/arms/ctrl_cmd`<br/>`/arms/mission_state`                                               | —                                                                    |
 | `arms_comm_node`           | `/arms/ctrl_cmd`<br/>`/arms/mission_state`                                               | —                                                                    |
@@ -151,8 +161,9 @@ graph TD
 | `arms_video_node`          | `arms_video`     | 영상 소스 추상화. 실기체는 usb_cam, SITL은 gz_ros2_bridge로 `/arms/image_raw` 발행                           | 호스트        |
 | `arms_yolo_detection_node` | `arms_detection` | YOLO 추론 후 `/arms/yolo_detections` 발행. **선택적** — Docker 컨테이너 안에서 실행                          | Docker (선택) |
 | `arms_detection_node`      | `arms_detection` | HSV·absdiff·YOLO 결과를 융합해 `/arms/detections` 발행. YOLO 노드 없이도 독립 동작 가능                      | 호스트        |
-| `arms_command_node`        | `arms_command`   | SITL용 tkinter GUI 패널. 발사 명령·검출 모드·PID 게인 등을 ROS2 파라미터/토픽으로 제어                       | 호스트        |
+| `arms_command_node`        | `arms_command`   | SITL용 tkinter GUI 패널. 발사 명령·검출 모드·PID 게인 등을 제어. `/joy` 구독으로 조종기 스틱/스위치 실시간 표시 | 호스트        |
 | `arms_command_gpio_node`   | `arms_command`   | 실기체용 GPIO 버튼 입력. `arms_command_node`와 동일한 토픽 인터페이스                                        | 호스트        |
+| `controller_input_node`    | `arms_command`   | ADS1115 ADC(I2C)로 짐벌 4축 읽기 + GPIO 스위치 3개 읽기 → `sensor_msgs/Joy` `/joy` 발행. fake_mode 지원     | 호스트        |
 | `arms_control_node`        | `arms_control`   | 상태 머신 + PID 제어. 제어 명령을 `/arms/ctrl_cmd`로 발행. FC 직접 통신 없음                                 | 호스트        |
 | `arms_comm_sitl_node`      | `arms_comm`      | SITL 전용. pymavlink로 PX4에 UDP 연결. `/arms/ctrl_cmd` → `RC_CHANNELS_OVERRIDE` 50Hz. ARM·RTL·페이로드 처리 | 호스트        |
 | `arms_comm_node`           | `arms_comm`      | 실기체 전용. `/arms/ctrl_cmd` → CRSF 프레임 → pyserial → ELRS TX → FC (Stabilized 모드). 420000 baud         | 호스트        |
@@ -590,6 +601,12 @@ nodes:
       파라미터: serial_port=/dev/ttyUSB0, max_angle_deg=35.0
   - arms_ui_node       (arms_ui)
 
+# arms_command/launch/command.launch.py  (별도 실행)
+nodes:
+  - arms_command_gpio_node  (arms_command)  GPIO 발사 버튼
+  - controller_input_node   (arms_command)  ADS1115 조종기 → /joy
+      파라미터: config/controller_input_params.yaml (fake_mode: false)
+
 별도 실행:
   cd arms_detection/docker && docker compose -f docker-compose.jetson.yml up
 ```
@@ -636,4 +653,4 @@ arms_control_node  (state machine + PID)
 
 ---
 
-_Document version: 0.3 — 2026-07-07_
+_Document version: 0.4 — 2026-07-07_

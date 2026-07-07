@@ -3,7 +3,7 @@
 #include <array>
 #include <string>
 
-namespace arms_controller_input
+namespace arms_command
 {
 
 struct SwitchState
@@ -40,4 +40,4 @@ private:
   Impl * impl_;
 };
 
-}  // namespace arms_controller_input
+}  // namespace arms_command

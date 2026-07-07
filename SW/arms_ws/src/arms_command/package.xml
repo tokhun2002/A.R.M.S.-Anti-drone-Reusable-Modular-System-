@@ -2,15 +2,20 @@
 <package format="3">
   <name>arms_command</name>
   <version>0.1.0</version>
-  <description>A.R.M.S. command interface (GUI panel, GPIO button)</description>
+  <description>A.R.M.S. command interface (GUI panel, GPIO button, ADS1115 joystick)</description>
   <maintainer email="dev@arms.local">arms</maintainer>
   <license>MIT</license>
 
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>arms_msgs</exec_depend>
 
   <export>
-    <build_type>ament_python</build_type>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>

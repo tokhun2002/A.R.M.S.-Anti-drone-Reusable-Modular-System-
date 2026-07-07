@@ -1,4 +1,4 @@
-#include "arms_controller_input/ads1115.hpp"
+#include "arms_command/ads1115.hpp"
 
 #include <chrono>
 #include <cstring>
@@ -11,7 +11,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-namespace arms_controller_input
+namespace arms_command
 {
 namespace
 {
@@ -138,4 +138,4 @@ int16_t ADS1115::readSingleEnded(int channel)
   return static_cast<int16_t>(raw);
 }
 
-}  // namespace arms_controller_input
+}  // namespace arms_command

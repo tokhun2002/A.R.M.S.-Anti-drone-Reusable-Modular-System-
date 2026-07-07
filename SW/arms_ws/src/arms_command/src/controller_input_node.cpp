@@ -1,5 +1,5 @@
-#include "arms_controller_input/ads1115.hpp"
-#include "arms_controller_input/gpio_input.hpp"
+#include "arms_command/ads1115.hpp"
+#include "arms_command/gpio_input.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,7 +12,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 
-namespace arms_controller_input
+namespace arms_command
 {
 
 class ControllerInputNode : public rclcpp::Node
@@ -136,8 +136,6 @@ private:
 
   std::array<int, 4> fakeAdcRaw()
   {
-    // Simulate actual ADS1115 raw values from 3.3 V joystick pots.
-    // PGA ±4.096 V -> 3.3 V is roughly 26400 counts.
     fake_t_ += 1.0 / std::max(1.0, publish_rate_hz_);
 
     constexpr int center = 13200;
@@ -148,7 +146,6 @@ private:
     const int left_y = center + static_cast<int>(7000.0 * std::cos(fake_t_ * 1.1));
     const int right_x = center + static_cast<int>(6500.0 * std::sin(fake_t_ * 0.8));
 
-    // Throttle-like axis: slowly sweeps through nearly the whole physical range.
     const double throttle01 = 0.5 * (std::sin(fake_t_ * 0.35) + 1.0);
     const int throttle = min_raw + static_cast<int>(throttle01 * static_cast<double>(max_raw - min_raw));
 
@@ -162,7 +159,6 @@ private:
 
   SwitchState fakeSwitches() const
   {
-    // Keep kill normally 0. Toggle land/mode periodically so ros2 topic echo can verify buttons.
     const int sec = static_cast<int>(std::floor(fake_t_));
     SwitchState state;
     state.kill = 0;
@@ -230,12 +226,12 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
 };
 
-}  // namespace arms_controller_input
+}  // namespace arms_command
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<arms_controller_input::ControllerInputNode>());
+  rclcpp::spin(std::make_shared<arms_command::ControllerInputNode>());
   rclcpp::shutdown();
   return 0;
 }

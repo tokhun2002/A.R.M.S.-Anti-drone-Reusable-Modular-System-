@@ -1,5 +1,4 @@
 from setuptools import find_packages, setup
-from glob import glob
 
 package_name = "arms_command"
 
@@ -10,13 +9,12 @@ setup(
     data_files=[
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
         (f"share/{package_name}", ["package.xml"]),
-        (f"share/{package_name}/launch", glob("launch/*.py")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="arms",
     maintainer_email="dev@arms.local",
-    description="A.R.M.S. command interface (GUI panel, GPIO button)",
+    description="A.R.M.S. command interface (GUI panel, GPIO button, ADS1115 joystick)",
     license="MIT",
     entry_points={
         "console_scripts": [

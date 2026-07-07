@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-namespace arms_controller_input
+namespace arms_command
 {
 
 class ADS1115
@@ -33,4 +33,4 @@ private:
   int fd_;
 };
 
-}  // namespace arms_controller_input
+}  // namespace arms_command

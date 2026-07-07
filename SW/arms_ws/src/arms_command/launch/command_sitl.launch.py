@@ -1,3 +1,4 @@
+"""SITL: tkinter GUI 패널만 실행 (조종기 UI 포함)."""
 from launch import LaunchDescription
 from launch_ros.actions import Node
 

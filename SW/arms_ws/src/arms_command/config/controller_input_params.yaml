@@ -18,12 +18,11 @@ controller_input_node:
     adc.raw_center: [13200, 13200, 13200, 13200]
     adc.raw_max: [26400, 26400, 26400, 26400]
 
-    # Change true/false later if a stick direction is reversed.
+    # Change true/false if a stick direction is reversed.
     adc.invert_axes: [false, false, false, false]
 
     # libgpiod GPIO line offsets, NOT 40-pin BOARD numbers.
-    # Your wiring uses BOARD 29, 31, 33, but line offsets must be checked on Jetson with gpioinfo/gpiofind.
-    # Keep [-1, -1, -1] while fake_mode=true.
+    # Check with gpioinfo on Jetson. Keep [-1,-1,-1] while fake_mode=true.
     gpio.chip: gpiochip0
     gpio.lines: [-1, -1, -1]   # [kill, emergency_land, mode]
     gpio.active_low: true      # switch to GND: LOW means ON/pressed
