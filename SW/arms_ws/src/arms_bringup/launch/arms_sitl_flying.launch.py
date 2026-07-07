@@ -56,7 +56,7 @@ def generate_launch_description():
         Node(
             package="arms_comm", executable="arms_comm_sitl_node",
             name="arms_comm_sitl_node", output="screen",
-            parameters=[{"connection": "udp://127.0.0.1:14540",
+            parameters=[{"connection": "udpin:0.0.0.0:14540",
                          "max_angle_deg": 35.0,
                          "send_rate_hz": 50.0}],
         ),

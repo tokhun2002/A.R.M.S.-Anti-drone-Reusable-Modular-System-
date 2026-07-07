@@ -32,7 +32,7 @@ class ArmsSITLCommNode(Node):
     def __init__(self):
         super().__init__("arms_comm_sitl_node")
 
-        self.declare_parameter("connection", "udp://127.0.0.1:14540")
+        self.declare_parameter("connection", "udpin:0.0.0.0:14540")
         self.declare_parameter("max_angle_deg", 35.0)
         self.declare_parameter("send_rate_hz", 50.0)
 
