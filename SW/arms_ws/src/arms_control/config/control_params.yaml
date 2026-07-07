@@ -8,7 +8,6 @@ arms_control_node:
       fire_distance_m: 5.0          # ray sensor distance threshold [m]
       sitl_auto_launch: false       # false: 패널 LAUNCH 버튼으로 발사
       auto_launch_delay_sec: 1.0
-      boost_duration_sec: 0.0       # 0 = BOOST 스킵, 즉시 PID 추적
     control:
       roll_pid:
         kp: 20.0
@@ -22,10 +21,6 @@ arms_control_node:
         output_limit: 90.0          # 최대 자세각[deg]
       throttle: 0.55                # hover
       track_throttle: 0.77          # TRACK/FIRE 상승
-      boost_throttle: 1.0
-      boost_kp: 8.0
-      boost_angle_limit: 15.0
-      boost_deviation_thresh: 0.25
       roll_sign: 1.0                # 확정: roll +
       pitch_sign: -1.0              # 확정: pitch -  (화살표 정렬되는 방향)
       error_lpf_alpha: 0.3          # 픽셀 에러 LPF (작을수록 부드러움)
@@ -39,11 +34,3 @@ arms_control_node:
       deriv_lpf_alpha: 0.25         # 미분항 LPF (작을수록 부드러움)
       gain_sched_near_m: 12.0        # 이 거리[m] 안으로 들어오면 P 감쇠 시작
       gain_sched_min_ratio: 0.25    # 가장 가까울 때 P 비율 (1.0=감쇠 끔)
-    mavlink:
-      connection: "udp://:14540"
-      baud: 115200
-      system_id: 255
-      component_id: 1
-    gpio:
-      enabled: false
-      launch_button_pin: 18

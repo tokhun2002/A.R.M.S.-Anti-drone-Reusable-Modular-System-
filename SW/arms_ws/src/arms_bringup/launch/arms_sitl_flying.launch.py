@@ -3,14 +3,13 @@ arms_sitl_flying.launch.py — SITL "날아다니는 풍선 요격" 올인원 �
 이거 하나로 다음을 전부 띄운다 (PX4 SITL 제외, 그건 무거워서 따로):
   - gz 카메라 브리지        (/arms/image_raw)
   - gz ray 센서 브리지      (/arms/scan_raw)
-  - pose_relay.py           (/arms/target_pose, /arms/drone_pose)  ← [옵션B] 좌표 릴레이
-  - arms_control_node       (상태머신 + PID + MAVLink)
+  - arms_control_node       (상태머신 + PID → /arms/ctrl_cmd)
+  - arms_comm_sitl_node     (pymavlink RC_CHANNELS_OVERRIDE → PX4 Stabilized)
   - arms_ui_node            (OpenCV 영상 오버레이)
   - arms_detection_node     (융합검출: HSV + absdiff, YOLO 선택)
   - balloon_referee.py      (풍선 비행 + 명중 연출)
   - arms_command_node       (컨트롤 패널 GUI)
 
-  - arms_panel.py           (컨트롤 패널 GUI)
 전제: 환경변수 ARMS_SW 가 SW 폴더(=tools, simulation 들어있는 곳)를 가리켜야 함.
 """
 import os
@@ -47,13 +46,19 @@ def generate_launch_description():
             package="arms_detection", executable="arms_detection_node",
             name="arms_detection_node", output="screen",
         ),
-        # 제어
+        # 제어 (순수 PID → /arms/ctrl_cmd 발행)
         Node(
             package="arms_control", executable="arms_control_node",
             name="arms_control_node", output="screen",
-            parameters=[str(control_config),
-                        {"mavlink.connection": "udp://:14540",
-                         "gpio.enabled": False}],
+            parameters=[str(control_config)],
+        ),
+        # 통신 (pymavlink → PX4 Stabilized mode)
+        Node(
+            package="arms_comm", executable="arms_comm_sitl_node",
+            name="arms_comm_sitl_node", output="screen",
+            parameters=[{"connection": "udp://:14540",
+                         "max_angle_deg": 35.0,
+                         "send_rate_hz": 50.0}],
         ),
         # UI 오버레이
         Node(
@@ -71,9 +76,6 @@ def generate_launch_description():
 
     if tools and tools.is_dir():
         actions += [
-            # [옵션B] 좌표 릴레이 — gz dynamic_pose → /arms/target_pose, /arms/drone_pose
-            ExecuteProcess(cmd=["python3", str(tools / "pose_relay.py")], output="screen"),
-            ExecuteProcess(cmd=["python3", str(tools / "fusion_detector.py")], output="screen"),
             ExecuteProcess(cmd=["python3", str(tools / "balloon_referee.py")], output="screen"),
         ]
     else:

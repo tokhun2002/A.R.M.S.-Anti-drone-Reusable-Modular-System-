@@ -1,11 +1,7 @@
 """
-SITL launch: arms_video (gz bridge) + fusion_detector + arms_control + arms_ui
-- MAVLink via UDP (PX4 SITL default)
-- GPIO disabled
-- 카메라 브리지: arms_video/launch/video_sitl.launch.py (arms_video_node)
-- 거리 센서 브리지: 이 파일에서 직접 처리
-- Detection: fusion_detector (HSV + absdiff, 기본값)
-    YOLO 사용 시 docker compose up 후 fusion_detector의 use_yolo=true
+SITL launch: arms_video (gz bridge) + arms_detection + arms_control + arms_comm_sitl + arms_ui
+- PID 제어 명령 → /arms/ctrl_cmd → arms_comm_sitl → pymavlink RC_CHANNELS_OVERRIDE → PX4 Stabilized
+- 카메라 브리지: arms_video/launch/video_sitl.launch.py
 """
 
 from pathlib import Path
@@ -25,11 +21,6 @@ def generate_launch_description():
         Path(get_package_share_directory("arms_video")) / "launch" / "video_sitl.launch.py"
     )
 
-    sitl_overrides = {
-        "mavlink.connection": "udp://:14540",
-        "gpio.enabled": False,
-    }
-
     return LaunchDescription([
         # 카메라 브리지 (arms_video_node)
         IncludeLaunchDescription(
@@ -48,20 +39,32 @@ def generate_launch_description():
                 ("/arms_drone/upward_ray/scan", "/arms/scan_raw"),
             ],
         ),
-        # Fusion detector (HSV + absdiff 기본, YOLO 도커 연동 시 use_yolo=true)
+        # Fusion detector (HSV + absdiff, YOLO 도커 연동 시 use_yolo=true)
         Node(
             package="arms_detection",
             executable="arms_detection_node",
             name="arms_detection_node",
             output="screen",
         ),
-        # State machine + PID + MAVLink
+        # 제어 (순수 PID → /arms/ctrl_cmd 발행)
         Node(
             package="arms_control",
             executable="arms_control_node",
             name="arms_control_node",
             output="screen",
-            parameters=[str(control_config), sitl_overrides],
+            parameters=[str(control_config)],
+        ),
+        # 통신 (pymavlink → PX4 Stabilized mode)
+        Node(
+            package="arms_comm",
+            executable="arms_comm_sitl_node",
+            name="arms_comm_sitl_node",
+            output="screen",
+            parameters=[{
+                "connection": "udp://:14540",
+                "max_angle_deg": 35.0,
+                "send_rate_hz": 50.0,
+            }],
         ),
         # OpenCV UI
         Node(

@@ -12,27 +12,18 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(arms_msgs REQUIRED)
-find_package(MAVSDK REQUIRED)
-
-# Optional: Jetson GPIO via libgpiod
-find_library(GPIOD_LIB gpiod)
 
 # -----------------------------------------------------------------------
-# Library: state machine + PID + MAVLink interface
+# Library: state machine + PID
 # -----------------------------------------------------------------------
 add_library(arms_control_lib
   src/pid_controller.cpp
   src/state_machine.cpp
-  src/mavlink_interface.cpp
 )
 
 target_include_directories(arms_control_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
-)
-
-target_link_libraries(arms_control_lib
-  MAVSDK::mavsdk
 )
 
 ament_target_dependencies(arms_control_lib
@@ -56,15 +47,6 @@ ament_target_dependencies(arms_control_node
   geometry_msgs
   arms_msgs
 )
-
-# GPIO support (optional)
-if(GPIOD_LIB)
-  target_compile_definitions(arms_control_node PRIVATE HAS_GPIO)
-  target_link_libraries(arms_control_node ${GPIOD_LIB})
-  message(STATUS "libgpiod found — GPIO support enabled.")
-else()
-  message(STATUS "libgpiod not found — GPIO disabled.")
-endif()
 
 # -----------------------------------------------------------------------
 # Install

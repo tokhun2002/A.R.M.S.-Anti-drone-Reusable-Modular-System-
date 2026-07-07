@@ -11,7 +11,6 @@ std::string to_string(State s)
     case State::IDLE:   return "IDLE";
     case State::SEARCH: return "SEARCH";
     case State::LOCK:   return "LOCK";
-    case State::BOOST:  return "BOOST";
     case State::TRACK:  return "TRACK";
     case State::FIRE:   return "FIRE";
     case State::RTL:    return "RTL";
@@ -60,7 +59,6 @@ void StateMachine::on_detection(
       target_locked_ = true;
     }
   } else if (state_ == State::LOCK ||
-             state_ == State::BOOST ||
              state_ == State::TRACK ||
              state_ == State::FIRE) {
     if (lock_timer_running_) {
@@ -74,17 +72,10 @@ void StateMachine::on_detection(
 void StateMachine::on_launch_button()
 {
   if (state_ == State::LOCK) {
-    transition(State::BOOST);
+    transition(State::TRACK);
   } else if (log_fn_) {
     log_fn_("[StateMachine] Launch button pressed in state " +
             to_string(state_) + " — ignored.");
-  }
-}
-
-void StateMachine::on_boost_complete()
-{
-  if (state_ == State::BOOST) {
-    transition(State::TRACK);   // 부스트 끝(또는 빗나감) → 위치보정
   }
 }
 
@@ -143,7 +134,6 @@ void StateMachine::force_search()
 
 void StateMachine::on_target_lost()
 {
-  // BOOST 중에는 타겟 소실해도 발사 유지(committed). SEARCH/LOCK/TRACK 만 복귀 처리.
   if (state_ == State::SEARCH ||
       state_ == State::LOCK   ||
       state_ == State::TRACK)
