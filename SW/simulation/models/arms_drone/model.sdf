@@ -77,18 +77,18 @@
         <lidar>
           <scan>
             <horizontal>
-              <samples>8</samples>
-              <min_angle>-0.26</min_angle>   <!-- ±15° 콘: 머리 위 근처 풍선을 놓치지 않게 -->
-              <max_angle>0.26</max_angle>
+              <samples>32</samples>
+              <min_angle>-0.52</min_angle>   <!-- ±15° 콘: 머리 위 근처 풍선을 놓치지 않게 -->
+              <max_angle>0.52</max_angle>
             </horizontal>
             <vertical>
-              <samples>8</samples>
-              <min_angle>-0.26</min_angle>
-              <max_angle>0.26</max_angle>
+              <samples>32</samples>
+              <min_angle>-0.52</min_angle>
+              <max_angle>0.52</max_angle>
             </vertical>
           </scan>
           <range>
-            <min>0.1</min>
+            <min>3.0</min>
             <max>50.0</max>
             <resolution>0.01</resolution>
           </range>

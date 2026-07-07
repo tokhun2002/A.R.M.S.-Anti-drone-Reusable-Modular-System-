@@ -13,15 +13,15 @@ arms_control_node:
       roll_pid:
         kp: 20.0
         ki: 0.8                     # 적분 (중앙오차 제거)
-        kd: 0.6                     # D게인 (미분 LPF 적용돼 노이즈 안정 → 실사용 가능)
-        output_limit: 95.0          # 최대 자세각[deg]
+        kd: 0.65                     # D게인 (미분 LPF 적용돼 노이즈 안정 → 실사용 가능)
+        output_limit: 90.0          # 최대 자세각[deg]
       pitch_pid:
         kp: 20.0
         ki: 0.8                     # 적분 (중앙오차 제거)
-        kd: 0.6
-        output_limit: 95.0          # 최대 자세각[deg]
+        kd: 0.65
+        output_limit: 90.0          # 최대 자세각[deg]
       throttle: 0.55                # hover
-      track_throttle: 0.82          # TRACK/FIRE 상승
+      track_throttle: 0.77          # TRACK/FIRE 상승
       boost_throttle: 1.0
       boost_kp: 8.0
       boost_angle_limit: 15.0
@@ -31,14 +31,14 @@ arms_control_node:
       error_lpf_alpha: 0.3          # 픽셀 에러 LPF (작을수록 부드러움)
       control_rate_hz: 30.0
       # --- 시간 기반 P 램프 ---
-      kp_start: 33.0                # TRACK 진입 시 P
-      kp_max: 130.0                 # 램프 끝(최대) P
+      kp_start: 50.0                # TRACK 진입 시 P
+      kp_max: 100.0                 # 램프 끝(최대) P
       kp_ramp_sec: 5.0              # kp_start->kp_max 증가 시간 [s]
       # --- 중앙 데드존 + 미분필터 + 거리 게인 스케줄링 ---
       deadzone: 0.04                # |오차|<이 값이면 명령 0 (중앙 박스). 0=끔
       deriv_lpf_alpha: 0.25         # 미분항 LPF (작을수록 부드러움)
-      gain_sched_near_m: 4.0        # 이 거리[m] 안으로 들어오면 P 감쇠 시작
-      gain_sched_min_ratio: 0.35    # 가장 가까울 때 P 비율 (1.0=감쇠 끔)
+      gain_sched_near_m: 12.0        # 이 거리[m] 안으로 들어오면 P 감쇠 시작
+      gain_sched_min_ratio: 0.25    # 가장 가까울 때 P 비율 (1.0=감쇠 끔)
     mavlink:
       connection: "udp://:14540"
       baud: 115200

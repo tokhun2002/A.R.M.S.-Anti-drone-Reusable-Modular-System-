@@ -10,6 +10,7 @@
 #include "sensor_msgs/msg/range.hpp"
 #include "std_msgs/msg/empty.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"   // [옵션B] 좌표 요격
 
 #include "arms_msgs/msg/detection_array.hpp"
 #include "arms_msgs/msg/mission_state.hpp"
@@ -35,6 +36,14 @@ public:
     declare_parameter("mission.lost_frames_threshold",          10);
     declare_parameter("mission.lock_box_tolerance",             0.15);
     declare_parameter("mission.fire_distance_m",                5.0);
+    // [옵션B] 좌표 기반 요격 (homing)
+    declare_parameter("control.homing_enable",     false);  // 좌표유도 off(B발산) → attitude(카메라PID)복귀
+    declare_parameter("control.homing_speed",      4.0);    // 접근 속도 [m/s]
+    declare_parameter("control.homing_fire_dist",  2.0);    // 요격 거리 [m]
+    declare_parameter("control.homing_max_speed",  6.0);    // 속도 상한 [m/s]
+    declare_parameter("control.homing_vz_boost",   2.0);    // 수직(상승) 속도 배수
+    declare_parameter("control.homing_kp",         0.8);    // 거리비례 속도게인(speed=dist*kp)
+    declare_parameter("control.homing_min_speed",  0.5);    // 속도 하한 [m/s]
 
     declare_parameter("control.roll_pid.kp",           15.0);
     declare_parameter("control.roll_pid.ki",           0.5);
@@ -57,7 +66,7 @@ public:
     declare_parameter("control.err_sched_enable",   true);   // 켜고 끄기
     declare_parameter("control.err_sched_full_err", 0.06);   // 이 오차 이하 = 풀 P
     declare_parameter("control.err_sched_big_err",  0.35);   // 이 오차 이상 = 최소 P
-    declare_parameter("control.err_sched_min_ratio",0.30);   // 큰 오차일 때 P 비율(30%)
+    declare_parameter("control.err_sched_min_ratio",0.55);   // 큰 오차일 때 P 비율(30%)
     declare_parameter("control.control_rate_hz",       30.0);
 
     // ---- 시간 기반 P 램프 (시작 약한 P → 설정 시간 동안 최대 P까지 증가) ----
@@ -247,6 +256,33 @@ public:
     pub_state_ = create_publisher<arms_msgs::msg::MissionState>("/arms/mission_state", 10);
     pub_dbg_   = create_publisher<geometry_msgs::msg::Vector3>("/arms/control_debug", 10);
 
+    // [옵션B] 좌표 요격 파라미터 로드 + 풍선/드론 좌표 구독
+    homing_enable_    = get_parameter("control.homing_enable").as_bool();
+    homing_speed_     = get_parameter("control.homing_speed").as_double();
+    homing_fire_dist_ = get_parameter("control.homing_fire_dist").as_double();
+    homing_max_speed_ = get_parameter("control.homing_max_speed").as_double();
+    homing_vz_boost_  = get_parameter("control.homing_vz_boost").as_double();
+    homing_kp_        = get_parameter("control.homing_kp").as_double();
+    homing_min_speed_ = get_parameter("control.homing_min_speed").as_double();
+
+    rclcpp::QoS pose_qos(rclcpp::KeepLast(10));
+    sub_target_pose_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+      "/arms/target_pose", pose_qos,
+      [this](geometry_msgs::msg::PoseStamped::SharedPtr m) {
+        tgt_x_ = m->pose.position.x;
+        tgt_y_ = m->pose.position.y;
+        tgt_z_ = m->pose.position.z;
+        have_target_pose_ = true;
+      });
+    sub_drone_pose_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+      "/arms/drone_pose", pose_qos,
+      [this](geometry_msgs::msg::PoseStamped::SharedPtr m) {
+        drn_x_ = m->pose.position.x;
+        drn_y_ = m->pose.position.y;
+        drn_z_ = m->pose.position.z;
+        have_drone_pose_ = true;
+      });
+
     // SITL: launch 버튼을 GPIO 대신 토픽으로 대체
     //   ros2 topic pub --once /arms/launch_cmd std_msgs/msg/Empty {}
     sub_launch_ = create_subscription<std_msgs::msg::Empty>(
@@ -287,13 +323,18 @@ public:
       mav_->start_offboard_stream(static_cast<float>(control_rate_hz_));
 
       if (!gpio_enabled_) {
-        // SITL: auto-arm after giving PX4 time to accept the offboard stream
-        std::this_thread::sleep_for(2s);
-        mav_->set_offboard_mode();
+        // SITL: 스트림 안정 대기 → arm 먼저 → OFFBOARD 재시도 진입(성공확인).
+        //   arm 된 상태여야 offboard 진입 성공률이 높음. set_offboard_mode 가
+        //   성공할 때까지 재시도하므로 EKF 타이밍과 무관하게 항상 진입.
+        std::this_thread::sleep_for(3s);          // EKF 수렴 여유
+        mav_->arm();                              // arm 먼저
         std::this_thread::sleep_for(500ms);
-        mav_->arm();
+        bool ob = mav_->set_offboard_mode();      // 재시도 진입
         sm_->arm();
-        RCLCPP_INFO(get_logger(), "SITL: armed and OFFBOARD mode set.");
+        if (ob)
+          RCLCPP_INFO(get_logger(), "SITL: armed and OFFBOARD 진입 성공.");
+        else
+          RCLCPP_ERROR(get_logger(), "SITL: OFFBOARD 진입 실패 — 드론 안 움직일 수 있음. run_arms 재시작 권장.");
       }
     }
 
@@ -472,7 +513,9 @@ private:
 
       // kp 만 (램프×거리감쇠) 값으로 교체, kd/ki/limit 유지
       pid_roll_->set_gains(kp_eff, rki_, rkd_, rlim_);
-      pid_pitch_->set_gains(kp_eff, pki_, pkd_, plim_);
+      // pitch(전진) 게인만 강화 → 공쪽으로 더 세게 꺾어 비스듬히 접근
+      const double pitch_gain_mul = 1.6;   // pitch kp = roll kp × 이 배수
+      pid_pitch_->set_gains(kp_eff * pitch_gain_mul, pki_, pkd_, plim_);
 
       // ---- 중앙 데드존 박스 (B: 중앙 미세떨림/헌팅 방지) ----
       //   |오차|<deadzone 이면 0, 넘으면 deadzone 만큼 빼서 연속적으로(소프트).
@@ -481,7 +524,48 @@ private:
 
       roll_deg  = roll_sign_  * pid_roll_->compute(ex, dt);
       pitch_deg = pitch_sign_ * pid_pitch_->compute(ey, dt);
-      thrust    = static_cast<float>(track_throttle_);
+      // ---- 정렬 게이트 + 라이다 거리제어 v4 ----
+      //   핵심: 상승 전에 공을 화면중앙 정렬(err<align_thr). 정렬 전엔 제자리 호버로
+      //   조준만 → 시작오차 크든작든 항상 작은오차로 상승시작 → 항상 성공.
+      {
+        const double up    = track_throttle_;   // 상승 추력
+        const double hover = 0.62;              // 호버(제자리, 안떨어지는 최소)
+        const double fire_d = 5.0;              // FIRE 거리 (근접)
+        const double align_thr = 0.10;          // 정렬 완료 기준 (오차 이 이하면 정렬됨)
+        double emag = std::hypot(filt_err_x_, filt_err_y_);  // 현재 오차크기
+
+        // 정렬 완료 래치: 한번 정렬되면 유지 (다시 흐트러져도 상승 계속)
+        if (!homing_locked_ && emag < align_thr) {
+          homing_locked_ = true;   // 정렬완료 플래그로 재사용
+          RCLCPP_INFO(get_logger(), "정렬 완료 (오차 %.2f) → 상승 요격 시작", emag);
+        }
+
+        if (!homing_locked_) {
+          // [정렬 단계] 아직 정렬 안됨 → 제자리 호버로 조준만 (상승X)
+          thrust = static_cast<float>(hover);
+        } else {
+          // [요격 단계] 정렬됨 → 상승. 단, 상승중 오차(x또는y) 크게 폭발하면
+          //   상승멈추고 제자리서 정렬 회복. (err_x만 봤더니 err_y 폭발을 놓침)
+          const double xy_gate = 0.22;  // err 전체 이 이상이면 상승멈추고 정렬회복
+          double emag_now = std::hypot(filt_err_x_, filt_err_y_);
+          if (emag_now > xy_gate) {
+            // 좌우/상하 크게 틀어짐 → 상승 멈추고 호버로 정렬 회복
+            thrust = static_cast<float>(hover);
+          } else if (distance_valid()) {
+            double d = last_distance_;
+            if (d > fire_d + 3.0) {
+              thrust = static_cast<float>(up);                      // 멀다→상승
+            } else if (d > fire_d) {
+              double t = (d - fire_d) / 3.0;
+              thrust = static_cast<float>(hover + (up - hover) * t); // 감속
+            } else {
+              thrust = static_cast<float>(hover);                   // 도달→호버(FIRE)
+            }
+          } else {
+            thrust = static_cast<float>(up);                        // 라이다 못잡음→상승
+          }
+        }
+      }
 
       // 디버그: 명령 + 거리/감쇠비율 을 0.2초마다 출력
       if (++dbg_count_ % 6 == 0) {
@@ -498,6 +582,7 @@ private:
       filt_err_y_ = 0.0;
       kp_now_ = kp_start_;
       thrust = 0.f;
+      homing_locked_ = false;   // 정렬 게이트 리셋 (다음 발사때 새로 정렬)
     }
 
     // ---- SITL auto-launch (기본 off: 패널 LAUNCH 버튼으로 발사) ----
@@ -518,13 +603,107 @@ private:
       }
     }
 
+    // ===== [옵션B] 좌표 기반 요격 유도 (homing) =====
+    //   TRACK/FIRE 상태 + homing 켜짐 + 풍선/드론 좌표 수신 → 픽셀 PID 대신 좌표 직진.
+    //   풍선이 화면 어디 있든 좌표로 정확히 방향+거리 계산 → 속도명령으로 직진.
+    //   거리는 sm_->on_distance() 로 주입 → 기존 FIRE 로직(fire_distance_m)이 자동 처리.
+    bool homing_active = false;
+    // TRACK/FIRE 가 아니면 목표 고정 해제 (다음 요격 위해)
+    if (state != State::TRACK && state != State::FIRE) {
+      homing_locked_ = false;
+      homing_fired_ = false;
+      phoriz_min_ = 1e9;
+      phoriz_rise_cnt_ = 0;
+    }
+    if (homing_enable_ && (state == State::TRACK || state == State::FIRE) &&
+        have_target_pose_ && have_drone_pose_) {
+      // 요격 벡터 (Gazebo ENU)
+      double ex = tgt_x_ - drn_x_;
+      double ey = tgt_y_ - drn_y_;
+      double ez = tgt_z_ - drn_z_;
+      double dist = std::sqrt(ex*ex + ey*ey + ez*ez);
+      homing_dist_ = dist;
+
+      // 좌표 거리를 상태머신에 주입. 래치 FIRE 면 0 주입해 확실히 FIRE 트리거.
+      sm_->on_distance(homing_fired_ ? 0.0 : dist);
+
+      if (dist > 1e-3) {
+        // ---- 목표고정 위치명령 (직선수렴) + 도착 FIRE ----
+        //   속도명령은 추적곡선이라 비스듬한 풍선에 빙 돌며 발산.
+        //   위치명령은 목표점에 직선 수렴(떨림X 공전X 발산X).
+        //   z 상승한계는 PX4 MPC_Z_VEL_MAX_UP 로 해결(pxh 콘솔서 param set).
+        float cur_n, cur_e, cur_d;
+        if (mav_->get_position_ned(cur_n, cur_e, cur_d)) {
+          if (!homing_locked_) {
+            double rel_n =  (tgt_y_ - drn_y_);   // ENU_y → NED_north
+            double rel_e =  (tgt_x_ - drn_x_);   // ENU_x → NED_east
+            double rel_d = -(tgt_z_ - drn_z_);   // ENU_z → NED_down
+            lock_n_ = cur_n + static_cast<float>(rel_n);
+            lock_e_ = cur_e + static_cast<float>(rel_e);
+            // 고도는 풍선보다 offset 낮게 (down +가 아래) → 추락방지·요격자세
+            lock_d_ = cur_d + static_cast<float>(rel_d) + static_cast<float>(homing_alt_offset_);
+            homing_locked_ = true;
+            RCLCPP_INFO(get_logger(),
+              "HOMING 목표고정: 풍선 PX4절대=(%.1f,%.1f,%.1f) [dist=%.1fm]",
+              lock_n_, lock_e_, lock_d_, dist);
+          }
+
+          // 고정목표까지 거리 — 3D 와 수평 둘 다 계산
+          double pn = lock_n_ - cur_n, pe = lock_e_ - cur_e, pd = lock_d_ - cur_d;
+          double pdist  = std::sqrt(pn*pn + pe*pe + pd*pd);   // 3D
+          double phoriz = std::sqrt(pn*pn + pe*pe);           // 수평만
+
+          // ── FIRE 판정 — Gazebo 실제거리(dist) 기준 ──
+          //   dist = 공-드론 실제 3D 거리(ENU, 580번). PX4 pdist 와 달리
+          //   화면 실제 거리와 정확히 일치 → 진짜 만나야 요격.
+          // (A) 근접 명중: 드론이 공 4m 안에 실제로 오면 무조건 FIRE.
+          if (dist < 4.0) {
+            homing_fired_ = true;
+          }
+          // (B) 최저점 자동감지 — dist(Gazebo 실거리) 기준.
+          //   드론이 공에 실제로 가장 가까워진 순간에 FIRE (공이 옆 지나가는 순간).
+          if (dist < homing_near_dist_) {            // 실제로 충분히 접근했을때만
+            if (dist < phoriz_min_ - 0.03) {         // 최저 실거리 갱신
+              phoriz_min_ = dist;
+              phoriz_rise_cnt_ = 0;
+            } else if (dist > phoriz_min_ + 0.05) {   // 최저보다 5cm 이상 멀어짐
+              if (++phoriz_rise_cnt_ >= 3) {          // 연속 3프레임 = 최저점(가장가까움) 지남
+                homing_fired_ = true;
+              }
+            }
+          }
+
+          if (homing_fired_) {
+            mav_->set_velocity_ned(0.0f, 0.0f, 0.0f, 0.0f);  // 정지 호버 → FIRE 유지
+            homing_active = true;
+            if (++dbg_count_ % 6 == 0)
+              RCLCPP_INFO(get_logger(),
+                "HOMING FIRE확정! 공까지 실제거리=%.2fm (최저 %.2f) → 요격",
+                dist, phoriz_min_);
+          } else {
+            mav_->set_position_ned(lock_n_, lock_e_, lock_d_, 0.0f);  // 직선 수렴
+            homing_active = true;
+            if (++dbg_count_ % 6 == 0)
+              RCLCPP_INFO(get_logger(),
+                "HOMING(pos) 실거리=%.2f pdist=%.2f cur=(%.1f,%.1f,%.1f)",
+                dist, pdist, cur_n, cur_e, cur_d);
+          }
+        } else {
+          if (++dbg_count_ % 30 == 0)
+            RCLCPP_WARN(get_logger(), "HOMING: PX4 위치 telemetry 대기중...");
+        }
+      }
+    }
+
     // ---- Send to MAVLink stream ----
-    AttitudeCmd cmd;
-    cmd.roll_deg  = static_cast<float>(roll_deg);
-    cmd.pitch_deg = static_cast<float>(pitch_deg);
-    cmd.yaw_deg   = 0.f;
-    cmd.thrust    = thrust;
-    mav_->set_attitude_command(cmd);
+    if (!homing_active) {
+      AttitudeCmd cmd;
+      cmd.roll_deg  = static_cast<float>(roll_deg);
+      cmd.pitch_deg = static_cast<float>(pitch_deg);
+      cmd.yaw_deg   = 0.f;
+      cmd.thrust    = thrust;
+      mav_->set_attitude_command(cmd);
+    }
 
     // 디버그: 실제 나가는 명령을 토픽으로 (UI 화살표용). x=roll y=pitch z=thrust
     geometry_msgs::msg::Vector3 dbg;
@@ -646,6 +825,28 @@ private:
 
   bool fire_sent_{false};
   bool rtl_sent_{false};
+  // [옵션B] 좌표 요격
+  bool   homing_enable_{true};
+  double homing_speed_{4.0};
+  double homing_fire_dist_{2.0};
+  double homing_max_speed_{6.0};
+  double homing_vz_boost_{2.0};
+  double homing_kp_{0.8};
+  double homing_min_speed_{0.5};
+  bool   have_target_pose_{false};
+  bool   have_drone_pose_{false};
+  double tgt_x_{0}, tgt_y_{0}, tgt_z_{0};   // 풍선 ENU
+  double drn_x_{0}, drn_y_{0}, drn_z_{0};   // 드론 ENU
+  double homing_dist_{-1.0};                // 최근 요격거리
+  bool   homing_locked_{false};             // 목표 절대좌표 고정여부
+  float  lock_n_{0}, lock_e_{0}, lock_d_{0};
+  bool   homing_fired_{false};
+  double phoriz_min_{1e9};      // 지금까지 최저 수평거리
+  int    phoriz_rise_cnt_{0};   // phoriz 가 연속 증가한 프레임 수
+  double homing_near_dist_{6.0};// 이 거리 안에서만 최저점 감지(오판방지)  // FIRE 래치(한번 도달하면 유지)
+  double homing_alt_offset_{6.0};  // 목표를 풍선보다 이만큼 아래로(추락방지) // 고정된 풍선 PX4 절대좌표
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_target_pose_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_drone_pose_;
 };
 
 }  // namespace arms_control

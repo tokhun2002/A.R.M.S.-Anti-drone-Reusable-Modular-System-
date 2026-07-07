@@ -39,6 +39,17 @@ bool MavlinkInterface::connect()
 
   connected_ = true;
   log("System connected.");
+
+  // [옵션B] Telemetry 시작 → PX4 현재 local NED 위치 구독
+  telemetry_ = std::make_unique<mavsdk::Telemetry>(system_);
+  telemetry_->subscribe_position_velocity_ned(
+    [this](mavsdk::Telemetry::PositionVelocityNed pv) {
+      cur_north_.store(pv.position.north_m);
+      cur_east_.store(pv.position.east_m);
+      cur_down_.store(pv.position.down_m);
+      have_pos_.store(true);
+    });
+
   return true;
 }
 
@@ -76,24 +87,78 @@ void MavlinkInterface::stream_loop(float rate_hz)
   auto interval = std::chrono::duration<double>(1.0 / rate_hz);
 
   while (stream_active_) {
-    mavsdk::Offboard::Attitude cmd{};
-    cmd.roll_deg     = cmd_roll_.load();
-    cmd.pitch_deg    = cmd_pitch_.load();
-    cmd.yaw_deg      = cmd_yaw_.load();
-    cmd.thrust_value = cmd_thrust_.load();
-
-    offboard_->set_attitude(cmd);
-
+    if (pos_mode_.load()) {
+      // [옵션B] 위치명령 모드 (NED) — PX4 위치제어기가 목표점에 수렴
+      mavsdk::Offboard::PositionNedYaw p{};
+      p.north_m = pos_north_.load();
+      p.east_m  = pos_east_.load();
+      p.down_m  = pos_down_.load();
+      p.yaw_deg = pos_yaw_.load();
+      offboard_->set_position_ned(p);
+    } else if (vel_mode_.load()) {
+      // [옵션B] 속도명령 모드 (NED)
+      mavsdk::Offboard::VelocityNedYaw v{};
+      v.north_m_s = vel_north_.load();
+      v.east_m_s  = vel_east_.load();
+      v.down_m_s  = vel_down_.load();
+      v.yaw_deg   = vel_yaw_.load();
+      offboard_->set_velocity_ned(v);
+    } else {
+      mavsdk::Offboard::Attitude cmd{};
+      cmd.roll_deg     = cmd_roll_.load();
+      cmd.pitch_deg    = cmd_pitch_.load();
+      cmd.yaw_deg      = cmd_yaw_.load();
+      cmd.thrust_value = cmd_thrust_.load();
+      offboard_->set_attitude(cmd);
+    }
     std::this_thread::sleep_for(interval);
   }
 }
 
 void MavlinkInterface::set_attitude_command(const AttitudeCmd & cmd)
 {
+  vel_mode_.store(false);   // [옵션B] attitude 명령 들어오면 자세모드로 복귀
+  pos_mode_.store(false);
   cmd_roll_.store(cmd.roll_deg);
   cmd_pitch_.store(cmd.pitch_deg);
   cmd_yaw_.store(cmd.yaw_deg);
   cmd_thrust_.store(std::clamp(cmd.thrust, 0.f, 1.f));
+}
+
+void MavlinkInterface::set_velocity_ned(float north_m_s, float east_m_s,
+                                        float down_m_s, float yaw_deg)
+{
+  vel_north_.store(north_m_s);
+  vel_east_.store(east_m_s);
+  vel_down_.store(down_m_s);
+  vel_yaw_.store(yaw_deg);
+  vel_mode_.store(true);   // velocity 모드 진입
+}
+
+void MavlinkInterface::set_position_ned(float north_m, float east_m,
+                                        float down_m, float yaw_deg)
+{
+  pos_north_.store(north_m);
+  pos_east_.store(east_m);
+  pos_down_.store(down_m);
+  pos_yaw_.store(yaw_deg);
+  pos_mode_.store(true);
+  vel_mode_.store(false);
+}
+
+bool MavlinkInterface::get_position_ned(float & north_m, float & east_m, float & down_m)
+{
+  if (!have_pos_.load()) return false;
+  north_m = cur_north_.load();
+  east_m  = cur_east_.load();
+  down_m  = cur_down_.load();
+  return true;
+}
+
+void MavlinkInterface::use_attitude_mode()
+{
+  vel_mode_.store(false);
+  pos_mode_.store(false);
 }
 
 // ---------------------------------------------------------------------------
@@ -118,15 +183,23 @@ void MavlinkInterface::disarm()
   log("Disarmed.");
 }
 
-void MavlinkInterface::set_offboard_mode()
+bool MavlinkInterface::set_offboard_mode()
 {
-  if (!connected_) return;
-  auto result = offboard_->start();
-  if (result != mavsdk::Offboard::Result::Success) {
-    log("OFFBOARD start failed: " + std::to_string(static_cast<int>(result)));
-  } else {
-    log("OFFBOARD mode started.");
+  if (!connected_) return false;
+  // EKF 수렴/스트림 타이밍에 따라 1회 start() 는 랜덤 실패(result 7).
+  // 성공할 때까지 최대 20회 재시도(사이 0.5s 대기) → 항상 OFFBOARD 진입 보장.
+  for (int attempt = 1; attempt <= 20; ++attempt) {
+    auto result = offboard_->start();
+    if (result == mavsdk::Offboard::Result::Success) {
+      log("OFFBOARD mode started. (attempt " + std::to_string(attempt) + ")");
+      return true;
+    }
+    log("OFFBOARD start failed: " + std::to_string(static_cast<int>(result))
+        + " (attempt " + std::to_string(attempt) + "/20, 재시도)");
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
   }
+  log("OFFBOARD 진입 최종 실패 — EKF/연결 확인 필요");
+  return false;
 }
 
 void MavlinkInterface::send_rtl()
