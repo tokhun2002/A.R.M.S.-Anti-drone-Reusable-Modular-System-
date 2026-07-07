@@ -7,16 +7,24 @@ services:
     image: arms/detection:laptop
 
     # network_mode: host — container shares the host network stack.
-    # DDS (FastDDS / CycloneDDS) multicast discovery works without any extra config.
+    # ipc: host — FastDDS shared memory transport가 호스트 프로세스와 같은
+    #             IPC 네임스페이스를 쓰도록 강제. 없으면 topic list는 보여도
+    #             실제 데이터 수신이 안 됨.
     network_mode: host
+    ipc: host
 
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
-      # - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
+      # Force UDP-only FastDDS transport. SHM transport fails between container
+      # and host because FastDDS SHM requires FD passing via Unix socket, which
+      # does not work across the container boundary even with ipc: host.
+      - FASTRTPS_DEFAULT_PROFILES_FILE=/fastdds_udp.xml
       - ARMS_MODEL=${ARMS_MODEL:-/models/best.onnx}
       - ARMS_CONF=${ARMS_CONF:-0.5}
       - ARMS_IOU=${ARMS_IOU:-0.45}
       - ARMS_CLASSES=${ARMS_CLASSES:-balloon}
     volumes:
       - ./models:/models:ro    # place .onnx model file here
+      - ./fastdds_udp.xml:/fastdds_udp.xml:ro
     restart: unless-stopped

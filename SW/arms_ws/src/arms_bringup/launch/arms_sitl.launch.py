@@ -1,11 +1,11 @@
 """
-SITL launch: arms_video (gz bridge) + arms_control + arms_ui
+SITL launch: arms_video (gz bridge) + fusion_detector + arms_control + arms_ui
 - MAVLink via UDP (PX4 SITL default)
 - GPIO disabled
 - 카메라 브리지: arms_video/launch/video_sitl.launch.py (arms_video_node)
 - 거리 센서 브리지: 이 파일에서 직접 처리
-- Detection: 별도로 docker compose up 필요
-    cd arms_detection/docker && docker compose -f docker-compose.laptop.yml up
+- Detection: fusion_detector (HSV + absdiff, 기본값)
+    YOLO 사용 시 docker compose up 후 fusion_detector의 use_yolo=true
 """
 
 from pathlib import Path
@@ -47,6 +47,13 @@ def generate_launch_description():
             remappings=[
                 ("/arms_drone/upward_ray/scan", "/arms/scan_raw"),
             ],
+        ),
+        # Fusion detector (HSV + absdiff 기본, YOLO 도커 연동 시 use_yolo=true)
+        Node(
+            package="arms_detection",
+            executable="arms_detection_node",
+            name="arms_detection_node",
+            output="screen",
         ),
         # State machine + PID + MAVLink
         Node(

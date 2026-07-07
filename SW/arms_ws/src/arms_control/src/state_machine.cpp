@@ -74,7 +74,7 @@ void StateMachine::on_detection(
 void StateMachine::on_launch_button()
 {
   if (state_ == State::LOCK) {
-    transition(State::TRACK);   // BOOST 없이 바로 위치보정 추적
+    transition(State::BOOST);
   } else if (log_fn_) {
     log_fn_("[StateMachine] Launch button pressed in state " +
             to_string(state_) + " — ignored.");
@@ -90,7 +90,7 @@ void StateMachine::on_boost_complete()
 
 void StateMachine::on_distance(double distance_m)
 {
-  if ((state_ == State::TRACK || state_ == State::BOOST) &&
+  if (state_ == State::TRACK &&
       distance_m < params_.fire_distance_m) {
     transition(State::FIRE);
   }

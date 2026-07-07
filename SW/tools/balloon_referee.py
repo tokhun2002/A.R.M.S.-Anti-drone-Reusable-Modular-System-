@@ -26,7 +26,7 @@ from rclpy.node import Node
 from arms_msgs.msg import MissionState
 
 WORLD = "arms_sitl"
-MODEL = "red_ball"
+MODEL = "target_drone"
 
 # 비행 패턴: 실제 적 드론처럼 상공에서 곡선 기동하며 가로지르고, 화면 밖이면 재등장
 ALT = 44.0          # 기본 비행 고도 [m] (드론 도달가능·추락방지, 진짜요격)

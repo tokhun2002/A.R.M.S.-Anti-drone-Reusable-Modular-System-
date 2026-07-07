@@ -3,7 +3,7 @@
   A.R.M.S. SITL world (Gazebo Harmonic)
   - 드론(arms_drone)은 PX4가 airframe 4021로 직접 스폰 → 여기 include 안 함
   - 센서 시스템 플러그인(IMU/baro/airspeed/mag/navsat) 포함 → arm 가능
-  - red_ball : 날아다니는 풍선 (referee가 set_pose로 비행 + 명중 연출)
+  - target_drone : 표적 드론 (referee가 set_pose로 비행 + 명중 연출)
 -->
 <sdf version="1.9">
   <world name="arms_sitl">
@@ -12,6 +12,18 @@
       <max_step_size>0.001</max_step_size>
       <real_time_factor>1.0</real_time_factor>
     </physics>
+
+    <!-- 지구 중력/자기장/위치 설정 (PX4가 EKF2에서 사용) -->
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>47.397742</latitude_deg>
+      <longitude_deg>8.545594</longitude_deg>
+      <elevation>488.0</elevation>
+      <heading_deg>0</heading_deg>
+    </spherical_coordinates>
 
     <!-- 핵심 시스템 플러그인 -->
     <plugin filename="gz-sim-physics-system"            name="gz::sim::systems::Physics"/>
@@ -60,16 +72,16 @@
       </link>
     </model>
 
-    <!-- 날아다니는 풍선 (referee가 움직임). 시작 고도 12m -->
-    <model name="red_ball">
+    <!-- 표적 드론 (referee가 set_pose로 비행). 시작 고도 12m -->
+    <model name="target_drone">
       <static>false</static>
       <pose>0 0 12 0 0 0</pose>
-      <link name="link">
+      <link name="base_link">
         <gravity>false</gravity>
         <kinematic>true</kinematic>
         <inertial>
-          <mass>0.05</mass>
-          <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz></inertia>
+          <mass>2.0</mass>
+          <inertia><ixx>0.02</ixx><iyy>0.02</iyy><izz>0.04</izz></inertia>
         </inertial>
         <collision name="collision">
           <geometry><sphere><radius>1.3</radius></sphere></geometry>
@@ -77,10 +89,48 @@
         <visual name="visual">
           <geometry><sphere><radius>1.3</radius></sphere></geometry>
           <material>
-            <ambient>1 0 0 1</ambient>
-            <diffuse>1 0 0 1</diffuse>
-            <specular>0.5 0.5 0.5 1</specular>
+            <ambient>0.1 0.35 0.1 1</ambient>
+            <diffuse>0.15 0.55 0.15 1</diffuse>
+            <specular>0.2 0.3 0.2 1</specular>
           </material>
+        </visual>
+        <!-- 프로펠러 (CCW) -->
+        <visual name="prop_0">
+          <pose>0.175 -0.175 0.06 0 0 0</pose>
+          <geometry>
+            <mesh>
+              <uri>model://x500_base/meshes/1345_prop_ccw.stl</uri>
+            </mesh>
+          </geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.2 0.2 0.2 1</diffuse></material>
+        </visual>
+        <visual name="prop_1">
+          <pose>-0.175 0.175 0.06 0 0 0</pose>
+          <geometry>
+            <mesh>
+              <uri>model://x500_base/meshes/1345_prop_ccw.stl</uri>
+            </mesh>
+          </geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.2 0.2 0.2 1</diffuse></material>
+        </visual>
+        <!-- 프로펠러 (CW) -->
+        <visual name="prop_2">
+          <pose>0.175 0.175 0.06 0 0 0</pose>
+          <geometry>
+            <mesh>
+              <uri>model://x500_base/meshes/1345_prop_cw.stl</uri>
+            </mesh>
+          </geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.2 0.2 0.2 1</diffuse></material>
+        </visual>
+        <visual name="prop_3">
+          <pose>-0.175 -0.175 0.06 0 0 0</pose>
+          <geometry>
+            <mesh>
+              <uri>model://x500_base/meshes/1345_prop_cw.stl</uri>
+            </mesh>
+          </geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.2 0.2 0.2 1</diffuse></material>
         </visual>
       </link>
     </model>
