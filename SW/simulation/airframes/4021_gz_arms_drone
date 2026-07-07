@@ -54,3 +54,6 @@ param set-default NAV_DLL_ACT 2
 param set-default EKF2_GPS_CTRL 1
 param set-default EKF2_BARO_CTRL 1
 param set-default SYS_HAS_GPS 1
+
+# SITL에는 전원 모듈이 없으므로 power supply 체크 비활성화
+param set-default CBRK_SUPPLY_CHK 894281
