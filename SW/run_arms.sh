@@ -55,9 +55,9 @@ TERM_CMD "ARMS stack" \
 sleep 5
 SHELL_PY="$PX4_DIR/Tools/mavlink_shell.py"
 if [ -f "$SHELL_PY" ]; then
-  printf 'param set CBRK_SUPPLY_CHK 894281\nparam set COM_DISARM_PRFLT 0\nparam set COM_DISARM_LAND -1\nparam set NAV_DLL_ACT 0\nparam set NAV_RCL_ACT 0\n' \
+  printf 'param set COM_DISARM_PRFLT 0\nparam set COM_DISARM_LAND -1\nparam set NAV_DLL_ACT 0\nparam set NAV_RCL_ACT 0\n' \
     | python3 "$SHELL_PY" udp:127.0.0.1:14550 >/dev/null 2>&1 &
-  echo "      자동 disarm/페일세이프 해제 + 전원체크 bypass (CBRK_SUPPLY_CHK)"
+  echo "      자동 disarm/페일세이프 해제 (COM_DISARM_PRFLT/LAND, NAV_DLL_ACT/RCL_ACT)"
 fi
 
 echo ""
