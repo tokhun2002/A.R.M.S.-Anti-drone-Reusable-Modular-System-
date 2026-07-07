@@ -14,11 +14,11 @@ struct GpioInput::Impl
 {
 #ifdef HAS_GPIOD
   gpiod_chip * chip = nullptr;
-  std::array<gpiod_line *, 3> lines = {nullptr, nullptr, nullptr};
+  std::array<gpiod_line *, 4> lines = {nullptr, nullptr, nullptr, nullptr};
 #endif
 };
 
-GpioInput::GpioInput(std::string chip_name, std::array<int, 3> line_offsets, bool active_low, bool request_pullup)
+GpioInput::GpioInput(std::string chip_name, std::array<int, 4> line_offsets, bool active_low, bool request_pullup)
 : chip_name_(std::move(chip_name)),
   line_offsets_(line_offsets),
   active_low_(active_low),
@@ -62,7 +62,7 @@ void GpioInput::openDevice()
   (void)request_pullup_;
 #endif
 
-  for (int i = 0; i < 3; ++i) {
+  for (int i = 0; i < 4; ++i) {
     impl_->lines[i] = gpiod_chip_get_line(impl_->chip, static_cast<unsigned int>(line_offsets_[i]));
     if (impl_->lines[i] == nullptr) {
       closeDevice();
@@ -122,8 +122,6 @@ int GpioInput::readLine(int index) const
     throw std::runtime_error("Failed to read GPIO line");
   }
 
-  // Wiring: switch connects GPIO to GND.
-  // raw LOW(0) means pressed/ON when active_low is true.
   if (active_low_) {
     return value == 0 ? 1 : 0;
   }
@@ -137,9 +135,10 @@ int GpioInput::readLine(int index) const
 SwitchState GpioInput::readSwitches()
 {
   SwitchState state;
-  state.kill = readLine(0);
-  state.land = readLine(1);
-  state.mode = readLine(2);
+  state.kill   = readLine(0);
+  state.land   = readLine(1);
+  state.mode   = readLine(2);
+  state.launch = readLine(3);
   return state;
 }
 

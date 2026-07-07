@@ -11,6 +11,7 @@
 #include "arms_msgs/msg/mission_state.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/joy.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/range.hpp"
 #include "std_msgs/msg/empty.hpp"
@@ -244,10 +245,14 @@ class ArmsControlNode : public rclcpp::Node {
           }
         });
 
-    sub_launch_ = create_subscription<std_msgs::msg::Empty>(
-        "/arms/launch_cmd", 10, [this](std_msgs::msg::Empty::SharedPtr) {
-          RCLCPP_INFO(get_logger(), "Launch command received (topic).");
-          sm_->on_launch_button();
+    sub_joy_ = create_subscription<sensor_msgs::msg::Joy>(
+        "/joy", 10, [this](sensor_msgs::msg::Joy::SharedPtr msg) {
+          int val = (msg->buttons.size() > 3) ? msg->buttons[3] : 0;
+          if (val && !prev_joy_launch_btn_) {
+            RCLCPP_INFO(get_logger(), "Launch triggered via /joy buttons[3].");
+            sm_->on_launch_button();
+          }
+          prev_joy_launch_btn_ = val;
         });
 
     sub_reset_ = create_subscription<std_msgs::msg::Empty>(
@@ -534,10 +539,12 @@ class ArmsControlNode : public rclcpp::Node {
   bool auto_launched_{false};
   rclcpp::Time lock_enter_time_;
 
+  int prev_joy_launch_btn_{0};
+
   rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
   rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr sub_distance_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr sub_scan_;
-  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_launch_;
+  rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr sub_joy_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_reset_;
   rclcpp::Publisher<arms_msgs::msg::CtrlCmd>::SharedPtr pub_ctrl_cmd_;
   rclcpp::Publisher<arms_msgs::msg::MissionState>::SharedPtr pub_state_;

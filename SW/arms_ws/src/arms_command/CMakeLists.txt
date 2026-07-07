@@ -9,8 +9,15 @@ find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 
-# Python 패키지 설치 (console_scripts 포함)
+# Python 모듈 설치 (import arms_command.xxx 가능하게)
 ament_python_install_package(${PROJECT_NAME})
+
+# Python 실행파일을 lib/<pkg>/ 에 직접 설치 (ros2 run이 여기서 찾음)
+install(PROGRAMS
+  arms_command/arms_command_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME arms_command_node
+)
 
 # Optional GPIO support
 find_library(GPIOD_LIB gpiod)

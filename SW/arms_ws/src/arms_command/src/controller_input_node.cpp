@@ -37,8 +37,8 @@ public:
     raw_max_ = vectorToArray(declare_parameter<std::vector<int64_t>>("adc.raw_max", {26400, 26400, 26400, 26400}));
     invert_axes_ = vectorToBoolArray(declare_parameter<std::vector<bool>>("adc.invert_axes", {false, false, false, false}));
 
-    const auto gpio_lines_vec = declare_parameter<std::vector<int64_t>>("gpio.lines", {-1, -1, -1});
-    gpio_lines_ = vectorTo3Array(gpio_lines_vec);
+    const auto gpio_lines_vec = declare_parameter<std::vector<int64_t>>("gpio.lines", {-1, -1, -1, -1});
+    gpio_lines_ = vectorTo4Array(gpio_lines_vec);
 
     joy_pub_ = create_publisher<sensor_msgs::msg::Joy>(topic_name_, 10);
 
@@ -85,15 +85,16 @@ private:
     return {values[0], values[1], values[2], values[3]};
   }
 
-  static std::array<int, 3> vectorTo3Array(const std::vector<int64_t> & values)
+  static std::array<int, 4> vectorTo4Array(const std::vector<int64_t> & values)
   {
-    if (values.size() != 3) {
-      throw std::runtime_error("GPIO line parameter array must have exactly 3 elements");
+    if (values.size() != 4) {
+      throw std::runtime_error("GPIO line parameter array must have exactly 4 elements");
     }
     return {
       static_cast<int>(values[0]),
       static_cast<int>(values[1]),
-      static_cast<int>(values[2])
+      static_cast<int>(values[2]),
+      static_cast<int>(values[3])
     };
   }
 
@@ -161,9 +162,10 @@ private:
   {
     const int sec = static_cast<int>(std::floor(fake_t_));
     SwitchState state;
-    state.kill = 0;
-    state.land = ((sec / 6) % 2 == 1) ? 1 : 0;
-    state.mode = ((sec / 4) % 2 == 1) ? 1 : 0;
+    state.kill   = 0;
+    state.land   = ((sec / 6) % 2 == 1) ? 1 : 0;
+    state.mode   = ((sec / 4) % 2 == 1) ? 1 : 0;
+    state.launch = 0;
     return state;
   }
 
@@ -177,7 +179,7 @@ private:
       msg.header.stamp = now();
       msg.header.frame_id = "controller_input";
       msg.axes.resize(4);
-      msg.buttons.resize(3);
+      msg.buttons.resize(4);
 
       for (int i = 0; i < 4; ++i) {
         msg.axes[i] = normalizeAxis(raw[i], raw_min_[i], raw_center_[i], raw_max_[i], invert_axes_[i]);
@@ -186,15 +188,16 @@ private:
       msg.buttons[0] = switches.kill;
       msg.buttons[1] = switches.land;
       msg.buttons[2] = switches.mode;
+      msg.buttons[3] = switches.launch;
 
       joy_pub_->publish(msg);
 
       RCLCPP_INFO_THROTTLE(
         get_logger(), *get_clock(), 1000,
-        "raw=[%d,%d,%d,%d] axes=[%.2f,%.2f,%.2f,%.2f] buttons=[%d,%d,%d]",
+        "raw=[%d,%d,%d,%d] axes=[%.2f,%.2f,%.2f,%.2f] buttons=[%d,%d,%d,%d]",
         raw[0], raw[1], raw[2], raw[3],
         msg.axes[0], msg.axes[1], msg.axes[2], msg.axes[3],
-        msg.buttons[0], msg.buttons[1], msg.buttons[2]);
+        msg.buttons[0], msg.buttons[1], msg.buttons[2], msg.buttons[3]);
     } catch (const std::exception & e) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000, "controller_input read failed: %s", e.what());
     }
@@ -208,7 +211,7 @@ private:
   int i2c_address_;
 
   std::string gpio_chip_;
-  std::array<int, 3> gpio_lines_;
+  std::array<int, 4> gpio_lines_;
   bool gpio_active_low_;
   bool gpio_request_pullup_;
 

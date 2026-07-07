@@ -4,19 +4,20 @@ arms_command_node.py — A.R.M.S. SITL 컨트롤 패널 (tkinter GUI)
 
 기능:
   - 미션 상태 표시 (IDLE/SEARCH/LOCK/TRACK/FIRE/RTL)
-  - [LAUNCH]            : /arms/launch_cmd 발행 (수동 TRACK 전환)
+  - [LAUNCH]            : /joy buttons[3]=1 발행 (수동 TRACK 전환)
   - [YOLO/HSV/ABSDIFF]  : arms_detection_node 검출 모드 토글
   - [Roll/Pitch 부호]   : 제어 방향 뒤집기 (재빌드 X)
   - [시작/최대 P + 증가시간]: TRACK 진입 후 시간에 따라 P 를 시작→최대로 램프
   - [kd/ki 슬라이더]    : roll/pitch D/I 게인 실시간
   - [상승 추력] 슬라이더 : track_throttle
   - [풍선 비행/정지]    : balloon_referee 파라미터로 표적 자동 비행 제어
-  - [CONTROLLER INPUT]  : /joy 구독 → 조종기 스틱/스위치 실시간 표시
+  - [CONTROLLER INPUT]  : 스틱 드래그 → /joy axes 발행 / 스위치 클릭 → /joy buttons 발행
 
 확정 환경: 월드=arms_sitl, 드론=arms_drone, 표적=red_ball
 실행: ros2 run arms_command arms_command_node
 """
 
+import math
 import queue
 import subprocess
 import threading
@@ -24,7 +25,6 @@ import tkinter as tk
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Empty
 from sensor_msgs.msg import Joy
 from arms_msgs.msg import MissionState
 
@@ -45,13 +45,12 @@ STATE_COLOR = {
     "RTL":    "#2979ff",
 }
 
-STICK_SIZE = 80    # Canvas 크기 (px)
-STICK_R    = 36    # 배경 원 반지름
-DOT_R      = 8     # 스틱 점 반지름
+STICK_SIZE = 80
+STICK_R    = 36
+DOT_R      = 8
 
 
 def _bg(fn):
-    """외부 프로세스 호출을 백그라운드로 → tkinter 메인스레드 freeze 방지."""
     threading.Thread(target=fn, daemon=True).start()
 
 
@@ -71,26 +70,44 @@ class PanelNode(Node):
     def __init__(self, q):
         super().__init__("arms_command_node")
         self.q = q
-        self.launch_pub = self.create_publisher(Empty, "/arms/launch_cmd", 10)
+        self._joy_pub = self.create_publisher(Joy, "/joy", 10)
+        self._axes = [0.0, 0.0, 0.0, 0.0]
+        self._buttons = [0, 0, 0, 0]
         self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
-        self.create_subscription(Joy, "/joy", self._cb_joy, 10)
+        self.create_timer(0.05, self._publish_joy)  # 20 Hz
 
     def _cb_state(self, msg):
         self.q.put(msg)
 
-    def _cb_joy(self, msg):
+    def _publish_joy(self):
+        msg = Joy()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.axes = list(self._axes)
+        msg.buttons = list(self._buttons)
+        self._joy_pub.publish(msg)
         self.q.put(msg)
 
+    def set_axis(self, idx, value):
+        self._axes[idx] = float(value)
+
+    def toggle_button(self, idx):
+        self._buttons[idx] ^= 1
+        return self._buttons[idx]
+
     def fire_launch(self):
-        self.launch_pub.publish(Empty())
+        self._buttons[3] = 1
+
+    def release_launch(self):
+        self._buttons[3] = 0
 
 
 class PanelGUI:
     def __init__(self, root, node, q):
+        self.root = root
         self.node = node
         self.q = q
         self.roll_sign  = 1.0
-        self.pitch_sign = -1.0   # 확정값(yaml)과 일치
+        self.pitch_sign = -1.0
 
         root.title("A.R.M.S. Control Panel")
         root.configure(bg="#1e1e1e")
@@ -107,7 +124,7 @@ class PanelGUI:
 
         tk.Button(root, text="LAUNCH (→TRACK)", font=("Arial", 12, "bold"),
                   bg="#d0021b", fg="white", activebackground="#ff1744",
-                  command=self.node.fire_launch).pack(pady=5, fill="x", padx=20)
+                  command=self._on_launch).pack(pady=5, fill="x", padx=20)
 
         tk.Label(root, text="DETECTION MODE (다중 선택)", fg="#aaaaaa", bg="#1e1e1e",
                  font=("Arial", 10)).pack(pady=(8, 2))
@@ -216,11 +233,13 @@ class PanelGUI:
                       lambda e: ros_param_set_node(REFEREE_NODE, "alt", float(self.alt.get())))
 
         # ------------------------------------------------------------------
-        # CONTROLLER INPUT 섹션
+        # CONTROLLER INPUT 섹션 — 드래그/클릭으로 /joy 발행
         # ------------------------------------------------------------------
         tk.Frame(root, bg="#444444", height=1).pack(fill="x", padx=10, pady=(12, 4))
         tk.Label(root, text="CONTROLLER INPUT", fg="#aaaaaa", bg="#1e1e1e",
                  font=("Arial", 10)).pack()
+        tk.Label(root, text="스틱: 드래그 (놓으면 중앙 복귀) / 스위치: 클릭 토글",
+                 fg="#666666", bg="#1e1e1e", font=("Arial", 8)).pack()
 
         stick_frm = tk.Frame(root, bg="#1e1e1e")
         stick_frm.pack(pady=6)
@@ -231,13 +250,14 @@ class PanelGUI:
         tk.Label(lfrm, text="L-STICK", fg="#888888", bg="#1e1e1e",
                  font=("Arial", 8)).pack()
         self.l_canvas = tk.Canvas(lfrm, width=STICK_SIZE, height=STICK_SIZE,
-                                  bg="#2a2a2a", highlightthickness=0)
+                                  bg="#2a2a2a", highlightthickness=0, cursor="crosshair")
         self.l_canvas.pack()
         tk.Label(lfrm, text="ax0, ax1", fg="#666666", bg="#1e1e1e",
                  font=("Arial", 7)).pack()
         self._draw_stick_bg(self.l_canvas)
         self.l_dot = self.l_canvas.create_oval(
             *self._dot_coords(0, 0), fill="#e53935", outline="")
+        self._bind_stick(self.l_canvas, self.l_dot, 0, 1)
 
         # 오른쪽 스틱 (ax2=X, ax3=Y)
         rfrm = tk.Frame(stick_frm, bg="#1e1e1e")
@@ -245,26 +265,83 @@ class PanelGUI:
         tk.Label(rfrm, text="R-STICK", fg="#888888", bg="#1e1e1e",
                  font=("Arial", 8)).pack()
         self.r_canvas = tk.Canvas(rfrm, width=STICK_SIZE, height=STICK_SIZE,
-                                  bg="#2a2a2a", highlightthickness=0)
+                                  bg="#2a2a2a", highlightthickness=0, cursor="crosshair")
         self.r_canvas.pack()
         tk.Label(rfrm, text="ax2, ax3", fg="#666666", bg="#1e1e1e",
                  font=("Arial", 7)).pack()
         self._draw_stick_bg(self.r_canvas)
         self.r_dot = self.r_canvas.create_oval(
             *self._dot_coords(0, 0), fill="#e53935", outline="")
+        self._bind_stick(self.r_canvas, self.r_dot, 2, 3)
 
-        # 스위치 상태 표시 (buttons[0]=KILL, [1]=LAND, [2]=MODE)
+        # 스위치 (buttons[0..3]) — 클릭 토글
+        SW_COLORS = ["#c62828", "#1565c0", "#2e7d32", "#e65100"]
+        SW_NAMES  = ["KILL", "LAND", "MODE", "LAUNCH"]
         sw_frm = tk.Frame(root, bg="#1e1e1e")
         sw_frm.pack(pady=4)
         self.sw_labels = []
-        for i, name in enumerate(["KILL", "LAND", "MODE"]):
-            lbl = tk.Label(sw_frm, text=f"{name}: OFF", width=10,
+        for i, (name, col_on) in enumerate(zip(SW_NAMES, SW_COLORS)):
+            lbl = tk.Label(sw_frm, text=f"{name}: OFF", width=9,
                            font=("Arial", 9, "bold"), fg="white",
-                           bg="#444444", relief="groove")
-            lbl.grid(row=0, column=i, padx=4)
+                           bg="#444444", relief="groove", cursor="hand2")
+            lbl.grid(row=0, column=i, padx=2)
+            lbl.bind("<Button-1>", lambda e, idx=i, c=col_on, n=name: self._toggle_switch(idx, c, n))
             self.sw_labels.append(lbl)
 
         self._poll()
+
+    # ------------------------------------------------------------------
+    # LAUNCH 버튼
+    # ------------------------------------------------------------------
+    def _on_launch(self):
+        self.node.fire_launch()
+        self._update_switch_label(3, 1)
+        self.root.after(300, self._release_launch)
+
+    def _release_launch(self):
+        self.node.release_launch()
+        self._update_switch_label(3, 0)
+
+    # ------------------------------------------------------------------
+    # 스틱 드래그
+    # ------------------------------------------------------------------
+    def _bind_stick(self, canvas, dot_id, ax_idx, ay_idx):
+        def _move(event):
+            cx = cy = STICK_SIZE // 2
+            dx = (event.x - cx) / STICK_R
+            dy = (cy - event.y) / STICK_R
+            mag = math.hypot(dx, dy)
+            if mag > 1.0:
+                dx /= mag
+                dy /= mag
+            self.node.set_axis(ax_idx, dx)
+            self.node.set_axis(ay_idx, dy)
+            canvas.coords(dot_id, *self._dot_coords(dx, dy))
+
+        def _release(event):
+            self.node.set_axis(ax_idx, 0.0)
+            self.node.set_axis(ay_idx, 0.0)
+            canvas.coords(dot_id, *self._dot_coords(0.0, 0.0))
+
+        canvas.bind("<Button-1>", _move)
+        canvas.bind("<B1-Motion>", _move)
+        canvas.bind("<ButtonRelease-1>", _release)
+
+    # ------------------------------------------------------------------
+    # 스위치 토글
+    # ------------------------------------------------------------------
+    def _toggle_switch(self, idx, col_on, name):
+        val = self.node.toggle_button(idx)
+        self._update_switch_label(idx, val)
+
+    def _update_switch_label(self, idx, val):
+        SW_COLORS = ["#c62828", "#1565c0", "#2e7d32", "#e65100"]
+        SW_NAMES  = ["KILL", "LAND", "MODE", "LAUNCH"]
+        lbl = self.sw_labels[idx]
+        if val:
+            lbl.config(text=f"{SW_NAMES[idx]}: ON", bg=SW_COLORS[idx])
+        else:
+            lbl.config(text=f"{SW_NAMES[idx]}: OFF", bg="#444444")
 
     # ------------------------------------------------------------------
     # Stick helpers
@@ -274,30 +351,17 @@ class PanelGUI:
         r = STICK_R
         canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
                            outline="#555555", width=1, fill="#1a1a1a")
-        # 십자선
         canvas.create_line(cx - r, cy, cx + r, cy, fill="#444444")
         canvas.create_line(cx, cy - r, cx, cy + r, fill="#444444")
 
     def _dot_coords(self, ax, ay):
         cx = cy = STICK_SIZE // 2
         x = cx + ax * STICK_R
-        y = cy - ay * STICK_R  # Y축 반전 (위가 +)
+        y = cy - ay * STICK_R
         return x - DOT_R, y - DOT_R, x + DOT_R, y + DOT_R
 
     def _update_stick(self, canvas, dot_id, ax, ay):
-        coords = self._dot_coords(ax, ay)
-        canvas.coords(dot_id, *coords)
-
-    def _update_switches(self, buttons):
-        colors_on  = ["#c62828", "#1565c0", "#2e7d32"]
-        color_off  = "#444444"
-        for i, lbl in enumerate(self.sw_labels):
-            val = buttons[i] if i < len(buttons) else 0
-            name = ["KILL", "LAND", "MODE"][i]
-            if val:
-                lbl.config(text=f"{name}: ON", bg=colors_on[i])
-            else:
-                lbl.config(text=f"{name}: OFF", bg=color_off)
+        canvas.coords(dot_id, *self._dot_coords(ax, ay))
 
     # ------------------------------------------------------------------
     def toggle_det(self, key):
@@ -377,10 +441,9 @@ class PanelGUI:
                     ax3 = axes[3] if len(axes) > 3 else 0.0
                     self._update_stick(self.l_canvas, self.l_dot, ax0, ax1)
                     self._update_stick(self.r_canvas, self.r_dot, ax2, ax3)
-                    self._update_switches(msg.buttons)
         except queue.Empty:
             pass
-        self.state_lbl.after(100, self._poll)
+        self.state_lbl.after(50, self._poll)
 
 
 def main(args=None):

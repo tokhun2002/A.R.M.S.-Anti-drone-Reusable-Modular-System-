@@ -24,6 +24,6 @@ controller_input_node:
     # libgpiod GPIO line offsets, NOT 40-pin BOARD numbers.
     # Check with gpioinfo on Jetson. Keep [-1,-1,-1] while fake_mode=true.
     gpio.chip: gpiochip0
-    gpio.lines: [-1, -1, -1]   # [kill, emergency_land, mode]
+    gpio.lines: [-1, -1, -1, -1]   # [kill, emergency_land, mode, launch]
     gpio.active_low: true      # switch to GND: LOW means ON/pressed
     gpio.request_pullup: true

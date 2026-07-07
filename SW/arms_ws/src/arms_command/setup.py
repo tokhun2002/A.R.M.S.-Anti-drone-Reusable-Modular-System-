@@ -6,10 +6,7 @@ setup(
     name=package_name,
     version="0.1.0",
     packages=find_packages(exclude=["test"]),
-    data_files=[
-        ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
-        (f"share/{package_name}", ["package.xml"]),
-    ],
+    data_files=[],
     install_requires=["setuptools"],
     zip_safe=True,
     maintainer="arms",
@@ -19,7 +16,6 @@ setup(
     entry_points={
         "console_scripts": [
             "arms_command_node = arms_command.arms_command_node:main",
-            "arms_command_gpio_node = arms_command.arms_command_gpio_node:main",
         ],
     },
 )
