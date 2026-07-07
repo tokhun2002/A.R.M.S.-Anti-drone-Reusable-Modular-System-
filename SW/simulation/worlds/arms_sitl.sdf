@@ -3,7 +3,7 @@
   A.R.M.S. SITL world (Gazebo Harmonic)
   - 드론(arms_drone)은 PX4가 airframe 4021로 직접 스폰 → 여기 include 안 함
   - 센서 시스템 플러그인(IMU/baro/airspeed/mag/navsat) 포함 → arm 가능
-  - red_ball : 날아다니는 풍선 (referee가 set_pose로 비행 + 명중 연출)
+  - target_drone : 표적 드론 (referee가 set_pose로 비행 + 명중 연출)
 -->
 <sdf version="1.9">
   <world name="arms_sitl">
@@ -72,27 +72,69 @@
       </link>
     </model>
 
-    <!-- 날아다니는 풍선 (referee가 움직임). 시작 고도 12m -->
-    <model name="red_ball">
+    <!-- 표적 드론 (referee가 set_pose로 비행). 시작 고도 12m -->
+    <model name="target_drone">
       <static>false</static>
       <pose>0 0 12 0 0 0</pose>
-      <link name="link">
+      <link name="base_link">
         <gravity>false</gravity>
         <kinematic>true</kinematic>
         <inertial>
-          <mass>0.05</mass>
-          <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz></inertia>
+          <mass>2.0</mass>
+          <inertia><ixx>0.02</ixx><iyy>0.02</iyy><izz>0.04</izz></inertia>
         </inertial>
-        <collision name="collision">
-          <geometry><sphere><radius>0.3</radius></sphere></geometry>
-        </collision>
-        <visual name="visual">
-          <geometry><sphere><radius>0.3</radius></sphere></geometry>
+        <!-- x500_base 동체 메시 (시각적 표적용, 플러그인 없음) -->
+        <visual name="body">
+          <pose>0 0 0.1 -1.5708 0 0.7854</pose>
+          <geometry>
+            <mesh>
+              <scale>0.003 0.003 0.003</scale>
+              <uri>model://x500_base/meshes/ver_ksh_assembly.stl</uri>
+            </mesh>
+          </geometry>
           <material>
-            <ambient>1 0 0 1</ambient>
-            <diffuse>1 0 0 1</diffuse>
-            <specular>0.5 0.5 0.5 1</specular>
+            <ambient>0.1 0.35 0.1 1</ambient>
+            <diffuse>0.15 0.55 0.15 1</diffuse>
+            <specular>0.2 0.3 0.2 1</specular>
           </material>
+        </visual>
+        <!-- 프로펠러 (CCW) -->
+        <visual name="prop_0">
+          <pose>0.175 -0.175 0.06 0 0 0</pose>
+          <geometry>
+            <mesh>
+              <uri>model://x500_base/meshes/1345_prop_ccw.stl</uri>
+            </mesh>
+          </geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.2 0.2 0.2 1</diffuse></material>
+        </visual>
+        <visual name="prop_1">
+          <pose>-0.175 0.175 0.06 0 0 0</pose>
+          <geometry>
+            <mesh>
+              <uri>model://x500_base/meshes/1345_prop_ccw.stl</uri>
+            </mesh>
+          </geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.2 0.2 0.2 1</diffuse></material>
+        </visual>
+        <!-- 프로펠러 (CW) -->
+        <visual name="prop_2">
+          <pose>0.175 0.175 0.06 0 0 0</pose>
+          <geometry>
+            <mesh>
+              <uri>model://x500_base/meshes/1345_prop_cw.stl</uri>
+            </mesh>
+          </geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.2 0.2 0.2 1</diffuse></material>
+        </visual>
+        <visual name="prop_3">
+          <pose>-0.175 -0.175 0.06 0 0 0</pose>
+          <geometry>
+            <mesh>
+              <uri>model://x500_base/meshes/1345_prop_cw.stl</uri>
+            </mesh>
+          </geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.2 0.2 0.2 1</diffuse></material>
         </visual>
       </link>
     </model>
