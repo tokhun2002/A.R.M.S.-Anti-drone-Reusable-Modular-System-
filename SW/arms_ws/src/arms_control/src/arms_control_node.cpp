@@ -15,6 +15,7 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/range.hpp"
 #include "std_msgs/msg/empty.hpp"
+#include "std_msgs/msg/float64.hpp"
 
 using namespace std::chrono_literals;
 
@@ -215,7 +216,8 @@ class ArmsControlNode : public rclcpp::Node {
     // ROS publishers
     // ----------------------------------------------------------------
     pub_state_ = create_publisher<arms_msgs::msg::MissionState>("/arms/mission_state", 10);
-    pub_dbg_ = create_publisher<geometry_msgs::msg::Vector3>("/arms/control_debug", 10);
+    pub_dbg_  = create_publisher<geometry_msgs::msg::Vector3>("/arms/control_debug", 10);
+    pub_dist_ = create_publisher<std_msgs::msg::Float64>("/arms/debug_distance", 10);
 
     // ----------------------------------------------------------------
     // ROS subscribers
@@ -525,6 +527,10 @@ class ArmsControlNode : public rclcpp::Node {
     dbg.z = thrust;
     pub_dbg_->publish(dbg);
 
+    std_msgs::msg::Float64 dist_msg;
+    dist_msg.data = distance_valid() ? last_distance_ : -1.0;
+    pub_dist_->publish(dist_msg);
+
     // ---- FIRE one-shot ----
     if (state == State::FIRE && !fire_sent_) {
       fire_sent_ = true;
@@ -622,6 +628,7 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_reset_;
   rclcpp::Publisher<arms_msgs::msg::MissionState>::SharedPtr pub_state_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_dbg_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_dist_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 
   double rkp_{0}, rki_{0}, rkd_{0}, rlim_{0};

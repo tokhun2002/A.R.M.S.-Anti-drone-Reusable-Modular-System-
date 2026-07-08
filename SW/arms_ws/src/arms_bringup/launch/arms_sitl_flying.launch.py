@@ -15,7 +15,7 @@ arms_sitl_flying.launch.py — SITL "날아다니는 풍선 요격" 올인원 �
 import os
 from pathlib import Path
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, LogInfo
+from launch.actions import ExecuteProcess, LogInfo, TimerAction
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -24,6 +24,10 @@ def generate_launch_description():
     control_config = (
         Path(get_package_share_directory("arms_control")) / "config" / "control_params.yaml"
     )
+    pj_layout = Path(get_package_share_directory("arms_bringup")) / "config" / "sitl_debug.xml"
+    pj_cmd = ["ros2", "run", "plotjuggler", "plotjuggler", "--ros", "--buffer_size", "60"]
+    if pj_layout.exists():
+        pj_cmd += ["--layout", str(pj_layout)]
     sw_dir = os.environ.get("ARMS_SW", "")
     tools = Path(sw_dir) / "tools" if sw_dir else None
     actions = [
@@ -82,4 +86,10 @@ def generate_launch_description():
         actions.append(LogInfo(msg=(
             "[arms_sitl_flying] ARMS_SW 환경변수가 안 잡혀서 풍선을 못 띄웠음. "
             "run_arms.sh 를 쓰거나 'export ARMS_SW=<SW경로>' 후 다시 실행.")))
+
+    # PlotJuggler — 노드 startup 후 5초 지연해서 실행
+    actions.append(TimerAction(period=5.0, actions=[
+        ExecuteProcess(cmd=pj_cmd, output="screen"),
+    ]))
+
     return LaunchDescription(actions)

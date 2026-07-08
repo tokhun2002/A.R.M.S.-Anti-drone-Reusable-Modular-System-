@@ -7,7 +7,7 @@ SITL launch: arms_video (gz bridge) + arms_detection + arms_control + arms_sitl_
 from pathlib import Path
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import ExecuteProcess, IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
@@ -20,6 +20,10 @@ def generate_launch_description():
     video_sitl_launch = (
         Path(get_package_share_directory("arms_video")) / "launch" / "video_sitl.launch.py"
     )
+    pj_layout = Path(get_package_share_directory("arms_bringup")) / "config" / "sitl_debug.xml"
+    pj_cmd = ["ros2", "run", "plotjuggler", "plotjuggler", "--ros", "--buffer_size", "60"]
+    if pj_layout.exists():
+        pj_cmd += ["--layout", str(pj_layout)]
 
     return LaunchDescription([
         # 카메라 브리지 (arms_video_node)
@@ -73,4 +77,8 @@ def generate_launch_description():
             name="arms_ui_node",
             output="screen",
         ),
+        # PlotJuggler — 노드 startup 후 5초 지연해서 실행
+        TimerAction(period=5.0, actions=[
+            ExecuteProcess(cmd=pj_cmd, output="screen"),
+        ]),
     ])

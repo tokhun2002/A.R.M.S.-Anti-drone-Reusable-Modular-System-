@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<root>
+  <tabbed_widget name="Main Window" parent="main_window">
+    <Tab name="ARMS Debug">
+      <SplitArea orientation="2">
+        <SplitArea orientation="1">
+          <SubWindow name="error" color="#1e1e1e" rows="1" columns="1">
+            <plot maximize="0">
+              <range left="-30" right="0" bottom="-0.6" top="0.6"/>
+              <curve name="/arms/mission_state/error_x" R="220" G="80"  B="80"  width="2" style="SolidLine"/>
+              <curve name="/arms/mission_state/error_y" R="80"  G="160" B="220" width="2" style="SolidLine"/>
+            </plot>
+          </SubWindow>
+          <SubWindow name="control" color="#1e1e1e" rows="1" columns="1">
+            <plot maximize="0">
+              <range left="-30" right="0" bottom="-40" top="40"/>
+              <curve name="/arms/control_debug/x" R="220" G="140" B="60"  width="2" style="SolidLine"/>
+              <curve name="/arms/control_debug/y" R="100" G="200" B="100" width="2" style="SolidLine"/>
+            </plot>
+          </SubWindow>
+        </SplitArea>
+        <SplitArea orientation="1">
+          <SubWindow name="kp" color="#1e1e1e" rows="1" columns="1">
+            <plot maximize="0">
+              <range left="-30" right="0" bottom="0" top="200"/>
+              <curve name="/arms/mission_state/kp_now" R="200" G="200" B="60" width="2" style="SolidLine"/>
+            </plot>
+          </SubWindow>
+          <SubWindow name="thrust_distance" color="#1e1e1e" rows="1" columns="1">
+            <plot maximize="0">
+              <range left="-30" right="0" bottom="-1" top="10"/>
+              <curve name="/arms/control_debug/z"       R="180" G="100" B="220" width="2" style="SolidLine"/>
+              <curve name="/arms/debug_distance/data"   R="100" G="220" B="180" width="2" style="SolidLine"/>
+            </plot>
+          </SubWindow>
+        </SplitArea>
+      </SplitArea>
+    </Tab>
+  </tabbed_widget>
+</root>
