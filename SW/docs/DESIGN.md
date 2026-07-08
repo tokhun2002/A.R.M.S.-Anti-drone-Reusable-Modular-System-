@@ -81,11 +81,12 @@ graph TD
 
     subgraph arms_command ["arms_command"]
         CMD_GUI["arms_command_node<br/>(tkinter GUI) SITL"]
-        CMD_JOY["controller_input_node<br/>(ADS1115 + GPIO) 실기체"]
+        CMD_JOY["controller_input_node<br/>(ESP32 수신) 실기체"]
     end
 
     ADS1115["ADS1115 ADC<br/>(I2C 짐벌 4축)"]
     SWGPIO["GPIO 스위치 4개"]
+    ESP32["ESP32 모듈<br/>(USB Serial → Jetson)"]
     JOY(["/arms/command"])
 
     DETECTIONS(["/arms/detections"])
@@ -108,8 +109,9 @@ graph TD
 
     V4L2 -->|V4L2 capture| VN_REAL
     GAZEBO -->|gz topic| VN_SITL
-    ADS1115 -->|I2C| CMD_JOY
-    SWGPIO --> CMD_JOY
+    ADS1115 -->|I2C| ESP32
+    SWGPIO --> ESP32
+    ESP32 -->|USB Serial| CMD_JOY
     CMD_JOY --> JOY
     CMD_GUI --> JOY
     VN_REAL --> IMAGE
@@ -152,7 +154,7 @@ graph TD
 | `arms_yolo_detection_node` | `arms_detection` | YOLO 추론 후 `/arms/yolo_detections` 발행. **선택적** — Docker 컨테이너 안에서 실행                               | Docker (선택) |
 | `arms_detection_node`      | `arms_detection` | HSV·absdiff·YOLO 결과를 융합해 `/arms/detections` 발행. YOLO 노드 없이도 독립 동작 가능                           | 호스트        |
 | `arms_command_node`        | `arms_command`   | SITL용 tkinter GUI 패널. 드래그 스틱·스위치 클릭으로 `/arms/command` 발행                                                  | 호스트        |
-| `controller_input_node`    | `arms_command`   | ADS1115 ADC(I2C)로 짐벌 4축 읽기 + GPIO 스위치 4개 읽기 → `sensor_msgs/Joy` `/arms/command` 발행. fake_mode 지원          | 호스트        |
+| `controller_input_node`    | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. fake_mode 지원 | 호스트        |
 | `arms_control_node`        | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환. CRSF 프레임을 시리얼로 직접 출력         | 호스트        |
 | `sitl_bridge_node`         | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. CH5↑=ARM, CH6↑=LAND | 호스트 (SITL) |
 | `arms_ui_node`             | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                            | 호스트        |
@@ -545,7 +547,7 @@ nodes:
   - arms_ui_node       (arms_ui)
 
 # arms_command/launch/command.launch.py  (별도 실행)
-  - controller_input_node  (arms_command)  ADS1115 조종기 + GPIO → /arms/command
+  - controller_input_node  (arms_command)  ESP32(ADS1115 + GPIO) USB Serial 수신 → /arms/command
 
 별도 실행:
   docker compose -f docker-compose.jetson.yml up
