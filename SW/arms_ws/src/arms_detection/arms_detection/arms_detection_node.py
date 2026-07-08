@@ -74,6 +74,17 @@ def bgr_to_imgmsg(bgr: np.ndarray, header) -> Image:
     return msg
 
 
+def mono_to_imgmsg(gray: np.ndarray, header) -> Image:
+    msg = Image()
+    msg.header = header
+    msg.height, msg.width = gray.shape[:2]
+    msg.encoding = "mono8"
+    msg.is_bigendian = 0
+    msg.step = gray.shape[1]
+    msg.data = gray.tobytes()
+    return msg
+
+
 class FusionDetector(Node):
     def __init__(self):
         super().__init__("arms_detection_node")
@@ -109,6 +120,7 @@ class FusionDetector(Node):
         self.pub_det = self.create_publisher(DetectionArray, "/arms/detections", 10)
         self.pub_dbg = self.create_publisher(Image, "/arms/debug_image", 10)
         self.pub_roi = self.create_publisher(Image, "/arms/roi_image", 10)
+        self.pub_absdiff = self.create_publisher(Image, "/arms/debug_absdiff", 10)
 
         self.get_logger().info("fusion_detector ready (YOLO + contrast-CV, no color).")
 
@@ -185,7 +197,7 @@ class FusionDetector(Node):
     #   - 밝은 점/어두운 점 모두 잡힘
     #   반환: BoundingBox 1개(가장 그럴듯한 점) 또는 None
     # -----------------------------------------------------------------
-    def detect_cv(self, bgr: np.ndarray):
+    def detect_cv(self, bgr: np.ndarray, header=None):
         h, w = bgr.shape[:2]
         diff_thresh = int(self.get_parameter("cv.diff_thresh").value)
         bg_k = int(self.get_parameter("cv.bg_blur").value)
@@ -201,6 +213,9 @@ class FusionDetector(Node):
         bg = cv2.medianBlur(gray, bg_k)                   # 배경(하늘) 추정
         diff = cv2.absdiff(gray, bg)                      # 밝은/어두운 점 모두 양수
         _, mask = cv2.threshold(diff, diff_thresh, 255, cv2.THRESH_BINARY)
+
+        if header is not None and self.pub_absdiff.get_subscription_count() > 0:
+            self.pub_absdiff.publish(mono_to_imgmsg(mask, header))
 
         cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         best = None
@@ -269,7 +284,7 @@ class FusionDetector(Node):
             yolo_box = max(self._yolo_dets, key=lambda b: b.confidence)
 
         hsv_box_crop = self.detect_hsv(crop) if want_hsv else None
-        cv_box_crop = self.detect_cv(crop) if want_absdiff else None
+        cv_box_crop = self.detect_cv(crop, msg.header) if want_absdiff else None
 
         # ROI 상대 좌표 → 풀프레임 좌표로 변환
         hsv_box = self._to_full_frame(hsv_box_crop, roi, w, h) if hsv_box_crop else None
