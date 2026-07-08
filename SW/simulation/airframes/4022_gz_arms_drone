@@ -53,10 +53,15 @@ param set-default MPC_THR_HOVER 0.60
 param set-default NAV_DLL_ACT 0       # 데이터링크 소실 무시 (GCS 없음)
 param set-default NAV_RCL_ACT 0       # RC 소실 무시
 param set-default COM_DISARM_PRFLT 0  # 지상 대기 중 자동 disarm 비활성화
-# RC_CHANNELS_OVERRIDE(MAVLink) 사용 구조 — 실제 RC 수신기 없음
-# COM_RC_IN_MODE 1 = "MAVLink only": RC 수신기 헬스 체크 비활성화
-# (기본값 3에서는 RC_RECEIVER 헬스 실패로 arm 영구 거부됨)
-param set-default COM_RC_IN_MODE 1
+# RC_CHANNELS_OVERRIDE(MAVLink) 사용 구조 — 실제 RC 수신기 없음.
+# rc_update 모듈은 RC_CHAN_CNT>0 이어야 manual_control_setpoint.valid=true 로 잡음
+# (0이면 override로 채널이 들어와도 계속 invalid → health check 실패 → arm 영구 거부).
+param set-default RC_CHAN_CNT 8
+# posix rcS가 COM_RC_IN_MODE를 이미 1(MAVLink only)로 set-default 해놔서
+# (rc.mc_defaults보다 먼저 실행됨) 여기서 set-default로는 못 덮어씀 → 반드시 set(강제)으로.
+# override로 들어오는 입력은 SOURCE_RC로 태그되므로 1(MAVLink only)이면 영원히 거부됨.
+# 3 = RC or MAVLink, 먼저 유효해지는 쪽 사용 (우리는 RC 경로만 사용).
+param set COM_RC_IN_MODE 3
 
 # EKF2: GPS + 기압계 사용 (SITL에서 ekf2 missing data 방지)
 param set-default EKF2_GPS_CTRL 1
@@ -66,6 +71,39 @@ param set-default SYS_HAS_GPS 1
 # SITL에는 전원 모듈이 없으므로 power supply 체크 비활성화
 param set-default CBRK_SUPPLY_CHK 894281
 
+# RC 채널 캘리브레이션(RCn_MIN/TRIM/MAX): 실제로 캘리브레이션을 한 적이 없어서
+# 기본값이 전부 0/0/0 이었다. rc_update의 interpolateNXY(value, {0,0,0}, {-1,0,1})는
+# breakpoint 3개가 전부 같은 지점(0)이라 degenerate 하고, 우리가 보내는 raw PWM(1000~2000us)은
+# 항상 그 지점보다 크므로 채널 값이 실제로 뭘 보내든 상관없이 항상 +1.0(최댓값)으로 읽힌다.
+# → throttle이 0을 보내도 PX4는 "최대 throttle"로 인식 → arm 시 "throttle not in safe
+#   position"으로 항상 거부(직전 5초 이내 재arm이라 프리체크가 스킵된 우연한 경우만 통과).
+# sitl_bridge_node의 _crsf_to_us()가 172~1811(CRSF) → 1000~2000us로 변환하므로,
+# 그 범위와 정확히 맞춰 MIN/TRIM/MAX를 채워서 -1..1 스케일링이 실제로 의미있게 만든다.
+param set-default RC1_MIN 1000
+param set-default RC1_TRIM 1500
+param set-default RC1_MAX 2000
+param set-default RC2_MIN 1000
+param set-default RC2_TRIM 1500
+param set-default RC2_MAX 2000
+param set-default RC3_MIN 1000
+param set-default RC3_TRIM 1500
+param set-default RC3_MAX 2000
+param set-default RC4_MIN 1000
+param set-default RC4_TRIM 1500
+param set-default RC4_MAX 2000
+param set-default RC5_MIN 1000
+param set-default RC5_TRIM 1500
+param set-default RC5_MAX 2000
+param set-default RC6_MIN 1000
+param set-default RC6_TRIM 1500
+param set-default RC6_MAX 2000
+param set-default RC7_MIN 1000
+param set-default RC7_TRIM 1500
+param set-default RC7_MAX 2000
+param set-default RC8_MIN 1000
+param set-default RC8_TRIM 1500
+param set-default RC8_MAX 2000
+
 # RC 채널 매핑 (실기체: Jetson → ELRS TX → ELRS RX → FC)
 #   CH1=roll  CH2=pitch  CH3=throttle  CH4=yaw
 #   CH5=arm   CH6=land   CH7=kill      CH8=launch(AUX1)
@@ -73,6 +111,12 @@ param set-default RC_MAP_ROLL      1
 param set-default RC_MAP_PITCH     2
 param set-default RC_MAP_THROTTLE  3
 param set-default RC_MAP_YAW       4
-param set-default RC_MAP_ARM_SW    5
+# RC_MAP_ARM_SW는 일부러 0(미할당)으로 둔다: sitl_bridge_node가 CH5를 직접 해석해서
+# MAV_CMD_COMPONENT_ARM_DISARM으로 arm/disarm을 명시적으로 보낸다. 여기에 5를 넣으면
+# PX4 자신도 같은 채널을 자체 arm 스위치로 감시하게 되어, 우리 쪽 명령과 PX4 내부
+# RC-switch 로직이 동시에 arm/disarm을 걸면서 "Armed by RC switch" / "Disarmed by
+# RC switch"가 번갈아 찍히며 즉시 재disarm되는 레이스가 실제로 발생했다 (SITL에서
+# RC_CHANNELS_OVERRIDE 타이밍 지터로 채널값이 threshold 근처에서 흔들릴 때 특히).
+param set-default RC_MAP_ARM_SW    0
 param set-default RC_MAP_KILL_SW   7
 # RC_MAP_LAND_SW: PX4 버전에 따라 지원 여부 다름 — 없으면 arms_comm이 MAVLink로 처리

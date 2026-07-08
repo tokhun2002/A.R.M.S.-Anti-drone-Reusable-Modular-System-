@@ -34,6 +34,9 @@ CRSF_MIN     = 172
 CRSF_MAX     = 1811
 SWITCH_THRESH = 1500  # > threshold → switch is ON
 
+MAV_MODE_FLAG_SAFETY_ARMED = 128
+ARM_RETRY_INTERVAL_SEC = 1.0  # resend arm/disarm while desired != actual armed state
+
 
 def _crc8_dvb_s2(data: bytes) -> int:
     crc = 0
@@ -116,10 +119,12 @@ class ArmsSITLCommNode(Node):
 
         self._channels  = [CRSF_MIN] * 16
         self._channels[2] = CRSF_MIN   # throttle min
-        self._prev_ch5  = CRSF_MIN     # arm switch
         self._prev_ch6  = CRSF_MIN     # land switch
-        self._arm_pending: bool | None = None   # True=arm, False=disarm
+        self._ch5_high  = False        # arm switch, level (not edge) — kept in sync with CH5
         self._land_pending = False
+
+        self._armed = False            # last known FC armed state, from HEARTBEAT
+        self._last_arm_send = 0.0      # throttle for arm/disarm resend
 
         self._mav       = None
         self._connected = False
@@ -131,6 +136,7 @@ class ArmsSITLCommNode(Node):
 
         threading.Thread(target=self._connect_loop, daemon=True).start()
         threading.Thread(target=self._crsf_read_loop, daemon=True).start()
+        threading.Thread(target=self._mavlink_rx_loop, daemon=True).start()
 
         self.create_timer(1.0 / self._send_rate, self._send_override)
         self.get_logger().info(
@@ -162,13 +168,25 @@ class ArmsSITLCommNode(Node):
         self._send_set_mode(PX4_CUSTOM_MAIN_MODE_STABILIZED)
         time.sleep(0.5)
 
-        with self._lock:
-            self._connected = True
-            # If arm switch is already high when we connect, queue arm immediately
-            if self._channels[4] > SWITCH_THRESH:
-                self._arm_pending = True
-
+        self._connected = True
         self.get_logger().info("SITL: Stabilized mode set. Waiting for arm signal (CH5).")
+
+    # ------------------------------------------------------------------
+    # MAVLink RX (armed-state tracking via HEARTBEAT)
+    # ------------------------------------------------------------------
+    def _mavlink_rx_loop(self):
+        """Keep _armed in sync with the FC so the retry loop knows when to stop."""
+        while rclpy.ok():
+            if self._mav is None:
+                time.sleep(0.1)
+                continue
+            try:
+                msg = self._mav.recv_match(type='HEARTBEAT', blocking=True, timeout=1.0)
+                if msg is not None:
+                    self._armed = bool(msg.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)
+            except Exception as e:
+                self.get_logger().warn(f"MAVLink rx error: {e}", throttle_duration_sec=5.0)
+                time.sleep(0.5)
 
     # ------------------------------------------------------------------
     # CRSF reader
@@ -189,13 +207,8 @@ class ArmsSITLCommNode(Node):
                 time.sleep(2.0)
 
     def _process_switches(self, channels):
-        """Detect CH5/CH6 rising/falling edges and queue MAVLink commands."""
-        ch5 = channels[4]
-        if ch5 > SWITCH_THRESH and self._prev_ch5 <= SWITCH_THRESH:
-            self._arm_pending = True
-        elif ch5 <= SWITCH_THRESH and self._prev_ch5 > SWITCH_THRESH:
-            self._arm_pending = False
-        self._prev_ch5 = ch5
+        """Track CH5 switch level (arm target) and detect CH6 rising edge (land)."""
+        self._ch5_high = channels[4] > SWITCH_THRESH
 
         ch6 = channels[5]
         if ch6 > SWITCH_THRESH and self._prev_ch6 <= SWITCH_THRESH:
@@ -211,18 +224,21 @@ class ArmsSITLCommNode(Node):
 
         with self._lock:
             chs = list(self._channels)
-            arm_req = self._arm_pending
-            self._arm_pending = None
+            ch5_high = self._ch5_high
             land_req = self._land_pending
             self._land_pending = False
 
-        # Handle pending arm/disarm
-        if arm_req is True:
-            self.get_logger().info("CH5↑ → ARM")
-            self._send_arm(True)
-        elif arm_req is False:
-            self.get_logger().info("CH5↓ → DISARM")
-            self._send_arm(False)
+        # Arm/disarm: keep resending while the FC's actual armed state doesn't match
+        # CH5 yet. A single MAV_CMD_COMPONENT_ARM_DISARM can be TEMPORARILY_REJECTED
+        # (e.g. EKF/position estimate not converged yet right after boot) — without a
+        # retry that one lost attempt meant "denied forever" until CH5 toggled again.
+        now = time.time()
+        if ch5_high != self._armed and (now - self._last_arm_send) >= ARM_RETRY_INTERVAL_SEC:
+            self._last_arm_send = now
+            self.get_logger().info(
+                f"CH5={'ON' if ch5_high else 'OFF'}, armed={self._armed} → "
+                f"sending {'ARM' if ch5_high else 'DISARM'}")
+            self._send_arm(ch5_high)
 
         # Handle pending land
         if land_req:

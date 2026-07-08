@@ -59,11 +59,19 @@ echo "[4/5] PX4 SITL 빌드 (수 분 소요)"
 echo "      저장된 PX4 params 초기화 (airframe 기본값 적용을 위해)"
 # PX4 SITL params 저장 파일 삭제 → 다음 시작 시 airframe 기본값으로 fresh 시작
 # (= 실행 중 param reset_all 과 동일 효과)
-PARAMS_FILE="$PX4_DIR/build/px4_sitl_default/rootfs/eeprom/parameters"
-if [ -f "$PARAMS_FILE" ]; then
-  rm -f "$PARAMS_FILE"
-  echo "      삭제됨: $PARAMS_FILE"
-else
+# 실제 저장 경로는 rootfs/parameters*.bson (rootfs/eeprom/parameters 아님 — 예전 경로라
+# 여기서 지워지지 않고 넘어가면, 이전 세션에서 저장된 값이 airframe 기본값을 계속
+# 덮어써서 param set-default 수정이 반영 안 된 것처럼 보이는 문제가 있었음).
+PARAMS_DIR="$PX4_DIR/build/px4_sitl_default/rootfs"
+removed=0
+for f in "$PARAMS_DIR/parameters.bson" "$PARAMS_DIR/parameters_backup.bson" "$PARAMS_DIR/eeprom/parameters"; do
+  if [ -f "$f" ]; then
+    rm -f "$f"
+    echo "      삭제됨: $f"
+    removed=1
+  fi
+done
+if [ "$removed" -eq 0 ]; then
   echo "      (params 파일 없음 — 빌드 후 자동 생성됨)"
 fi
 
