@@ -189,13 +189,13 @@ class PanelGUI:
         tk.Label(left, text="Roll PID", fg="#aaaaaa", bg="#1e1e1e",
                  font=("Arial", 10)).pack(pady=(6, 0))
         self.roll_kp = make_slider(left, "P",  0, 200, 1,    20,   "control.roll_pid.kp")
-        self.roll_ki = make_slider(left, "I",  0,   5, 0.05,  0.8, "control.roll_pid.ki")
+        self.roll_ki = make_slider(left, "I",  0,  20, 0.1,   0.8, "control.roll_pid.ki")
         self.roll_kd = make_slider(left, "D",  0,   5, 0.05,  0.65,"control.roll_pid.kd")
 
         tk.Label(left, text="Pitch PID", fg="#aaaaaa", bg="#1e1e1e",
                  font=("Arial", 10)).pack(pady=(6, 0))
         self.pitch_kp = make_slider(left, "P",  0, 200, 1,    20,   "control.pitch_pid.kp")
-        self.pitch_ki = make_slider(left, "I",  0,   5, 0.05,  0.8, "control.pitch_pid.ki")
+        self.pitch_ki = make_slider(left, "I",  0,  20, 0.1,   0.8, "control.pitch_pid.ki")
         self.pitch_kd = make_slider(left, "D",  0,   5, 0.05,  0.65,"control.pitch_pid.kd")
 
         self.thr = tk.Scale(left, from_=0.50, to=0.95, resolution=0.01, orient="horizontal",
