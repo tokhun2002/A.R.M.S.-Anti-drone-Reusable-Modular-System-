@@ -261,23 +261,25 @@ class FusionDetector(Node):
         gray_full = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         gray_full = cv2.GaussianBlur(gray_full, (pre, pre), 0)
 
-        # ROI 크롭 범위 확정
-        roi = self._roi
-        if roi is not None:
-            rx1, ry1, rx2, ry2 = roi
-            crop = bgr[ry1:ry2, rx1:rx2]
-            if crop.size == 0:
-                roi = None
-                crop = bgr
-                gray_crop = gray_full
-                prev_gray_crop = self._prev_gray_full if self._prev_gray_full is not None else None
-            else:
-                gray_crop = gray_full[ry1:ry2, rx1:rx2]
-                prev_gray_crop = self._prev_gray_full[ry1:ry2, rx1:rx2] if self._prev_gray_full is not None else None
-        else:
-            crop = bgr
-            gray_crop = gray_full
-            prev_gray_crop = self._prev_gray_full if self._prev_gray_full is not None else None
+        # ROI 비활성화 — 항상 풀 프레임 사용
+        roi = None
+        # # ROI 크롭 범위 확정
+        # roi = self._roi
+        # if roi is not None:
+        #     rx1, ry1, rx2, ry2 = roi
+        #     crop = bgr[ry1:ry2, rx1:rx2]
+        #     if crop.size == 0:
+        #         roi = None
+        #         crop = bgr
+        #         gray_crop = gray_full
+        #         prev_gray_crop = self._prev_gray_full if self._prev_gray_full is not None else None
+        #     else:
+        #         gray_crop = gray_full[ry1:ry2, rx1:rx2]
+        #         prev_gray_crop = self._prev_gray_full[ry1:ry2, rx1:rx2] if self._prev_gray_full is not None else None
+        # else:
+        crop = bgr
+        gray_crop = gray_full
+        prev_gray_crop = self._prev_gray_full if self._prev_gray_full is not None else None
 
         # --- 검출 진행 ---
         yolo_box = None
@@ -305,17 +307,17 @@ class FusionDetector(Node):
         else:
             target = self._fuse_all(cands)
 
-        # --- ROI 피드백 루프 상태 관리 ---
-        if target is not None:
-            self._roi = self._make_roi(target, w, h, margin)
-            self._roi_miss = 0
-        elif roi is not None:
-            self._roi_miss += 1
-            if self._roi_miss >= miss_limit:
-                self._roi = None
-                self._roi_miss = 0
-        else:
-            self._roi_miss = 0
+        # --- ROI 피드백 루프 상태 관리 (비활성화) ---
+        # if target is not None:
+        #     self._roi = self._make_roi(target, w, h, margin)
+        #     self._roi_miss = 0
+        # elif roi is not None:
+        #     self._roi_miss += 1
+        #     if self._roi_miss >= miss_limit:
+        #         self._roi = None
+        #         self._roi_miss = 0
+        # else:
+        #     self._roi_miss = 0
 
         # 결과 토픽 발행
         out = DetectionArray()
@@ -324,9 +326,9 @@ class FusionDetector(Node):
             out.detections.append(target)
         self.pub_det.publish(out)
 
-        # ROI 이미지 채널 발행
-        if roi is not None and self.pub_roi.get_subscription_count() > 0:
-            self.pub_roi.publish(bgr_to_imgmsg(crop, msg.header))
+        # ROI 이미지 채널 발행 (비활성화)
+        # if roi is not None and self.pub_roi.get_subscription_count() > 0:
+        #     self.pub_roi.publish(bgr_to_imgmsg(crop, msg.header))
 
         # 디버그 렌더링
         if bool(self.get_parameter("publish_debug").value):
