@@ -89,11 +89,11 @@ source install/setup.bash
 
 ```bash
 # 월드 파일 링크
-cd /path/to/PX4-Autopilot/Tools/simulation/gz/worlds/
+cd ~/PX4-Autopilot/Tools/simulation/gz/worlds/
 ln -s /path/to/SW/simulation/worlds/arms_sitl.sdf .
 
 # 모델 폴더 링크
-cd /path/to/PX4-Autopilot/Tools/simulation/gz/models/
+cd ~/PX4-Autopilot/Tools/simulation/gz/models/
 ln -s /path/to/SW/simulation/models/arms_drone .
 ```
 
@@ -125,13 +125,6 @@ ros2 launch arms_bringup arms_sitl.launch.py
 ros2 launch arms_bringup arms_sitl_opencv.launch.py
 ```
 
-각 launch 파일이 내부적으로 한 번에 기동하는 노드:
-
-| launch 파일                  | 포함 노드                                                                       |
-| ---------------------------- | ------------------------------------------------------------------------------- |
-| `arms_sitl.launch.py`        | gz_scan_bridge, arms_control_node, arms_ui_node                                 |
-| `arms_sitl_opencv.launch.py` | gz_scan_bridge, **arms_opencv_detection_node**, arms_control_node, arms_ui_node |
-
 > 매번 `source ...`하기 귀찮다면 `.bashrc`에 등록하면 됨
 
 ### Terminal 3 — YOLO Detection 노드 (arms_sitl.launch.py 사용 시)
@@ -147,8 +140,6 @@ docker compose -f docker-compose.jetson.yml up
 ```
 
 YOLO 모델을 실행하기 위한 의존성이 모두 설치된 docker container 내부에서 detection node 실행
-
-> `arms_sitl_opencv.launch.py` 사용 시 Terminal 3 불필요
 
 ## 7. 동작 확인
 
@@ -174,34 +165,7 @@ ros2 topic echo /arms/scan_raw
 4. launch 버튼 입력 → `TRACK`
 5. 거리 < `fire_distance_m` (5.0 m) → `FIRE` → `RTL`
 
-## 8. 빨간 공 위치 변경
-
-`simulation/worlds/arms_sitl.sdf` 에서 `red_ball` 모델의 `<pose>` 를 수정한다.
-
-```xml
-<!-- 형식: x y z roll pitch yaw -->
-<pose>5 3 10 0 0 0</pose>
-```
-
-예시:
-
-- 정면 위 10m: `<pose>0 0 10 0 0 0</pose>`
-- 왼쪽 45도 위: `<pose>-5 0 5 0 0 0</pose>`
-- 멀리: `<pose>10 10 15 0 0 0</pose>`
-
-## 9. MAVLink 포트 설정
-
-PX4 SITL 기본 MAVLink 포트:
-
-| 용도                 | 주소               |
-| -------------------- | ------------------ |
-| GCS (QGroundControl) | UDP 14550          |
-| Offboard API         | UDP 14540          |
-| arms_control_node    | UDP 14550 (기본값) |
-
-`control_params.yaml` 의 `mavlink.connection` 을 `"udp:127.0.0.1:14540"` 으로 변경하면 QGC와 동시 연결 가능.
-
-## 10. 트러블슈팅
+## 8. 트러블슈팅
 
 | 증상                                | 원인                                                    | 해결                                                                             |
 | ----------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------- |
