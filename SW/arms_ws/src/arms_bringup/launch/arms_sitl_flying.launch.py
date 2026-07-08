@@ -25,7 +25,7 @@ def generate_launch_description():
         Path(get_package_share_directory("arms_control")) / "config" / "control_params.yaml"
     )
     pj_layout = Path(get_package_share_directory("arms_bringup")) / "config" / "sitl_debug.xml"
-    pj_cmd = ["ros2", "run", "plotjuggler", "plotjuggler", "--ros", "--buffer_size", "60"]
+    pj_cmd = ["ros2", "run", "plotjuggler", "plotjuggler", "--buffer_size", "60"]
     if pj_layout.exists():
         pj_cmd += ["--layout", str(pj_layout)]
     sw_dir = os.environ.get("ARMS_SW", "")
