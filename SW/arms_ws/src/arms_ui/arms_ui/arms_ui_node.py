@@ -175,6 +175,7 @@ class ArmsUINode(Node):
         if self._latest_roi_img is None:
             return
         if not self._latest_detections.detections:
+            self._latest_roi_img = None  # 검출 끊기면 캐시 초기화
             return
 
         h, w = frame.shape[:2]
