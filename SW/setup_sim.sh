@@ -56,6 +56,17 @@ done
 echo "[4/5] PX4 SITL 빌드 (수 분 소요)"
 ( cd "$PX4_DIR" && make px4_sitl )
 
+echo "      저장된 PX4 params 초기화 (airframe 기본값 적용을 위해)"
+# PX4 SITL params 저장 파일 삭제 → 다음 시작 시 airframe 기본값으로 fresh 시작
+# (= 실행 중 param reset_all 과 동일 효과)
+PARAMS_FILE="$PX4_DIR/build/px4_sitl_default/rootfs/eeprom/parameters"
+if [ -f "$PARAMS_FILE" ]; then
+  rm -f "$PARAMS_FILE"
+  echo "      삭제됨: $PARAMS_FILE"
+else
+  echo "      (params 파일 없음 — 빌드 후 자동 생성됨)"
+fi
+
 echo "[5/5] ROS2 워크스페이스 빌드"
 source /opt/ros/humble/setup.bash
 ( cd "$SW_DIR/arms_ws" && colcon build --symlink-install )
