@@ -48,7 +48,11 @@ param set-default SIM_GZ_EC_MAX3 1000
 param set-default SIM_GZ_EC_MAX4 1000
 
 param set-default MPC_THR_HOVER 0.60
-param set-default NAV_DLL_ACT 2
+
+# GCS 없는 standalone 비행 — failsafe 비활성화
+param set-default NAV_DLL_ACT 0       # 데이터링크 소실 무시 (GCS 없음)
+param set-default NAV_RCL_ACT 0       # RC 소실 무시
+param set-default COM_DISARM_PRFLT 0  # 지상 대기 중 자동 disarm 비활성화
 
 # EKF2: GPS + 기압계 사용 (SITL에서 ekf2 missing data 방지)
 param set-default EKF2_GPS_CTRL 1

@@ -61,13 +61,12 @@ TERM_CMD "ARMS stack" \
 
 # 자동 disarm / 페일세이프 끄기 (GCS/RC 없는 SITL 자율비행 셋업).
 #   COM_DISARM_PRFLT 0  = arm 후 이륙 지연 자동 disarm 해제 (가만히 둬도 안 멈춤)
-#   COM_DISARM_LAND  -1  = 착륙 후 자동 disarm 해제
 #   NAV_DLL_ACT      0   = GCS(데이터링크) 연결 끊김 페일세이프 해제
 #   NAV_RCL_ACT      0   = RC 연결 끊김 페일세이프 해제
 sleep 5
 SHELL_PY="$PX4_DIR/Tools/mavlink_shell.py"
 if [ -f "$SHELL_PY" ]; then
-  printf 'param set COM_DISARM_PRFLT 0\nparam set COM_DISARM_LAND -1\nparam set NAV_DLL_ACT 0\nparam set NAV_RCL_ACT 0\n' \
+  printf 'param set COM_DISARM_PRFLT 0\nparam set NAV_DLL_ACT 0\nparam set NAV_RCL_ACT 0\n' \
     | python3 "$SHELL_PY" udp:127.0.0.1:14550 >/dev/null 2>&1 &
   echo "      자동 disarm/페일세이프 해제 (COM_DISARM_PRFLT/LAND, NAV_DLL_ACT/RCL_ACT)"
 fi
