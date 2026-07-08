@@ -46,17 +46,9 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.roll_sign", 1.0);
     declare_parameter("control.pitch_sign", 1.0);
     declare_parameter("control.error_lpf_alpha", 0.3);
-    declare_parameter("control.err_sched_enable", true);
-    declare_parameter("control.err_sched_full_err", 0.06);
-    declare_parameter("control.err_sched_big_err", 0.35);
-    declare_parameter("control.err_sched_min_ratio", 0.55);
     declare_parameter("control.control_rate_hz", 30.0);
-
-    declare_parameter("control.kp", 50.0);
     declare_parameter("control.deadzone", 0.04);
     declare_parameter("control.deriv_lpf_alpha", 0.25);
-    declare_parameter("control.gain_sched_near_m", 4.0);
-    declare_parameter("control.gain_sched_min_ratio", 0.35);
 
     declare_parameter("mission.sitl_auto_launch", false);
     declare_parameter("mission.auto_launch_delay_sec", 1.0);
@@ -113,20 +105,9 @@ class ArmsControlNode : public rclcpp::Node {
     roll_sign_ = get_parameter("control.roll_sign").as_double();
     pitch_sign_ = get_parameter("control.pitch_sign").as_double();
     error_lpf_alpha_ = get_parameter("control.error_lpf_alpha").as_double();
-    err_sched_enable_ = get_parameter("control.err_sched_enable").as_bool();
-    err_sched_full_err_ =
-        get_parameter("control.err_sched_full_err").as_double();
-    err_sched_big_err_ = get_parameter("control.err_sched_big_err").as_double();
-    err_sched_min_ratio_ =
-        get_parameter("control.err_sched_min_ratio").as_double();
     control_rate_hz_ = get_parameter("control.control_rate_hz").as_double();
-
-    kp_ = get_parameter("control.kp").as_double();
     deadzone_ = get_parameter("control.deadzone").as_double();
     deriv_lpf_alpha_ = get_parameter("control.deriv_lpf_alpha").as_double();
-    gain_sched_near_m_ = get_parameter("control.gain_sched_near_m").as_double();
-    gain_sched_min_ratio_ =
-        get_parameter("control.gain_sched_min_ratio").as_double();
     pid_roll_->set_deriv_alpha(deriv_lpf_alpha_);
     pid_pitch_->set_deriv_alpha(deriv_lpf_alpha_);
 
@@ -155,14 +136,8 @@ class ArmsControlNode : public rclcpp::Node {
               throttle_ = p.as_double();
             else if (n == "control.error_lpf_alpha")
               error_lpf_alpha_ = p.as_double();
-            else if (n == "control.kp")
-              kp_ = p.as_double();
             else if (n == "control.deadzone")
               deadzone_ = p.as_double();
-            else if (n == "control.gain_sched_near_m")
-              gain_sched_near_m_ = p.as_double();
-            else if (n == "control.gain_sched_min_ratio")
-              gain_sched_min_ratio_ = p.as_double();
             else if (n == "control.deriv_lpf_alpha") {
               deriv_lpf_alpha_ = p.as_double();
               pid_roll_->set_deriv_alpha(deriv_lpf_alpha_);
@@ -340,35 +315,7 @@ class ArmsControlNode : public rclcpp::Node {
       filt_err_y_ =
           error_lpf_alpha_ * raw_ey + (1.0 - error_lpf_alpha_) * filt_err_y_;
 
-      kp_now_ = kp_;
-
-      // ---- 거리 게인 스케줄링 ----
-      double ratio = 1.0;
-      if (distance_valid() && gain_sched_near_m_ > 1e-3 &&
-          gain_sched_min_ratio_ < 0.999) {
-        double tt = std::clamp(last_distance_ / gain_sched_near_m_, 0.0, 1.0);
-        ratio = gain_sched_min_ratio_ + tt * (1.0 - gain_sched_min_ratio_);
-      }
-      gain_ratio_filt_ = 0.15 * ratio + 0.85 * gain_ratio_filt_;
-      double kp_eff = kp_now_ * gain_ratio_filt_;
-
-      // ---- err 기반 P 자동조절 ----
-      if (err_sched_enable_) {
-        double err_mag = std::hypot(filt_err_x_, filt_err_y_);
-        double er = 1.0;
-        if (err_sched_big_err_ > err_sched_full_err_ + 1e-6) {
-          double u = std::clamp((err_mag - err_sched_full_err_) /
-                                    (err_sched_big_err_ - err_sched_full_err_),
-                                0.0, 1.0);
-          er = 1.0 - u * (1.0 - err_sched_min_ratio_);
-        }
-        err_ratio_filt_ = 0.2 * er + 0.8 * err_ratio_filt_;
-        kp_eff *= err_ratio_filt_;
-      }
-
-      pid_roll_->set_gains(kp_eff, rki_, rkd_, rlim_);
-      const double pitch_gain_mul = 1.6;
-      pid_pitch_->set_gains(kp_eff * pitch_gain_mul, pki_, pkd_, plim_);
+      kp_now_ = rkp_;
 
       // ---- 중앙 데드존 ----
       double ex = apply_deadzone(filt_err_x_, deadzone_);
@@ -419,9 +366,8 @@ class ArmsControlNode : public rclcpp::Node {
 
       if (++dbg_count_ % 6 == 0) {
         RCLCPP_INFO(get_logger(),
-                    "TRACK err=(%.2f,%.2f) kp=%.1f(errx%.2f) d=%.1fm -> "
-                    "roll=%.1f pitch=%.1f",
-                    filt_err_x_, filt_err_y_, kp_eff, err_ratio_filt_,
+                    "TRACK err=(%.2f,%.2f) d=%.1fm roll=%.1f pitch=%.1f",
+                    filt_err_x_, filt_err_y_,
                     distance_valid() ? last_distance_ : -1.0, roll_deg,
                     pitch_deg);
       }
@@ -431,7 +377,7 @@ class ArmsControlNode : public rclcpp::Node {
       pid_pitch_->reset();
       filt_err_x_ = 0.0;
       filt_err_y_ = 0.0;
-      kp_now_ = kp_;
+      kp_now_ = rkp_;
       thrust = 0.f;
       align_locked_ = false;
     }
@@ -558,18 +504,9 @@ class ArmsControlNode : public rclcpp::Node {
   double error_lpf_alpha_{0.3};
   double filt_err_x_{0.0};
   double filt_err_y_{0.0};
-  double kp_{50.0};
-  double kp_now_{50.0};
+  double kp_now_{0.0};
   double deadzone_{0.04};
   double deriv_lpf_alpha_{0.25};
-  double gain_sched_near_m_{4.0};
-  double gain_sched_min_ratio_{0.35};
-  double gain_ratio_filt_{1.0};
-  bool err_sched_enable_{true};
-  double err_sched_full_err_{0.06};
-  double err_sched_big_err_{0.35};
-  double err_sched_min_ratio_{0.30};
-  double err_ratio_filt_{1.0};
   double last_distance_{0.0};
   rclcpp::Time last_distance_time_;
   int dbg_count_{0};

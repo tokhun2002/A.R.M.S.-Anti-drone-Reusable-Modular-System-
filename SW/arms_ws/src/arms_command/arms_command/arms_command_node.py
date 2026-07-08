@@ -176,39 +176,27 @@ class PanelGUI:
         # ── 왼쪽: PID 슬라이더 ──────────────────────────────────────────────
         SL = 320  # 슬라이더 길이
 
-        self.kp = tk.Scale(left, from_=0, to=200, resolution=1, orient="horizontal",
-                           length=SL, bg="#1e1e1e", fg="white", label="P 게인",
-                           highlightthickness=0, troughcolor="#444")
-        self.kp.set(50)
-        self.kp.pack(pady=(6, 0))
-        self.kp.bind("<B1-Motion>",
-                     lambda e: ros_param_set("control.kp", float(self.kp.get())))
-        self.kp.bind("<ButtonRelease-1>",
-                     lambda e: ros_param_set("control.kp", float(self.kp.get())))
+        def make_slider(parent, label, lo, hi, res, default, param):
+            s = tk.Scale(parent, from_=lo, to=hi, resolution=res, orient="horizontal",
+                         length=SL, bg="#1e1e1e", fg="white", label=label,
+                         highlightthickness=0, troughcolor="#444")
+            s.set(default)
+            s.pack()
+            s.bind("<B1-Motion>",      lambda e, p=param, sl=s: ros_param_set(p, float(sl.get())))
+            s.bind("<ButtonRelease-1>", lambda e, p=param, sl=s: ros_param_set(p, float(sl.get())))
+            return s
 
-        self.kd = tk.Scale(left, from_=0, to=2, resolution=0.05, orient="horizontal",
-                           length=SL, bg="#1e1e1e", fg="white", label="kd (roll/pitch)",
-                           highlightthickness=0, troughcolor="#444")
-        self.kd.set(0.1)
-        self.kd.pack()
-        self.kd.bind("<B1-Motion>", lambda e: self.set_pid_kd(self.kd.get()))
-        self.kd.bind("<ButtonRelease-1>", lambda e: self.set_pid_kd(self.kd.get()))
+        tk.Label(left, text="Roll PID", fg="#aaaaaa", bg="#1e1e1e",
+                 font=("Arial", 10)).pack(pady=(6, 0))
+        self.roll_kp = make_slider(left, "P",  0, 100, 1,    20,   "control.roll_pid.kp")
+        self.roll_ki = make_slider(left, "I",  0,   5, 0.05,  0.8, "control.roll_pid.ki")
+        self.roll_kd = make_slider(left, "D",  0,   5, 0.05,  0.65,"control.roll_pid.kd")
 
-        self.ki = tk.Scale(left, from_=0.0, to=2.0, resolution=0.1, orient="horizontal",
-                           length=SL, bg="#1e1e1e", fg="white", label="ki (적분)",
-                           highlightthickness=0, troughcolor="#444")
-        self.ki.set(0.8)
-        self.ki.pack()
-        self.ki.bind("<B1-Motion>", lambda e: self.set_pid_ki(self.ki.get()))
-        self.ki.bind("<ButtonRelease-1>", lambda e: self.set_pid_ki(self.ki.get()))
-
-        self.maxang = tk.Scale(left, from_=30, to=120, resolution=5, orient="horizontal",
-                               length=SL, bg="#1e1e1e", fg="white", label="최대 각도 [deg]",
-                               highlightthickness=0, troughcolor="#444")
-        self.maxang.set(90)
-        self.maxang.pack()
-        self.maxang.bind("<B1-Motion>", lambda e: self.set_max_angle(self.maxang.get()))
-        self.maxang.bind("<ButtonRelease-1>", lambda e: self.set_max_angle(self.maxang.get()))
+        tk.Label(left, text="Pitch PID", fg="#aaaaaa", bg="#1e1e1e",
+                 font=("Arial", 10)).pack(pady=(6, 0))
+        self.pitch_kp = make_slider(left, "P",  0, 100, 1,    20,   "control.pitch_pid.kp")
+        self.pitch_ki = make_slider(left, "I",  0,   5, 0.05,  0.8, "control.pitch_pid.ki")
+        self.pitch_kd = make_slider(left, "D",  0,   5, 0.05,  0.65,"control.pitch_pid.kd")
 
         self.thr = tk.Scale(left, from_=0.50, to=0.95, resolution=0.01, orient="horizontal",
                             length=SL, bg="#1e1e1e", fg="white", label="상승 추력 (track_throttle)",
@@ -282,18 +270,6 @@ class PanelGUI:
         self.pitch_sign *= -1.0
         ros_param_set("control.pitch_sign", self.pitch_sign)
         self.pitch_btn.config(text=f"Pitch sign: {'+' if self.pitch_sign > 0 else '-'}")
-
-    def set_pid_kd(self, v):
-        ros_param_set("control.roll_pid.kd", float(v))
-        ros_param_set("control.pitch_pid.kd", float(v))
-
-    def set_pid_ki(self, v):
-        ros_param_set("control.roll_pid.ki", float(v))
-        ros_param_set("control.pitch_pid.ki", float(v))
-
-    def set_max_angle(self, v):
-        ros_param_set("control.roll_pid.output_limit", float(v))
-        ros_param_set("control.pitch_pid.output_limit", float(v))
 
     def ball_start(self):
         ros_param_set_node(REFEREE_NODE, "enabled", "true")

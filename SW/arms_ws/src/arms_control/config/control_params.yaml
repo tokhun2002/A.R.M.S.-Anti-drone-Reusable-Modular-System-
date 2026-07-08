@@ -2,32 +2,28 @@ arms_control_node:
   ros__parameters:
     mission:
       detection_confidence_threshold: 0.65
-      lock_duration_sec: 2.0        # continuous detection duration to enter LOCK [s]
-      detection_timeout_sec: 1.0    # hold coords + freeze I for this long; after timeout -> SEARCH
+      lock_duration_sec: 2.0
+      detection_timeout_sec: 1.0
       lock_box_tolerance: 0.15
-      fire_distance_m: 5.0          # ray sensor distance threshold [m]
-      sitl_auto_launch: false       # false: 패널 LAUNCH 버튼으로 발사
+      fire_distance_m: 5.0
+      sitl_auto_launch: false
       auto_launch_delay_sec: 1.0
     control:
       roll_pid:
         kp: 20.0
-        ki: 0.8                     # 적분 (중앙오차 제거)
-        kd: 0.65                     # D게인 (미분 LPF 적용돼 노이즈 안정 → 실사용 가능)
-        output_limit: 90.0          # 최대 자세각[deg]
+        ki: 0.8
+        kd: 0.65
+        output_limit: 90.0
       pitch_pid:
         kp: 20.0
-        ki: 0.8                     # 적분 (중앙오차 제거)
+        ki: 0.8
         kd: 0.65
-        output_limit: 90.0          # 최대 자세각[deg]
-      throttle: 0.55                # hover
-      track_throttle: 0.77          # TRACK/FIRE 상승
-      roll_sign: 1.0                # 확정: roll +
-      pitch_sign: 1.0               # CRSF CH2 center이하 = PX4 nose up = 후방 이동
-      error_lpf_alpha: 0.3          # 픽셀 에러 LPF (작을수록 부드러움)
+        output_limit: 90.0
+      throttle: 0.55
+      track_throttle: 0.77
+      roll_sign: 1.0
+      pitch_sign: 1.0
+      error_lpf_alpha: 0.3
       control_rate_hz: 30.0
-      kp: 50.0                      # 비례 게인
-      # --- 중앙 데드존 + 미분필터 + 거리 게인 스케줄링 ---
-      deadzone: 0.04                # |오차|<이 값이면 명령 0 (중앙 박스). 0=끔
-      deriv_lpf_alpha: 0.25         # 미분항 LPF (작을수록 부드러움)
-      gain_sched_near_m: 12.0        # 이 거리[m] 안으로 들어오면 P 감쇠 시작
-      gain_sched_min_ratio: 0.25    # 가장 가까울 때 P 비율 (1.0=감쇠 끔)
+      deadzone: 0.04
+      deriv_lpf_alpha: 0.25
