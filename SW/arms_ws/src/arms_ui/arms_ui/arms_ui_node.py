@@ -155,7 +155,7 @@ class ArmsUINode(Node):
             thr = self._latest_cmd.z
             scale = 8  # 1도당 픽셀
             rx = int(roll * scale)
-            ry = int(-pitch * scale)  # pitch +면 위로 표시
+            ry = int(pitch * scale)
             cv2.arrowedLine(frame, (cx_f, cy_f), (cx_f + rx, cy_f + ry),
                             (0, 0, 255), 2, tipLength=0.2)
             cv2.putText(frame, "CMD(roll/pitch)", (cx_f + rx + 5, cy_f + ry + 15),
