@@ -22,7 +22,7 @@ arms_control_node:
       throttle: 0.55                # hover
       track_throttle: 0.77          # TRACK/FIRE 상승
       roll_sign: 1.0                # 확정: roll +
-      pitch_sign: -1.0              # 확정: pitch -  (화살표 정렬되는 방향)
+      pitch_sign: 1.0               # CRSF CH2 center이하 = PX4 nose up = 후방 이동
       error_lpf_alpha: 0.3          # 픽셀 에러 LPF (작을수록 부드러움)
       control_rate_hz: 30.0
       # --- 시간 기반 P 램프 ---
