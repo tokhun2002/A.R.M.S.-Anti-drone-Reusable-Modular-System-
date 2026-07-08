@@ -52,9 +52,7 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.err_sched_min_ratio", 0.55);
     declare_parameter("control.control_rate_hz", 30.0);
 
-    declare_parameter("control.kp_start", 60.0);
-    declare_parameter("control.kp_max", 150.0);
-    declare_parameter("control.kp_ramp_sec", 5.0);
+    declare_parameter("control.kp", 50.0);
     declare_parameter("control.deadzone", 0.04);
     declare_parameter("control.deriv_lpf_alpha", 0.25);
     declare_parameter("control.gain_sched_near_m", 4.0);
@@ -123,9 +121,7 @@ class ArmsControlNode : public rclcpp::Node {
         get_parameter("control.err_sched_min_ratio").as_double();
     control_rate_hz_ = get_parameter("control.control_rate_hz").as_double();
 
-    kp_start_ = get_parameter("control.kp_start").as_double();
-    kp_max_ = get_parameter("control.kp_max").as_double();
-    kp_ramp_sec_ = get_parameter("control.kp_ramp_sec").as_double();
+    kp_ = get_parameter("control.kp").as_double();
     deadzone_ = get_parameter("control.deadzone").as_double();
     deriv_lpf_alpha_ = get_parameter("control.deriv_lpf_alpha").as_double();
     gain_sched_near_m_ = get_parameter("control.gain_sched_near_m").as_double();
@@ -159,12 +155,8 @@ class ArmsControlNode : public rclcpp::Node {
               throttle_ = p.as_double();
             else if (n == "control.error_lpf_alpha")
               error_lpf_alpha_ = p.as_double();
-            else if (n == "control.kp_start")
-              kp_start_ = p.as_double();
-            else if (n == "control.kp_max")
-              kp_max_ = p.as_double();
-            else if (n == "control.kp_ramp_sec")
-              kp_ramp_sec_ = p.as_double();
+            else if (n == "control.kp")
+              kp_ = p.as_double();
             else if (n == "control.deadzone")
               deadzone_ = p.as_double();
             else if (n == "control.gain_sched_near_m")
@@ -338,13 +330,6 @@ class ArmsControlNode : public rclcpp::Node {
     double pitch_deg = 0.0;
     float thrust = 0.f;
 
-    // ---- TRACK 진입 감지: P 램프 타이머 리셋 ----
-    if (state == State::TRACK && prev_state_ != State::TRACK &&
-        prev_state_ != State::FIRE) {
-      track_enter_time_ = now_t;
-      RCLCPP_INFO(get_logger(), "TRACK 진입 → P 램프 시작 (%.1f→%.1f, %.1fs)",
-                  kp_start_, kp_max_, kp_ramp_sec_);
-    }
     prev_state_ = state;
 
     if (state == State::TRACK || state == State::FIRE) {
@@ -355,12 +340,7 @@ class ArmsControlNode : public rclcpp::Node {
       filt_err_y_ =
           error_lpf_alpha_ * raw_ey + (1.0 - error_lpf_alpha_) * filt_err_y_;
 
-      // ---- 시간 기반 P 램프 ----
-      double elapsed = (now_t - track_enter_time_).seconds();
-      double ramp_t = (kp_ramp_sec_ > 1e-3)
-                          ? std::clamp(elapsed / kp_ramp_sec_, 0.0, 1.0)
-                          : 1.0;
-      kp_now_ = kp_start_ + ramp_t * (kp_max_ - kp_start_);
+      kp_now_ = kp_;
 
       // ---- 거리 게인 스케줄링 ----
       double ratio = 1.0;
@@ -451,7 +431,7 @@ class ArmsControlNode : public rclcpp::Node {
       pid_pitch_->reset();
       filt_err_x_ = 0.0;
       filt_err_y_ = 0.0;
-      kp_now_ = kp_start_;
+      kp_now_ = kp_;
       thrust = 0.f;
       align_locked_ = false;
     }
@@ -578,10 +558,8 @@ class ArmsControlNode : public rclcpp::Node {
   double error_lpf_alpha_{0.3};
   double filt_err_x_{0.0};
   double filt_err_y_{0.0};
-  double kp_start_{60.0};
-  double kp_max_{150.0};
-  double kp_ramp_sec_{5.0};
-  double kp_now_{60.0};
+  double kp_{50.0};
+  double kp_now_{50.0};
   double deadzone_{0.04};
   double deriv_lpf_alpha_{0.25};
   double gain_sched_near_m_{4.0};
@@ -594,7 +572,6 @@ class ArmsControlNode : public rclcpp::Node {
   double err_ratio_filt_{1.0};
   double last_distance_{0.0};
   rclcpp::Time last_distance_time_;
-  rclcpp::Time track_enter_time_;
   int dbg_count_{0};
   double control_rate_hz_{30.0};
 

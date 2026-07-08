@@ -117,7 +117,7 @@ class PanelGUI:
 
         root.title("A.R.M.S. Control Panel")
         root.configure(bg="#1e1e1e")
-        root.geometry("780x720")
+        root.geometry("740x780")
 
         # ── 상단: 미션 상태 (전체 폭) ──────────────────────────────────────
         top = tk.Frame(root, bg="#1e1e1e")
@@ -175,38 +175,23 @@ class PanelGUI:
 
         # ── 왼쪽: PID 슬라이더 ──────────────────────────────────────────────
         SL = 320  # 슬라이더 길이
-        tk.Label(left, text="P 게인 (시간 램프)", fg="#aaaaaa",
-                 bg="#1e1e1e", font=("Arial", 10)).pack(pady=(6, 0))
 
-        self.kp_start = tk.Scale(left, from_=0, to=150, resolution=1, orient="horizontal",
-                                 length=SL, bg="#1e1e1e", fg="white", label="시작 P",
-                                 highlightthickness=0, troughcolor="#444")
-        self.kp_start.set(60)
-        self.kp_start.pack()
-        self.kp_start.bind("<ButtonRelease-1>",
-                           lambda e: ros_param_set("control.kp_start", float(self.kp_start.get())))
-
-        self.kp_max = tk.Scale(left, from_=0, to=200, resolution=1, orient="horizontal",
-                               length=SL, bg="#1e1e1e", fg="white", label="최대 P",
-                               highlightthickness=0, troughcolor="#444")
-        self.kp_max.set(150)
-        self.kp_max.pack()
-        self.kp_max.bind("<ButtonRelease-1>",
-                         lambda e: ros_param_set("control.kp_max", float(self.kp_max.get())))
-
-        self.kp_ramp = tk.Scale(left, from_=0, to=15, resolution=0.5, orient="horizontal",
-                                length=SL, bg="#1e1e1e", fg="white", label="P 증가 시간 [s]",
-                                highlightthickness=0, troughcolor="#444")
-        self.kp_ramp.set(5)
-        self.kp_ramp.pack()
-        self.kp_ramp.bind("<ButtonRelease-1>",
-                          lambda e: ros_param_set("control.kp_ramp_sec", float(self.kp_ramp.get())))
+        self.kp = tk.Scale(left, from_=0, to=200, resolution=1, orient="horizontal",
+                           length=SL, bg="#1e1e1e", fg="white", label="P 게인",
+                           highlightthickness=0, troughcolor="#444")
+        self.kp.set(50)
+        self.kp.pack(pady=(6, 0))
+        self.kp.bind("<B1-Motion>",
+                     lambda e: ros_param_set("control.kp", float(self.kp.get())))
+        self.kp.bind("<ButtonRelease-1>",
+                     lambda e: ros_param_set("control.kp", float(self.kp.get())))
 
         self.kd = tk.Scale(left, from_=0, to=2, resolution=0.05, orient="horizontal",
                            length=SL, bg="#1e1e1e", fg="white", label="kd (roll/pitch)",
                            highlightthickness=0, troughcolor="#444")
         self.kd.set(0.1)
         self.kd.pack()
+        self.kd.bind("<B1-Motion>", lambda e: self.set_pid_kd(self.kd.get()))
         self.kd.bind("<ButtonRelease-1>", lambda e: self.set_pid_kd(self.kd.get()))
 
         self.ki = tk.Scale(left, from_=0.0, to=2.0, resolution=0.1, orient="horizontal",
@@ -214,6 +199,7 @@ class PanelGUI:
                            highlightthickness=0, troughcolor="#444")
         self.ki.set(0.8)
         self.ki.pack()
+        self.ki.bind("<B1-Motion>", lambda e: self.set_pid_ki(self.ki.get()))
         self.ki.bind("<ButtonRelease-1>", lambda e: self.set_pid_ki(self.ki.get()))
 
         self.maxang = tk.Scale(left, from_=30, to=120, resolution=5, orient="horizontal",
@@ -221,6 +207,7 @@ class PanelGUI:
                                highlightthickness=0, troughcolor="#444")
         self.maxang.set(90)
         self.maxang.pack()
+        self.maxang.bind("<B1-Motion>", lambda e: self.set_max_angle(self.maxang.get()))
         self.maxang.bind("<ButtonRelease-1>", lambda e: self.set_max_angle(self.maxang.get()))
 
         self.thr = tk.Scale(left, from_=0.50, to=0.95, resolution=0.01, orient="horizontal",
@@ -228,6 +215,8 @@ class PanelGUI:
                             highlightthickness=0, troughcolor="#444")
         self.thr.set(0.85)
         self.thr.pack()
+        self.thr.bind("<B1-Motion>",
+                      lambda e: ros_param_set("control.track_throttle", self.thr.get()))
         self.thr.bind("<ButtonRelease-1>",
                       lambda e: ros_param_set("control.track_throttle", self.thr.get()))
 
@@ -252,7 +241,7 @@ class PanelGUI:
         self._refresh_ball_btns()
 
         self.alt = tk.Scale(right, from_=2, to=100, resolution=1, orient="horizontal",
-                            length=200, bg="#1e1e1e", fg="white", label="풍선 고도 [m]",
+                            length=150, bg="#1e1e1e", fg="white", label="풍선 고도 [m]",
                             highlightthickness=0, troughcolor="#444")
         self.alt.set(50)
         self.alt.pack(pady=(2, 0))

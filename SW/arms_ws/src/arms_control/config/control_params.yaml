@@ -25,10 +25,7 @@ arms_control_node:
       pitch_sign: 1.0               # CRSF CH2 center이하 = PX4 nose up = 후방 이동
       error_lpf_alpha: 0.3          # 픽셀 에러 LPF (작을수록 부드러움)
       control_rate_hz: 30.0
-      # --- 시간 기반 P 램프 ---
-      kp_start: 50.0                # TRACK 진입 시 P
-      kp_max: 100.0                 # 램프 끝(최대) P
-      kp_ramp_sec: 5.0              # kp_start->kp_max 증가 시간 [s]
+      kp: 50.0                      # 비례 게인
       # --- 중앙 데드존 + 미분필터 + 거리 게인 스케줄링 ---
       deadzone: 0.04                # |오차|<이 값이면 명령 0 (중앙 박스). 0=끔
       deriv_lpf_alpha: 0.25         # 미분항 LPF (작을수록 부드러움)
