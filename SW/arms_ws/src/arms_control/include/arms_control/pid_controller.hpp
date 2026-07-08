@@ -22,6 +22,9 @@ public:
 
   void reset();
 
+  /** 적분항 누적 동결 (홀드 중 windup 방지). compute()는 정상 동작, 단 integral_ 갱신 생략. */
+  void set_integral_frozen(bool frozen) { integral_frozen_ = frozen; }
+
 private:
   double kp_, ki_, kd_;
   double output_limit_;
@@ -29,8 +32,9 @@ private:
   double integral_{0.0};
   double prev_error_{0.0};
   bool first_call_{true};
-  double d_filt_{0.0};        // 저역통과된 미분값 (노이즈 억제)
-  double deriv_alpha_{0.25};  // 미분 LPF 계수
+  double d_filt_{0.0};
+  double deriv_alpha_{0.25};
+  bool integral_frozen_{false};
 };
 
 }  // namespace arms_control

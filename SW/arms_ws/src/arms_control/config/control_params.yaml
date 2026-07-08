@@ -3,7 +3,7 @@ arms_control_node:
     mission:
       detection_confidence_threshold: 0.65
       lock_duration_sec: 2.0        # continuous detection duration to enter LOCK [s]
-      lost_frames_threshold: 10     # frames without detection -> back to SEARCH
+      detection_timeout_sec: 1.0    # hold coords + freeze I for this long; after timeout -> SEARCH
       lock_box_tolerance: 0.15
       fire_distance_m: 5.0          # ray sensor distance threshold [m]
       sitl_auto_launch: false       # false: 패널 LAUNCH 버튼으로 발사

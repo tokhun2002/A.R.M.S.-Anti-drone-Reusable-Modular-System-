@@ -32,19 +32,34 @@ void StateMachine::on_detection(
   const auto * best = best_detection(detections);
 
   if (!best || best->confidence < static_cast<float>(params_.confidence_threshold)) {
-    on_target_lost();
+    auto now = Clock::now();
+    if (last_detection_valid_) {
+      double elapsed =
+        std::chrono::duration<double>(now - last_detection_time_).count();
+      if (elapsed < params_.detection_timeout_sec) {
+        // 홀드: error_x_/error_y_ 유지, I 동결 플래그만 세움
+        detection_held_ = true;
+        return;
+      }
+    }
+    // 타임아웃 또는 한 번도 검출 없음 → 실패 처리
+    detection_held_ = false;
     target_locked_ = false;
     error_x_ = 0.0;
     error_y_ = 0.0;
+    on_detection_timeout();
     return;
   }
+
+  // Valid detection
+  detection_held_ = false;
+  auto now = Clock::now();
+  last_detection_time_  = now;
+  last_detection_valid_ = true;
 
   // Compute normalized pixel error from frame center
   error_x_ = static_cast<double>(best->x_center) - 0.5;
   error_y_ = static_cast<double>(best->y_center) - 0.5;
-  lost_frame_count_ = 0;
-
-  auto now = Clock::now();
 
   if (state_ == State::SEARCH) {
     if (!lock_timer_running_) {
@@ -97,8 +112,9 @@ void StateMachine::on_fire_complete()
 void StateMachine::arm()
 {
   if (state_ == State::IDLE) {
-    lock_timer_running_ = false;
-    lost_frame_count_   = 0;
+    lock_timer_running_   = false;
+    detection_held_       = false;
+    last_detection_valid_ = false;
     transition(State::SEARCH);
   }
 }
@@ -118,13 +134,13 @@ void StateMachine::on_landed()
 void StateMachine::force_search()
 {
   // RESET: RTL/TRACK/FIRE 등 어떤 상태든 즉시 SEARCH 로.
-  // 모든 락온/타이머/소실카운트 초기화해서 깨끗한 탐색 상태로 만든다.
-  lock_timer_running_ = false;
-  lock_elapsed_sec_   = 0.0;
-  lost_frame_count_   = 0;
-  target_locked_      = false;
-  error_x_            = 0.0;
-  error_y_            = 0.0;
+  lock_timer_running_   = false;
+  lock_elapsed_sec_     = 0.0;
+  target_locked_        = false;
+  detection_held_       = false;
+  last_detection_valid_ = false;
+  error_x_              = 0.0;
+  error_y_              = 0.0;
   transition(State::SEARCH);
 }
 
@@ -132,21 +148,17 @@ void StateMachine::force_search()
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-void StateMachine::on_target_lost()
+void StateMachine::on_detection_timeout()
 {
   if (state_ == State::SEARCH ||
       state_ == State::LOCK   ||
       state_ == State::TRACK)
   {
-    ++lost_frame_count_;
-    if (lost_frame_count_ >= params_.lost_frames_threshold) {
-      if (state_ != State::SEARCH) {
-        transition(State::SEARCH);
-      }
-      lock_timer_running_ = false;
-      lock_elapsed_sec_   = 0.0;
-      lost_frame_count_   = 0;
+    if (state_ != State::SEARCH) {
+      transition(State::SEARCH);
     }
+    lock_timer_running_ = false;
+    lock_elapsed_sec_   = 0.0;
   }
 }
 

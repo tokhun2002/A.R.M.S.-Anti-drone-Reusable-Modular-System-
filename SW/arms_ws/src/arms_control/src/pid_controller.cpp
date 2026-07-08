@@ -15,8 +15,10 @@ double PIDController::compute(double error, double dt)
   // Proportional
   double p = kp_ * error;
 
-  // Integral with anti-windup clamping
-  integral_ += error * dt;
+  // Integral with anti-windup clamping (frozen during detection hold)
+  if (!integral_frozen_) {
+    integral_ += error * dt;
+  }
   double i_raw = ki_ * integral_;
   double i_clamped = std::clamp(i_raw, -output_limit_, output_limit_);
   if (ki_ != 0.0) {

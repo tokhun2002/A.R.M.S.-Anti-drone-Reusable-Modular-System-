@@ -29,7 +29,7 @@ class ArmsControlNode : public rclcpp::Node {
     // ----------------------------------------------------------------
     declare_parameter("mission.detection_confidence_threshold", 0.65);
     declare_parameter("mission.lock_duration_sec", 2.0);
-    declare_parameter("mission.lost_frames_threshold", 10);
+    declare_parameter("mission.detection_timeout_sec", 1.0);
     declare_parameter("mission.lock_box_tolerance", 0.15);
     declare_parameter("mission.fire_distance_m", 5.0);
 
@@ -74,8 +74,8 @@ class ArmsControlNode : public rclcpp::Node {
         get_parameter("mission.detection_confidence_threshold").as_double();
     sm_params.lock_duration_sec =
         get_parameter("mission.lock_duration_sec").as_double();
-    sm_params.lost_frames_threshold =
-        get_parameter("mission.lost_frames_threshold").as_int();
+    sm_params.detection_timeout_sec =
+        get_parameter("mission.detection_timeout_sec").as_double();
     sm_params.lock_box_tolerance =
         get_parameter("mission.lock_box_tolerance").as_double();
     sm_params.fire_distance_m =
@@ -394,6 +394,9 @@ class ArmsControlNode : public rclcpp::Node {
       double ex = apply_deadzone(filt_err_x_, deadzone_);
       double ey = apply_deadzone(filt_err_y_, deadzone_);
 
+      bool held = sm_->is_detection_held();
+      pid_roll_->set_integral_frozen(held);
+      pid_pitch_->set_integral_frozen(held);
       roll_deg = roll_sign_ * pid_roll_->compute(ex, dt);
       pitch_deg = pitch_sign_ * pid_pitch_->compute(ey, dt);
 
