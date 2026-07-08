@@ -1,6 +1,6 @@
 """
-SITL launch: arms_video (gz bridge) + arms_detection + arms_control + arms_comm_sitl + arms_ui
-- PID 제어 명령 → /arms/ctrl_cmd → arms_comm_sitl → pymavlink RC_CHANNELS_OVERRIDE → PX4 Stabilized
+SITL launch: arms_video (gz bridge) + arms_detection + arms_control + arms_sitl_bridge + arms_ui
+- arms_control → CRSF serial → arms_sitl_bridge → MAVLink RC_CHANNELS_OVERRIDE → PX4 Stabilized
 - 카메라 브리지: arms_video/launch/video_sitl.launch.py
 """
 
@@ -46,7 +46,7 @@ def generate_launch_description():
             name="arms_detection_node",
             output="screen",
         ),
-        # 제어 (순수 PID → /arms/ctrl_cmd 발행)
+        # 제어 (상태머신 + PID + CRSF 시리얼 출력)
         Node(
             package="arms_control",
             executable="arms_control_node",
@@ -54,15 +54,15 @@ def generate_launch_description():
             output="screen",
             parameters=[str(control_config)],
         ),
-        # 통신 (pymavlink → PX4 Stabilized mode)
+        # SITL 브리지 (CRSF → MAVLink RC_CHANNELS_OVERRIDE → PX4)
         Node(
-            package="arms_comm",
-            executable="arms_comm_sitl_node",
-            name="arms_comm_sitl_node",
+            package="arms_control",
+            executable="sitl_bridge_node",
+            name="arms_sitl_bridge_node",
             output="screen",
             parameters=[{
-                "connection": "udpin:0.0.0.0:14540",
-                "max_angle_deg": 35.0,
+                "connection":   "udpin:0.0.0.0:14540",
+                "crsf_port":    "/tmp/crsf_rx",
                 "send_rate_hz": 50.0,
             }],
         ),

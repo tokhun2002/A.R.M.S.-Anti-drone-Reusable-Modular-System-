@@ -4,9 +4,9 @@
 #include <limits>
 #include <memory>
 
+#include "arms_control/crsf_output.hpp"
 #include "arms_control/pid_controller.hpp"
 #include "arms_control/state_machine.hpp"
-#include "arms_msgs/msg/ctrl_cmd.hpp"
 #include "arms_msgs/msg/detection_array.hpp"
 #include "arms_msgs/msg/mission_state.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
@@ -61,6 +61,10 @@ class ArmsControlNode : public rclcpp::Node {
 
     declare_parameter("mission.sitl_auto_launch", false);
     declare_parameter("mission.auto_launch_delay_sec", 1.0);
+    declare_parameter("mission.auto_arm_delay_sec", 5.0);
+
+    declare_parameter("crsf.port", std::string("/tmp/crsf_tx"));
+    declare_parameter("crsf.max_angle_deg", 35.0);
 
     // ----------------------------------------------------------------
     // State machine
@@ -133,6 +137,10 @@ class ArmsControlNode : public rclcpp::Node {
     sitl_auto_launch_ = get_parameter("mission.sitl_auto_launch").as_bool();
     auto_launch_delay_sec_ =
         get_parameter("mission.auto_launch_delay_sec").as_double();
+    auto_arm_delay_sec_ = get_parameter("mission.auto_arm_delay_sec").as_double();
+
+    crsf_max_angle_ = get_parameter("crsf.max_angle_deg").as_double();
+    crsf_out_ = std::make_unique<CrsfOutput>(get_parameter("crsf.port").as_string());
 
     // 런타임 파라미터 변경 콜백
     param_cb_handle_ = add_on_set_parameters_callback(
@@ -208,7 +216,6 @@ class ArmsControlNode : public rclcpp::Node {
     // ----------------------------------------------------------------
     // ROS publishers
     // ----------------------------------------------------------------
-    pub_ctrl_cmd_ = create_publisher<arms_msgs::msg::CtrlCmd>("/arms/ctrl_cmd", 10);
     pub_state_ = create_publisher<arms_msgs::msg::MissionState>("/arms/mission_state", 10);
     pub_dbg_ = create_publisher<geometry_msgs::msg::Vector3>("/arms/control_debug", 10);
 
@@ -247,12 +254,27 @@ class ArmsControlNode : public rclcpp::Node {
 
     sub_joy_ = create_subscription<sensor_msgs::msg::Joy>(
         "/joy", 10, [this](sensor_msgs::msg::Joy::SharedPtr msg) {
-          int val = (msg->buttons.size() > 3) ? msg->buttons[3] : 0;
-          if (val && !prev_joy_launch_btn_) {
-            RCLCPP_INFO(get_logger(), "Launch triggered via /joy buttons[3].");
+          for (size_t i = 0; i < 4 && i < msg->axes.size(); ++i)
+            joy_axes_[i] = msg->axes[i];
+
+          auto btn = [&](int i) -> int {
+            return (static_cast<size_t>(i) < msg->buttons.size()) ? msg->buttons[i] : 0;
+          };
+          int kill = btn(0), land = btn(1), mode = btn(2), launch = btn(3);
+
+          if (mode && !prev_btn_[2]) {
+            joy_manual_mode_ = !joy_manual_mode_;
+            RCLCPP_INFO(get_logger(), "Mode: %s", joy_manual_mode_ ? "MANUAL" : "AUTO");
+          }
+          if (launch && !prev_btn_[3]) {
             sm_->on_launch_button();
           }
-          prev_joy_launch_btn_ = val;
+
+          joy_kill_   = static_cast<bool>(kill);
+          joy_land_   = static_cast<bool>(land);
+          joy_launch_ = static_cast<bool>(launch);
+          prev_btn_[0] = kill; prev_btn_[1] = land;
+          prev_btn_[2] = mode; prev_btn_[3] = launch;
         });
 
     sub_reset_ = create_subscription<std_msgs::msg::Empty>(
@@ -431,6 +453,21 @@ class ArmsControlNode : public rclcpp::Node {
       align_locked_ = false;
     }
 
+    // ---- Auto arm: IDLE → SEARCH after delay (auto mode only) ----
+    if (state == State::IDLE && !joy_manual_mode_ && !joy_kill_) {
+      if (!arm_timer_started_) {
+        arm_timer_started_ = true;
+        arm_enter_time_ = now_t;
+      } else if (!auto_armed_ &&
+                 (now_t - arm_enter_time_).seconds() >= auto_arm_delay_sec_) {
+        auto_armed_ = true;
+        sm_->arm();
+        RCLCPP_INFO(get_logger(), "Auto arm: IDLE → SEARCH");
+      }
+    } else if (state != State::IDLE) {
+      arm_timer_started_ = false;
+    }
+
     // ---- SITL auto-launch ----
     if (sitl_auto_launch_) {
       if (state == State::LOCK) {
@@ -449,14 +486,45 @@ class ArmsControlNode : public rclcpp::Node {
       }
     }
 
-    // ---- Publish control command → arms_comm ----
-    arms_msgs::msg::CtrlCmd ctrl_msg;
-    ctrl_msg.header.stamp = now_t;
-    ctrl_msg.roll_deg = static_cast<float>(roll_deg);
-    ctrl_msg.pitch_deg = static_cast<float>(pitch_deg);
-    ctrl_msg.yaw_deg = 0.f;
-    ctrl_msg.thrust = thrust;
-    pub_ctrl_cmd_->publish(ctrl_msg);
+    // ---- CRSF output ----
+    {
+      CrsfOutput::Channels crsf{};
+      crsf.fill(CrsfOutput::CRSF_MIN);
+
+      if (joy_manual_mode_) {
+        crsf[0] = CrsfOutput::norm_to_crsf(joy_axes_[0]);
+        crsf[1] = CrsfOutput::norm_to_crsf(joy_axes_[1]);
+        crsf[2] = CrsfOutput::norm_to_crsf(joy_axes_[2]);
+        crsf[3] = CrsfOutput::norm_to_crsf(joy_axes_[3]);
+      } else {
+        crsf[0] = CrsfOutput::norm_to_crsf(roll_deg / crsf_max_angle_);
+        crsf[1] = CrsfOutput::norm_to_crsf(pitch_deg / crsf_max_angle_);
+        crsf[2] = CrsfOutput::thr_to_crsf(static_cast<double>(thrust));
+        crsf[3] = CrsfOutput::CRSF_CENTER;  // yaw hold
+      }
+
+      // CH5: arm (IDLE → disarmed, else armed)
+      crsf[4] = (state == State::IDLE) ? CrsfOutput::CRSF_MIN : CrsfOutput::CRSF_MAX;
+
+      // CH6: land switch (RTL state or manual land button)
+      crsf[5] = (state == State::RTL || joy_land_) ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
+
+      // CH7: kill switch
+      crsf[6] = joy_kill_ ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
+
+      // CH8: launch/fire — hold high for 1s on FIRE, or follow manual button
+      if (state == State::FIRE && !fire_sent_) {
+        fire_hold_ticks_ = static_cast<int>(control_rate_hz_);
+      }
+      if (joy_manual_mode_) {
+        crsf[7] = joy_launch_ ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
+      } else {
+        crsf[7] = (fire_hold_ticks_ > 0) ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
+      }
+      if (fire_hold_ticks_ > 0) --fire_hold_ticks_;
+
+      crsf_out_->send(crsf);
+    }
 
     // ---- Debug publish ----
     geometry_msgs::msg::Vector3 dbg;
@@ -465,17 +533,17 @@ class ArmsControlNode : public rclcpp::Node {
     dbg.z = thrust;
     pub_dbg_->publish(dbg);
 
-    // ---- FIRE one-shot (arms_comm detects via mission_state) ----
+    // ---- FIRE one-shot ----
     if (state == State::FIRE && !fire_sent_) {
       fire_sent_ = true;
       RCLCPP_INFO(get_logger(), "FIRE state — payload trigger signaled via mission_state.");
       sm_->on_fire_complete();
     }
 
-    // ---- RTL one-shot (arms_comm detects via mission_state) ----
+    // ---- RTL one-shot (CH6 land switch handled by sitl_bridge_node) ----
     if (state == State::RTL && !rtl_sent_) {
       rtl_sent_ = true;
-      RCLCPP_INFO(get_logger(), "RTL state — arms_comm will switch mode.");
+      RCLCPP_INFO(get_logger(), "RTL state — CH6 land switch activated.");
     }
 
     if (state == State::IDLE) {
@@ -539,14 +607,30 @@ class ArmsControlNode : public rclcpp::Node {
   bool auto_launched_{false};
   rclcpp::Time lock_enter_time_;
 
-  int prev_joy_launch_btn_{0};
+  // Auto arm
+  double auto_arm_delay_sec_{5.0};
+  bool arm_timer_started_{false};
+  bool auto_armed_{false};
+  rclcpp::Time arm_enter_time_;
+
+  // Joy state
+  std::array<float, 4> joy_axes_{};
+  bool joy_kill_{false};
+  bool joy_land_{false};
+  bool joy_launch_{false};
+  bool joy_manual_mode_{false};
+  std::array<int, 4> prev_btn_{};
+
+  // CRSF output
+  std::unique_ptr<CrsfOutput> crsf_out_;
+  double crsf_max_angle_{35.0};
+  int fire_hold_ticks_{0};
 
   rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
   rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr sub_distance_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr sub_scan_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr sub_joy_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_reset_;
-  rclcpp::Publisher<arms_msgs::msg::CtrlCmd>::SharedPtr pub_ctrl_cmd_;
   rclcpp::Publisher<arms_msgs::msg::MissionState>::SharedPtr pub_state_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_dbg_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;

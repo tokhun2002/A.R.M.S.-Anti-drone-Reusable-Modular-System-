@@ -57,3 +57,14 @@ param set-default SYS_HAS_GPS 1
 
 # SITL에는 전원 모듈이 없으므로 power supply 체크 비활성화
 param set-default CBRK_SUPPLY_CHK 894281
+
+# RC 채널 매핑 (실기체: Jetson → ELRS TX → ELRS RX → FC)
+#   CH1=roll  CH2=pitch  CH3=throttle  CH4=yaw
+#   CH5=arm   CH6=land   CH7=kill      CH8=launch(AUX1)
+param set-default RC_MAP_ROLL      1
+param set-default RC_MAP_PITCH     2
+param set-default RC_MAP_THROTTLE  3
+param set-default RC_MAP_YAW       4
+param set-default RC_MAP_ARM_SW    5
+param set-default RC_MAP_KILL_SW   7
+# RC_MAP_LAND_SW: PX4 버전에 따라 지원 여부 다름 — 없으면 arms_comm이 MAVLink로 처리

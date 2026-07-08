@@ -1,6 +1,6 @@
 """
-Full real-hardware launch: arms_video + arms_detection + arms_control + arms_comm + arms_ui
-- 제어 명령 → /arms/ctrl_cmd → arms_comm → CRSF/ELRS → FC (Stabilized mode)
+Full real-hardware launch: arms_video + arms_detection + arms_control + arms_ui
+- arms_control → CRSF serial (crsf.port 파라미터) → ELRS TX → [RF] → ELRS RX → FC
 - Detection: start separately via docker compose up
     cd arms_detection/docker && docker compose -f docker-compose.jetson.yml up
 """
@@ -24,35 +24,23 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        DeclareLaunchArgument("serial_port", default_value="/dev/ttyUSB0",
-                              description="ELRS TX serial port"),
-        DeclareLaunchArgument("max_angle_deg", default_value="35.0",
-                              description="FC max tilt angle (MC_ROLL_MAX)"),
+        DeclareLaunchArgument("crsf_port", default_value="/dev/ttyUSB0",
+                              description="ELRS TX serial port (CRSF output)"),
 
         # Video capture (arms_video_node)
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(video_launch)),
         ),
-        # 제어 (순수 PID → /arms/ctrl_cmd 발행)
+        # 제어 (상태머신 + PID + CRSF 시리얼 출력 → ELRS TX → FC)
         Node(
             package="arms_control",
             executable="arms_control_node",
             name="arms_control_node",
             output="screen",
-            parameters=[str(control_config)],
-        ),
-        # 통신 (pyserial CRSF → ELRS → FC Stabilized)
-        Node(
-            package="arms_comm",
-            executable="arms_comm_node",
-            name="arms_comm_node",
-            output="screen",
-            parameters=[{
-                "serial_port": LaunchConfiguration("serial_port"),
-                "baud": 420000,
-                "max_angle_deg": LaunchConfiguration("max_angle_deg"),
-                "send_rate_hz": 50.0,
-            }],
+            parameters=[
+                str(control_config),
+                {"crsf.port": LaunchConfiguration("crsf_port")},
+            ],
         ),
         # OpenCV UI
         Node(

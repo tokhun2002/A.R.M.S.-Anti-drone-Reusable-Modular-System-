@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD 17)
 # Dependencies
 # -----------------------------------------------------------------------
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -19,6 +20,7 @@ find_package(arms_msgs REQUIRED)
 add_library(arms_control_lib
   src/pid_controller.cpp
   src/state_machine.cpp
+  src/crsf_output.cpp
 )
 
 target_include_directories(arms_control_lib PUBLIC
@@ -61,6 +63,17 @@ install(DIRECTORY include/
 
 install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
+)
+
+# -----------------------------------------------------------------------
+# Python: SITL bridge node (hybrid package)
+# -----------------------------------------------------------------------
+ament_python_install_package(${PROJECT_NAME})
+
+install(PROGRAMS
+  arms_control/sitl_bridge_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME sitl_bridge_node
 )
 
 ament_package()

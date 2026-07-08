@@ -19,7 +19,19 @@ pkill -9 -f ruby 2>/dev/null; pkill -9 -f parameter_bridge 2>/dev/null
 pkill -9 -f arms_control 2>/dev/null
 pkill -9 -f balloon_referee 2>/dev/null; pkill -9 -f arms_panel 2>/dev/null
 pkill -9 -f fusion_detector 2>/dev/null; pkill -9 -f arms_ui 2>/dev/null
+pkill -9 -f "socat.*crsf" 2>/dev/null
 sleep 3
+
+# CRSF 가상 시리얼 쌍 생성 (socat PTY pair)
+#   arms_control → /tmp/crsf_tx → [socat] → /tmp/crsf_rx → arms_comm_sitl
+if ! command -v socat >/dev/null; then
+  echo "!! socat 없음: sudo apt install socat"
+  exit 1
+fi
+rm -f /tmp/crsf_tx /tmp/crsf_rx
+socat PTY,raw,echo=0,link=/tmp/crsf_tx PTY,raw,echo=0,link=/tmp/crsf_rx &
+echo "CRSF 가상 시리얼: /tmp/crsf_tx (arms_control) ↔ /tmp/crsf_rx (arms_comm)"
+sleep 1
 
 # 수정한 월드(red_ball kinematic 등)를 PX4 월드 폴더로 복사 → 항상 최신 반영
 PX4_WORLDS="$PX4_DIR/Tools/simulation/gz/worlds"
