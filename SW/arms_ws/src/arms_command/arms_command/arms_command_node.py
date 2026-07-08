@@ -117,7 +117,7 @@ class PanelGUI:
 
         root.title("A.R.M.S. Control Panel")
         root.configure(bg="#1e1e1e")
-        root.geometry("740x620")
+        root.geometry("780x720")
 
         # ── 상단: 미션 상태 (전체 폭) ──────────────────────────────────────
         top = tk.Frame(root, bg="#1e1e1e")
@@ -137,7 +137,7 @@ class PanelGUI:
 
         # ── 2열 레이아웃 ────────────────────────────────────────────────────
         cols = tk.Frame(root, bg="#1e1e1e")
-        cols.pack(fill="both", expand=True, padx=12, pady=4)
+        cols.pack(fill="both", expand=True, padx=(12, 4), pady=4)
 
         left = tk.Frame(cols, bg="#1e1e1e")
         left.grid(row=0, column=0, sticky="nw", padx=(0, 16))
@@ -174,7 +174,7 @@ class PanelGUI:
         self.pitch_btn.grid(row=0, column=1, padx=3)
 
         # ── 왼쪽: PID 슬라이더 ──────────────────────────────────────────────
-        SL = 280  # 슬라이더 길이
+        SL = 320  # 슬라이더 길이
         tk.Label(left, text="P 게인 (시간 램프)", fg="#aaaaaa",
                  bg="#1e1e1e", font=("Arial", 10)).pack(pady=(6, 0))
 
@@ -247,7 +247,7 @@ class PanelGUI:
 
         self.ball_state_lbl = tk.Label(right, text="상태: ? (버튼으로 설정)",
                                        fg="white", bg="#555555",
-                                       font=("Arial", 10, "bold"), width=20)
+                                       font=("Arial", 10, "bold"), width=26)
         self.ball_state_lbl.pack(pady=(2, 6), ipady=4)
         self._refresh_ball_btns()
 
