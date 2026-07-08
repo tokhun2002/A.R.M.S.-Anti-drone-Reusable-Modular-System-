@@ -113,28 +113,45 @@ class PanelGUI:
         self.node = node
         self.q = q
         self.roll_sign  = 1.0
-        self.pitch_sign = -1.0
+        self.pitch_sign = 1.0
 
         root.title("A.R.M.S. Control Panel")
         root.configure(bg="#1e1e1e")
-        root.geometry("400x900")
+        root.geometry("740x620")
 
-        tk.Label(root, text="MISSION STATE", fg="#aaaaaa", bg="#1e1e1e",
-                 font=("Arial", 11)).pack(pady=(10, 2))
-        self.state_lbl = tk.Label(root, text="—", fg="white", bg="#888888",
-                                   font=("Arial", 26, "bold"), width=12)
-        self.state_lbl.pack(pady=3, ipady=7)
-        self.info_lbl = tk.Label(root, text="error: -, -\nlock: 0.0s",
-                                 fg="#dddddd", bg="#1e1e1e", font=("Consolas", 11))
-        self.info_lbl.pack(pady=3)
+        # ── 상단: 미션 상태 (전체 폭) ──────────────────────────────────────
+        top = tk.Frame(root, bg="#1e1e1e")
+        top.pack(fill="x", padx=12, pady=(10, 4))
 
-        tk.Button(root, text="LAUNCH (→TRACK)", font=("Arial", 12, "bold"),
+        tk.Label(top, text="MISSION STATE", fg="#aaaaaa", bg="#1e1e1e",
+                 font=("Arial", 11)).pack()
+        self.state_lbl = tk.Label(top, text="—", fg="white", bg="#888888",
+                                   font=("Arial", 24, "bold"), width=14)
+        self.state_lbl.pack(pady=3, ipady=6)
+        self.info_lbl = tk.Label(top, text="error: -, -\nlock: 0.0s",
+                                 fg="#dddddd", bg="#1e1e1e", font=("Consolas", 10))
+        self.info_lbl.pack()
+        tk.Button(top, text="LAUNCH (→TRACK)", font=("Arial", 12, "bold"),
                   bg="#d0021b", fg="white", activebackground="#ff1744",
-                  command=self._on_launch).pack(pady=5, fill="x", padx=20)
+                  command=self._on_launch).pack(pady=(5, 2), fill="x", padx=40)
 
-        tk.Label(root, text="DETECTION MODE (다중 선택)", fg="#aaaaaa", bg="#1e1e1e",
-                 font=("Arial", 10)).pack(pady=(8, 2))
-        mfrm = tk.Frame(root, bg="#1e1e1e")
+        # ── 2열 레이아웃 ────────────────────────────────────────────────────
+        cols = tk.Frame(root, bg="#1e1e1e")
+        cols.pack(fill="both", expand=True, padx=12, pady=4)
+
+        left = tk.Frame(cols, bg="#1e1e1e")
+        left.grid(row=0, column=0, sticky="nw", padx=(0, 16))
+
+        sep = tk.Frame(cols, bg="#444444", width=1)
+        sep.grid(row=0, column=1, sticky="ns", padx=4)
+
+        right = tk.Frame(cols, bg="#1e1e1e")
+        right.grid(row=0, column=2, sticky="nw")
+
+        # ── 왼쪽: 검출 모드 ─────────────────────────────────────────────────
+        tk.Label(left, text="DETECTION MODE (다중 선택)", fg="#aaaaaa", bg="#1e1e1e",
+                 font=("Arial", 10)).pack(pady=(4, 2))
+        mfrm = tk.Frame(left, bg="#1e1e1e")
         mfrm.pack()
         self.det_on = {"hsv": True, "yolo": False, "absdiff": True}
         self.det_btns = {}
@@ -146,92 +163,96 @@ class PanelGUI:
             b.grid(row=0, column=len(self.det_btns), padx=2)
             self.det_btns[key] = (b, col)
         self._refresh_det_btns()
-        tk.Label(root, text="눌린 것 = ON (초록/보라/파랑). 여러 개 켜면 융합 검출.",
+        tk.Label(left, text="눌린 것 = ON. 여러 개 켜면 융합 검출.",
                  fg="#777777", bg="#1e1e1e", font=("Arial", 8)).pack()
 
-        sfrm = tk.Frame(root, bg="#1e1e1e")
-        sfrm.pack(pady=6)
-        self.roll_btn = tk.Button(sfrm, text="Roll sign: +", width=14, command=self.flip_roll)
-        self.roll_btn.grid(row=0, column=0, padx=4)
-        self.pitch_btn = tk.Button(sfrm, text="Pitch sign: -", width=14, command=self.flip_pitch)
-        self.pitch_btn.grid(row=0, column=1, padx=4)
+        sfrm = tk.Frame(left, bg="#1e1e1e")
+        sfrm.pack(pady=4)
+        self.roll_btn = tk.Button(sfrm, text="Roll sign: +", width=13, command=self.flip_roll)
+        self.roll_btn.grid(row=0, column=0, padx=3)
+        self.pitch_btn = tk.Button(sfrm, text="Pitch sign: +", width=13, command=self.flip_pitch)
+        self.pitch_btn.grid(row=0, column=1, padx=3)
 
-        tk.Label(root, text="P 게인 (시간 램프)", fg="#aaaaaa",
-                 bg="#1e1e1e", font=("Arial", 10)).pack(pady=(8, 0))
-        self.kp_start = tk.Scale(root, from_=0, to=150, resolution=1, orient="horizontal",
-                                 length=300, bg="#1e1e1e", fg="white", label="시작 P (약하게)",
+        # ── 왼쪽: PID 슬라이더 ──────────────────────────────────────────────
+        SL = 280  # 슬라이더 길이
+        tk.Label(left, text="P 게인 (시간 램프)", fg="#aaaaaa",
+                 bg="#1e1e1e", font=("Arial", 10)).pack(pady=(6, 0))
+
+        self.kp_start = tk.Scale(left, from_=0, to=150, resolution=1, orient="horizontal",
+                                 length=SL, bg="#1e1e1e", fg="white", label="시작 P",
                                  highlightthickness=0, troughcolor="#444")
         self.kp_start.set(60)
         self.kp_start.pack()
         self.kp_start.bind("<ButtonRelease-1>",
                            lambda e: ros_param_set("control.kp_start", float(self.kp_start.get())))
 
-        self.kp_max = tk.Scale(root, from_=0, to=200, resolution=1, orient="horizontal",
-                               length=300, bg="#1e1e1e", fg="white", label="최대 P (램프 끝)",
+        self.kp_max = tk.Scale(left, from_=0, to=200, resolution=1, orient="horizontal",
+                               length=SL, bg="#1e1e1e", fg="white", label="최대 P",
                                highlightthickness=0, troughcolor="#444")
         self.kp_max.set(150)
         self.kp_max.pack()
         self.kp_max.bind("<ButtonRelease-1>",
                          lambda e: ros_param_set("control.kp_max", float(self.kp_max.get())))
 
-        self.kp_ramp = tk.Scale(root, from_=0, to=15, resolution=0.5, orient="horizontal",
-                                length=300, bg="#1e1e1e", fg="white", label="P 증가 시간 [s]",
+        self.kp_ramp = tk.Scale(left, from_=0, to=15, resolution=0.5, orient="horizontal",
+                                length=SL, bg="#1e1e1e", fg="white", label="P 증가 시간 [s]",
                                 highlightthickness=0, troughcolor="#444")
         self.kp_ramp.set(5)
         self.kp_ramp.pack()
         self.kp_ramp.bind("<ButtonRelease-1>",
                           lambda e: ros_param_set("control.kp_ramp_sec", float(self.kp_ramp.get())))
 
-        self.kd = tk.Scale(root, from_=0, to=2, resolution=0.05, orient="horizontal",
-                           length=300, bg="#1e1e1e", fg="white", label="kd (roll/pitch)",
+        self.kd = tk.Scale(left, from_=0, to=2, resolution=0.05, orient="horizontal",
+                           length=SL, bg="#1e1e1e", fg="white", label="kd (roll/pitch)",
                            highlightthickness=0, troughcolor="#444")
         self.kd.set(0.1)
         self.kd.pack()
         self.kd.bind("<ButtonRelease-1>", lambda e: self.set_pid_kd(self.kd.get()))
 
-        self.ki = tk.Scale(root, from_=0.0, to=2.0, resolution=0.1, orient="horizontal",
-                           length=300, bg="#1e1e1e", fg="white", label="ki (적분 - 중앙오차 제거)",
+        self.ki = tk.Scale(left, from_=0.0, to=2.0, resolution=0.1, orient="horizontal",
+                           length=SL, bg="#1e1e1e", fg="white", label="ki (적분)",
                            highlightthickness=0, troughcolor="#444")
         self.ki.set(0.8)
         self.ki.pack()
         self.ki.bind("<ButtonRelease-1>", lambda e: self.set_pid_ki(self.ki.get()))
 
-        self.maxang = tk.Scale(root, from_=30, to=120, resolution=5, orient="horizontal",
-                               length=300, bg="#1e1e1e", fg="white", label="최대 각도 [deg]",
+        self.maxang = tk.Scale(left, from_=30, to=120, resolution=5, orient="horizontal",
+                               length=SL, bg="#1e1e1e", fg="white", label="최대 각도 [deg]",
                                highlightthickness=0, troughcolor="#444")
         self.maxang.set(90)
         self.maxang.pack()
         self.maxang.bind("<ButtonRelease-1>", lambda e: self.set_max_angle(self.maxang.get()))
 
-        tk.Label(root, text="상승 추력 (track_throttle)", fg="#aaaaaa",
-                 bg="#1e1e1e").pack(pady=(6, 0))
-        self.thr = tk.Scale(root, from_=0.50, to=0.95, resolution=0.01,
-                            orient="horizontal", length=300, bg="#1e1e1e",
-                            fg="white", highlightthickness=0, troughcolor="#444")
+        self.thr = tk.Scale(left, from_=0.50, to=0.95, resolution=0.01, orient="horizontal",
+                            length=SL, bg="#1e1e1e", fg="white", label="상승 추력 (track_throttle)",
+                            highlightthickness=0, troughcolor="#444")
         self.thr.set(0.85)
         self.thr.pack()
         self.thr.bind("<ButtonRelease-1>",
                       lambda e: ros_param_set("control.track_throttle", self.thr.get()))
 
-        tk.Label(root, text="풍선(red_ball)", fg="#aaaaaa", bg="#1e1e1e",
-                 font=("Arial", 10)).pack(pady=(8, 2))
-        bbtn = tk.Frame(root, bg="#1e1e1e")
-        bbtn.pack(pady=4)
-        self.ball_fly_btn = tk.Button(bbtn, text="풍선 비행 시작", width=14,
+        # ── 오른쪽: 풍선 ────────────────────────────────────────────────────
+        tk.Label(right, text="풍선 (red_ball)", fg="#aaaaaa", bg="#1e1e1e",
+                 font=("Arial", 11, "bold")).pack(pady=(4, 6))
+
+        bbtn = tk.Frame(right, bg="#1e1e1e")
+        bbtn.pack(pady=2)
+        self.ball_fly_btn = tk.Button(bbtn, text="비행 시작", width=12,
                                       font=("Arial", 10, "bold"),
                                       command=self.ball_start)
-        self.ball_fly_btn.grid(row=0, column=0, padx=3)
-        self.ball_stop_btn = tk.Button(bbtn, text="풍선 정지", width=10,
+        self.ball_fly_btn.grid(row=0, column=0, padx=3, pady=2)
+        self.ball_stop_btn = tk.Button(bbtn, text="정지", width=8,
                                        command=self.ball_stop)
-        self.ball_stop_btn.grid(row=0, column=1, padx=3)
-        self.ball_state_lbl = tk.Label(root, text="풍선 상태: ? (버튼을 눌러 설정)",
+        self.ball_stop_btn.grid(row=0, column=1, padx=3, pady=2)
+
+        self.ball_state_lbl = tk.Label(right, text="상태: ? (버튼으로 설정)",
                                        fg="white", bg="#555555",
-                                       font=("Arial", 11, "bold"), width=30)
-        self.ball_state_lbl.pack(pady=(2, 0), ipady=4)
+                                       font=("Arial", 10, "bold"), width=20)
+        self.ball_state_lbl.pack(pady=(2, 6), ipady=4)
         self._refresh_ball_btns()
 
-        self.alt = tk.Scale(root, from_=2, to=100, resolution=1, orient="horizontal",
-                            length=300, bg="#1e1e1e", fg="white", label="풍선 고도 [m]",
+        self.alt = tk.Scale(right, from_=2, to=100, resolution=1, orient="horizontal",
+                            length=200, bg="#1e1e1e", fg="white", label="풍선 고도 [m]",
                             highlightthickness=0, troughcolor="#444")
         self.alt.set(50)
         self.alt.pack(pady=(2, 0))
