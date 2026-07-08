@@ -195,8 +195,8 @@ float32         kp_now               # 현재 적용 중인 P 게인 (시간 램
 | 상태       | 드론 동작                       | CRSF 출력                                              | UI 표시                   |
 | ---------- | ------------------------------- | ------------------------------------------------------ | ------------------------- |
 | **IDLE**   | 정지 대기                       | CH3=min, CH1/2=center, CH5=disarm                      | 회색 테두리               |
-| **SEARCH** | Arm 완료, 타겟 탐색 중          | CH3=hover, CH5=armed                                   | 노란색, "Searching..."    |
-| **LOCK**   | 타겟 포착 확인 중 (잠금 타이머) | CH3=hover, CH5=armed                                   | 주황색 박스, "Locking..." |
+| **SEARCH** | 타겟 탐색 중 (FC 미무장)        | CH3=min, CH5=disarm                                    | 노란색, "Searching..."    |
+| **LOCK**   | 타겟 포착 확인 중 (잠금 타이머) | CH5=arm → PX4 arm                                      | 주황색 박스, "Locking..." |
 | **TRACK**  | 위치 보정 추적                  | PID → CH1/2 + track_throttle → CH3                    | 빨간 박스, "LOCKED"       |
 | **FIRE**   | 추적 유지 + 페이로드 즉시 발사  | PID 유지 + CH8=fire (1초 hold)                         | 빨간 박스, "FIRED!"       |
 | **RTL**    | 귀환 및 착륙                    | CH6=land (SITL bridge: AUTO LAND 모드 전환)            | "Returning..."            |
@@ -223,8 +223,7 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> IDLE
 
-    IDLE --> SEARCH : auto_arm_delay_sec 경과 후 자동 arm<br/>(auto 모드) → CH5=armed → PX4 arm
-    SEARCH --> IDLE : kill switch (joy buttons[0]) → CH7=kill
+    IDLE --> SEARCH : 노드 시작 즉시 (auto 모드)
 
     SEARCH --> LOCK : 연속 감지 >= lock_duration_sec<br/>(confidence > threshold)
     LOCK --> SEARCH : 타겟 소실 lost_frames_threshold 프레임
@@ -251,7 +250,6 @@ mission:
   fire_distance_m: 5.0
   sitl_auto_launch: false
   auto_launch_delay_sec: 1.0
-  auto_arm_delay_sec: 5.0      # IDLE 진입 후 자동 arm 대기 시간 [s]
 
 control:
   track_throttle: 0.85
@@ -373,7 +371,7 @@ SITL:
 | 4  | yaw         | -1..1 → 172..1811 (auto: 992)  | RC_MAP_YAW=4         |
 | 5  | arm switch  | IDLE=172, else=1811             | RC_MAP_ARM_SW=5      |
 | 6  | land switch | 정상=172, RTL/LAND=1811         | RC_MAP_LAND_SW=6     |
-| 7  | kill switch | 정상=172, kill=1811             | RC_MAP_KILL_SW=7     |
+| 7  | kill switch | 정상=172, kill=1811 (상태 머신 무관, FC가 직접 모터 차단) | RC_MAP_KILL_SW=7 |
 | 8  | launch/fire | 정상=172, FIRE=1811 (1s hold)  | RC_MAP_AUX1=8        |
 
 CRSF 프레임 포맷: `[0xC8][24][0x16][22 bytes: 16ch × 11bit][CRC8-DVB-S2]`  
@@ -479,7 +477,7 @@ arms_control_node
   |
   +-- [State Machine]
   |     evaluate detections → update state
-  |     auto arm after auto_arm_delay_sec
+  |     auto arm: IDLE → SEARCH 즉시 (첫 틱)
   |     launch button (joy buttons[3]) → LOCK→TRACK
   |     distance < fire_distance_m (TRACK) → FIRE
   |

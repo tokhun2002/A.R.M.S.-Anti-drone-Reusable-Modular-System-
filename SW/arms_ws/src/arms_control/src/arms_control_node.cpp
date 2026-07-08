@@ -61,7 +61,6 @@ class ArmsControlNode : public rclcpp::Node {
 
     declare_parameter("mission.sitl_auto_launch", false);
     declare_parameter("mission.auto_launch_delay_sec", 1.0);
-    declare_parameter("mission.auto_arm_delay_sec", 5.0);
 
     declare_parameter("crsf.port", std::string("/tmp/crsf_tx"));
     declare_parameter("crsf.max_angle_deg", 35.0);
@@ -137,7 +136,6 @@ class ArmsControlNode : public rclcpp::Node {
     sitl_auto_launch_ = get_parameter("mission.sitl_auto_launch").as_bool();
     auto_launch_delay_sec_ =
         get_parameter("mission.auto_launch_delay_sec").as_double();
-    auto_arm_delay_sec_ = get_parameter("mission.auto_arm_delay_sec").as_double();
 
     crsf_max_angle_ = get_parameter("crsf.max_angle_deg").as_double();
     crsf_out_ = std::make_unique<CrsfOutput>(get_parameter("crsf.port").as_string());
@@ -453,19 +451,11 @@ class ArmsControlNode : public rclcpp::Node {
       align_locked_ = false;
     }
 
-    // ---- Auto arm: IDLE → SEARCH after delay (auto mode only) ----
-    if (state == State::IDLE && !joy_manual_mode_ && !joy_kill_) {
-      if (!arm_timer_started_) {
-        arm_timer_started_ = true;
-        arm_enter_time_ = now_t;
-      } else if (!auto_armed_ &&
-                 (now_t - arm_enter_time_).seconds() >= auto_arm_delay_sec_) {
-        auto_armed_ = true;
-        sm_->arm();
-        RCLCPP_INFO(get_logger(), "Auto arm: IDLE → SEARCH");
-      }
-    } else if (state != State::IDLE) {
-      arm_timer_started_ = false;
+    // ---- IDLE → SEARCH: 즉시 전이 (auto 모드) ----
+    if (state == State::IDLE && !joy_manual_mode_ && !auto_armed_) {
+      auto_armed_ = true;
+      sm_->arm();
+      RCLCPP_INFO(get_logger(), "IDLE → SEARCH");
     }
 
     // ---- SITL auto-launch ----
@@ -503,8 +493,10 @@ class ArmsControlNode : public rclcpp::Node {
         crsf[3] = CrsfOutput::CRSF_CENTER;  // yaw hold
       }
 
-      // CH5: arm (IDLE → disarmed, else armed)
-      crsf[4] = (state == State::IDLE) ? CrsfOutput::CRSF_MIN : CrsfOutput::CRSF_MAX;
+      // CH5: arm (IDLE/SEARCH = disarmed, LOCK 이상 = armed)
+      bool fc_armed = (state == State::LOCK || state == State::TRACK ||
+                       state == State::FIRE  || state == State::RTL);
+      crsf[4] = fc_armed ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
 
       // CH6: land switch (RTL state or manual land button)
       crsf[5] = (state == State::RTL || joy_land_) ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
@@ -607,11 +599,8 @@ class ArmsControlNode : public rclcpp::Node {
   bool auto_launched_{false};
   rclcpp::Time lock_enter_time_;
 
-  // Auto arm
-  double auto_arm_delay_sec_{5.0};
-  bool arm_timer_started_{false};
+  // Auto arm (IDLE→SEARCH 즉시 1회)
   bool auto_armed_{false};
-  rclcpp::Time arm_enter_time_;
 
   // Joy state
   std::array<float, 4> joy_axes_{};
