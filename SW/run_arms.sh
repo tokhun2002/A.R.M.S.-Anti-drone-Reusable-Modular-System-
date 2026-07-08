@@ -57,7 +57,7 @@ sleep 15
 
 echo "[2/2] ARMS 스택 (브리지+제어+UI+검출+풍선+패널)..."
 TERM_CMD "ARMS stack" \
-  "$ROS_SETUP && ros2 launch arms_bringup arms_sitl_flying.launch.py"
+  "$ROS_SETUP && ros2 launch arms_bringup arms_sitl.launch.py"
 
 # 자동 disarm / 페일세이프 끄기 (GCS/RC 없는 SITL 자율비행 셋업).
 #   COM_DISARM_PRFLT 0  = arm 후 이륙 지연 자동 disarm 해제 (가만히 둬도 안 멈춤)

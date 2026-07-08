@@ -134,31 +134,31 @@ graph TD
     ELRS_TX -->|RF| FC_HW
 ```
 
-| 노드                       | subscribe                                                                                | publish                                                   |
-| -------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `arms_video_node`          | —                                                                                        | `/arms/image_raw`                                         |
-| `arms_yolo_detection_node` | `/arms/image_raw`                                                                        | `/arms/yolo_detections`                                   |
-| `arms_detection_node`      | `/arms/image_raw`<br/>`/arms/yolo_detections`                                            | `/arms/detections`<br/>`/arms/roi_image`                  |
-| `arms_command_node`        | `/arms/mission_state`                                                                    | `/arms/command`                                                    |
-| `controller_input_node`    | —                                                                                        | `/arms/command`                                                    |
-| `arms_control_node`        | `/arms/detections`<br/>`/arms/command`<br/>`/arms/scan_raw`<br/>`/arms/reset_cmd`                | `/arms/mission_state`<br/>`/arms/control_debug`<br/>CRSF serial |
-| `sitl_bridge_node`         | CRSF serial (`/tmp/crsf_rx`)                                                             | MAVLink RC_CHANNELS_OVERRIDE → PX4                        |
-| `arms_ui_node`             | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/roi_image` | —                                                         |
-| `gz_scan_bridge`           | `/arms_drone/upward_ray/scan` (gz)                                                       | `/arms/scan_raw`                                          |
+| 노드                       | subscribe                                                                                | publish                                                         |
+| -------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `arms_video_node`          | —                                                                                        | `/arms/image_raw`                                               |
+| `arms_yolo_detection_node` | `/arms/image_raw`                                                                        | `/arms/yolo_detections`                                         |
+| `arms_detection_node`      | `/arms/image_raw`<br/>`/arms/yolo_detections`                                            | `/arms/detections`<br/>`/arms/roi_image`                        |
+| `arms_command_node`        | `/arms/mission_state`                                                                    | `/arms/command`                                                 |
+| `controller_input_node`    | —                                                                                        | `/arms/command`                                                 |
+| `arms_control_node`        | `/arms/detections`<br/>`/arms/command`<br/>`/arms/scan_raw`<br/>`/arms/reset_cmd`        | `/arms/mission_state`<br/>`/arms/control_debug`<br/>CRSF serial |
+| `sitl_bridge_node`         | CRSF serial (`/tmp/crsf_rx`)                                                             | MAVLink RC_CHANNELS_OVERRIDE → PX4                              |
+| `arms_ui_node`             | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/roi_image` | —                                                               |
+| `gz_scan_bridge`           | `/arms_drone/upward_ray/scan` (gz)                                                       | `/arms/scan_raw`                                                |
 
 ### 3.2 노드별 역할
 
-| 노드                       | 패키지           | 역할                                                                                                              | 실행 환경     |
-| -------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------- | ------------- |
-| `arms_video_node`          | `arms_video`     | 영상 소스 추상화. 실기체는 usb_cam, SITL은 gz_ros2_bridge로 `/arms/image_raw` 발행                                | 호스트        |
-| `arms_yolo_detection_node` | `arms_detection` | YOLO 추론 후 `/arms/yolo_detections` 발행. **선택적** — Docker 컨테이너 안에서 실행                               | Docker (선택) |
-| `arms_detection_node`      | `arms_detection` | HSV·absdiff·YOLO 결과를 융합해 `/arms/detections` 발행. YOLO 노드 없이도 독립 동작 가능                           | 호스트        |
-| `arms_command_node`        | `arms_command`   | SITL용 tkinter GUI 패널. 드래그 스틱·스위치 클릭으로 `/arms/command` 발행                                                  | 호스트        |
+| 노드                       | 패키지           | 역할                                                                                                                                        | 실행 환경     |
+| -------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `arms_video_node`          | `arms_video`     | 영상 소스 추상화. 실기체는 usb_cam, SITL은 gz_ros2_bridge로 `/arms/image_raw` 발행                                                          | 호스트        |
+| `arms_yolo_detection_node` | `arms_detection` | YOLO 추론 후 `/arms/yolo_detections` 발행. **선택적** — Docker 컨테이너 안에서 실행                                                         | Docker (선택) |
+| `arms_detection_node`      | `arms_detection` | HSV·absdiff·YOLO 결과를 융합해 `/arms/detections` 발행. YOLO 노드 없이도 독립 동작 가능                                                     | 호스트        |
+| `arms_command_node`        | `arms_command`   | SITL용 tkinter GUI 패널. 드래그 스틱·스위치 클릭으로 `/arms/command` 발행                                                                   | 호스트        |
 | `controller_input_node`    | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. fake_mode 지원 | 호스트        |
-| `arms_control_node`        | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환. CRSF 프레임을 시리얼로 직접 출력         | 호스트        |
-| `sitl_bridge_node`         | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. CH5↑=ARM, CH6↑=LAND | 호스트 (SITL) |
-| `arms_ui_node`             | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                            | 호스트        |
-| `gz_scan_bridge`           | `ros_gz_bridge`  | SITL 전용. Gazebo 거리 센서 토픽을 ROS2로 브릿지                                                                   | 호스트        |
+| `arms_control_node`        | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환. CRSF 프레임을 시리얼로 직접 출력                          | 호스트        |
+| `sitl_bridge_node`         | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. CH5↑=ARM, CH6↑=LAND                   | 호스트 (SITL) |
+| `arms_ui_node`             | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                      | 호스트        |
+| `gz_scan_bridge`           | `ros_gz_bridge`  | SITL 전용. Gazebo 거리 센서 토픽을 ROS2로 브릿지                                                                                            | 호스트        |
 
 ### 3.3 커스텀 메시지 정의
 
@@ -194,14 +194,14 @@ float32         kp_now               # 현재 적용 중인 P 게인 (시간 램
 
 ### 4.1 상태별 동작 정의
 
-| 상태       | 드론 동작                       | CRSF 출력                                              | UI 표시                   |
-| ---------- | ------------------------------- | ------------------------------------------------------ | ------------------------- |
-| **IDLE**   | 정지 대기                       | CH3=min, CH1/2=center, CH5=disarm                      | 회색 테두리               |
-| **SEARCH** | 타겟 탐색 중 (FC 미무장)        | CH3=min, CH5=disarm                                    | 노란색, "Searching..."    |
-| **LOCK**   | 타겟 포착 확인 중 (잠금 타이머) | CH5=arm → PX4 arm                                      | 주황색 박스, "Locking..." |
-| **TRACK**  | 위치 보정 추적                  | PID → CH1/2 + track_throttle → CH3                    | 빨간 박스, "LOCKED"       |
-| **FIRE**   | 추적 유지 + 페이로드 즉시 발사  | PID 유지 + CH8=fire (1초 hold)                         | 빨간 박스, "FIRED!"       |
-| **RTL**    | 귀환 및 착륙                    | CH6=land (SITL bridge: AUTO LAND 모드 전환)            | "Returning..."            |
+| 상태       | 드론 동작                       | CRSF 출력                                   | UI 표시                   |
+| ---------- | ------------------------------- | ------------------------------------------- | ------------------------- |
+| **IDLE**   | 정지 대기                       | CH3=min, CH1/2=center, CH5=disarm           | 회색 테두리               |
+| **SEARCH** | 타겟 탐색 중 (FC 미무장)        | CH3=min, CH5=disarm                         | 노란색, "Searching..."    |
+| **LOCK**   | 타겟 포착 확인 중 (잠금 타이머) | CH5=arm → PX4 arm                           | 주황색 박스, "Locking..." |
+| **TRACK**  | 위치 보정 추적                  | PID → CH1/2 + track_throttle → CH3          | 빨간 박스, "LOCKED"       |
+| **FIRE**   | 추적 유지 + 페이로드 즉시 발사  | PID 유지 + CH8=fire (1초 hold)              | 빨간 박스, "FIRED!"       |
+| **RTL**    | 귀환 및 착륙                    | CH6=land (SITL bridge: AUTO LAND 모드 전환) | "Returning..."            |
 
 ### 4.2 상태 전이 다이어그램
 
@@ -365,16 +365,16 @@ SITL:
 
 ### 7.2 CRSF 채널 매핑
 
-| CH | 기능        | 값                              | PX4 RC_MAP (실기체)  |
-|----|-------------|----------------------------------|----------------------|
-| 1  | roll        | -1..1 → 172..1811               | RC_MAP_ROLL=1        |
-| 2  | pitch       | -1..1 → 172..1811               | RC_MAP_PITCH=2       |
-| 3  | throttle    | 0..1 → 172..1811                | RC_MAP_THROTTLE=3    |
-| 4  | yaw         | -1..1 → 172..1811 (auto: 992)  | RC_MAP_YAW=4         |
-| 5  | arm switch  | IDLE=172, else=1811             | RC_MAP_ARM_SW=5      |
-| 6  | land switch | 정상=172, RTL/LAND=1811         | RC_MAP_LAND_SW=6     |
-| 7  | kill switch | 정상=172, kill=1811 (상태 머신 무관, FC가 직접 모터 차단) | RC_MAP_KILL_SW=7 |
-| 8  | launch/fire | 정상=172, FIRE=1811 (1s hold)  | RC_MAP_AUX1=8        |
+| CH  | 기능        | 값                                                        | PX4 RC_MAP (실기체) |
+| --- | ----------- | --------------------------------------------------------- | ------------------- |
+| 1   | roll        | -1..1 → 172..1811                                         | RC_MAP_ROLL=1       |
+| 2   | pitch       | -1..1 → 172..1811                                         | RC_MAP_PITCH=2      |
+| 3   | throttle    | 0..1 → 172..1811                                          | RC_MAP_THROTTLE=3   |
+| 4   | yaw         | -1..1 → 172..1811 (auto: 992)                             | RC_MAP_YAW=4        |
+| 5   | arm switch  | IDLE=172, else=1811                                       | RC_MAP_ARM_SW=5     |
+| 6   | land switch | 정상=172, RTL/LAND=1811                                   | RC_MAP_LAND_SW=6    |
+| 7   | kill switch | 정상=172, kill=1811 (상태 머신 무관, FC가 직접 모터 차단) | RC_MAP_KILL_SW=7    |
+| 8   | launch/fire | 정상=172, FIRE=1811 (1s hold)                             | RC_MAP_AUX1=8       |
 
 CRSF 프레임 포맷: `[0xC8][24][0x16][22 bytes: 16ch × 11bit][CRC8-DVB-S2]`  
 전송 속도: 460800 baud (표준 ELRS 420000과 근접값)
@@ -383,10 +383,10 @@ CRSF 프레임 포맷: `[0xC8][24][0x16][22 bytes: 16ch × 11bit][CRC8-DVB-S2]`
 
 `joy buttons[2]` 토글로 arms_control_node 내부에서 전환한다. PX4 flight mode는 항상 **Stabilized 고정**.
 
-| 모드   | CH1-4 소스                       | CH5-8 소스             |
-|--------|----------------------------------|------------------------|
-| auto   | PID 계산 (roll/pitch/thrust)     | 상태 머신 + joy buttons |
-| manual | joy axes[0-3] 패스스루           | joy buttons[0-3]        |
+| 모드   | CH1-4 소스                   | CH5-8 소스              |
+| ------ | ---------------------------- | ----------------------- |
+| auto   | PID 계산 (roll/pitch/thrust) | 상태 머신 + joy buttons |
+| manual | joy axes[0-3] 패스스루       | joy buttons[0-3]        |
 
 ### 7.4 좌표계 및 오차 정의
 
@@ -437,8 +437,8 @@ arms_control_node:
       kp_ramp_sec: 5.0
       control_rate_hz: 30.0
     crsf:
-      port: "/tmp/crsf_tx"      # SITL: socat PTY / 실기체: /dev/ttyUSB0 등
-      max_angle_deg: 35.0       # roll/pitch deg → CRSF 정규화 기준각
+      port: "/tmp/crsf_tx" # SITL: socat PTY / 실기체: /dev/ttyUSB0 등
+      max_angle_deg: 35.0 # roll/pitch deg → CRSF 정규화 기준각
 ```
 
 PID 구현 특이사항:
@@ -515,7 +515,7 @@ arms_control_node
 ### 9.1 SITL 런치
 
 ```
-# arms_bringup/launch/arms_sitl_flying.launch.py  (메인 SITL 런치)
+# arms_bringup/launch/arms_sitl.launch.py  (메인 SITL 런치)
 
 전제: run_arms.sh 실행 시 socat PTY 쌍 자동 생성
   socat PTY,link=/tmp/crsf_tx PTY,link=/tmp/crsf_rx
