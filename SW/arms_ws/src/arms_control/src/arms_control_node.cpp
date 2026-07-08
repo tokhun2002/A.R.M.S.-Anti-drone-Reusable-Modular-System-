@@ -253,7 +253,7 @@ class ArmsControlNode : public rclcpp::Node {
         });
 
     sub_joy_ = create_subscription<sensor_msgs::msg::Joy>(
-        "/joy", 10, [this](sensor_msgs::msg::Joy::SharedPtr msg) {
+        "/arms/command", 10, [this](sensor_msgs::msg::Joy::SharedPtr msg) {
           for (size_t i = 0; i < 4 && i < msg->axes.size(); ++i)
             joy_axes_[i] = msg->axes[i];
 

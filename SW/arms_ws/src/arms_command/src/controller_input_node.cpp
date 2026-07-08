@@ -22,7 +22,7 @@ public:
   : Node("controller_input_node")
   {
     fake_mode_ = declare_parameter<bool>("fake_mode", true);
-    topic_name_ = declare_parameter<std::string>("topic_name", "/joy");
+    topic_name_ = declare_parameter<std::string>("topic_name", "/arms/command");
     publish_rate_hz_ = declare_parameter<double>("publish_rate_hz", 50.0);
 
     i2c_device_ = declare_parameter<std::string>("i2c.device", "/dev/i2c-1");

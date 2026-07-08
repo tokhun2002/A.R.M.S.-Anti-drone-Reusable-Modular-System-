@@ -70,7 +70,7 @@ class PanelNode(Node):
     def __init__(self, q):
         super().__init__("arms_command_node")
         self.q = q
-        self._joy_pub = self.create_publisher(Joy, "/joy", 10)
+        self._joy_pub = self.create_publisher(Joy, "/arms/command", 10)
         self._axes = [0.0, 0.0, 0.0, 0.0]
         self._buttons = [0, 0, 0, 0]
         self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
