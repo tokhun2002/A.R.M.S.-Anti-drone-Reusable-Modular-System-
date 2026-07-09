@@ -58,7 +58,7 @@ public:
     const auto period = std::chrono::duration<double>(1.0 / std::max(1.0, publish_rate_hz_));
     timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(period),
-      std::bind(&ControllerInputNode::timerCallback, this));
+      std::bind(&ArmsCommandNode::timerCallback, this));
 
     RCLCPP_INFO(get_logger(), "Publishing sensor_msgs/msg/Joy on %s at %.1f Hz", topic_name_.c_str(), publish_rate_hz_);
   }
