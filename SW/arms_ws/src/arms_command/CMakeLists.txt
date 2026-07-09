@@ -38,12 +38,12 @@ else()
   message(STATUS "libgpiod not found — GPIO real-input support disabled. fake_mode still works.")
 endif()
 
-add_executable(controller_input_node src/controller_input_node.cpp)
-target_include_directories(controller_input_node PRIVATE include)
-target_link_libraries(controller_input_node arms_command_hw)
-ament_target_dependencies(controller_input_node rclcpp sensor_msgs)
+add_executable(arms_command_hw_node src/arms_command_hw_node.cpp)
+target_include_directories(arms_command_hw_node PRIVATE include)
+target_link_libraries(arms_command_hw_node arms_command_hw)
+ament_target_dependencies(arms_command_hw_node rclcpp sensor_msgs)
 
-install(TARGETS controller_input_node
+install(TARGETS arms_command_hw_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY include/

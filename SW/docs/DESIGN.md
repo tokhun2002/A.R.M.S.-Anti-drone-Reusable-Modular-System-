@@ -74,14 +74,14 @@ graph TD
     IMAGE(["/arms/image_raw"])
 
     subgraph arms_detection ["arms_detection"]
-        DN_YOLO["arms_yolo_detection_node<br/>(YOLO · Docker) 선택"]
+        DN_YOLO["arms_yolo_detection_node<br/>(YOLO · Docker)"]
         DN_FUSION["arms_detection_node<br/>(fusion: HSV + absdiff + YOLO)"]
         DN_YOLO -->|/arms/yolo_detections| DN_FUSION
     end
 
     subgraph arms_command ["arms_command"]
         CMD_GUI["arms_command_node<br/>(tkinter GUI) SITL"]
-        CMD_JOY["controller_input_node<br/>(ESP32 수신) 실기체"]
+        CMD_JOY["arms_command_hw_node<br/>(ESP32 수신) 실기체"]
     end
 
     ADS1115["ADS1115 ADC<br/>(I2C 짐벌 4축)"]
@@ -90,7 +90,6 @@ graph TD
     JOY(["/arms/command"])
 
     DETECTIONS(["/arms/detections"])
-    ROI_IMAGE(["/arms/roi_image"])
     MISSION_STATE(["/arms/mission_state"])
     CRSF_SERIAL(["CRSF serial<br/>/tmp/crsf_tx (SITL)<br/>/dev/ttyUSB0 (실기체)"])
 
@@ -120,10 +119,8 @@ graph TD
     IMAGE --> DN_FUSION
     IMAGE --> UN
     DN_FUSION --> DETECTIONS
-    DN_FUSION --> ROI_IMAGE
     DETECTIONS --> CN
     DETECTIONS --> UN
-    ROI_IMAGE --> UN
     JOY --> CN
     CN --> MISSION_STATE
     CN --> CRSF_SERIAL
@@ -138,12 +135,12 @@ graph TD
 | -------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | `arms_video_node`          | —                                                                                        | `/arms/image_raw`                                               |
 | `arms_yolo_detection_node` | `/arms/image_raw`                                                                        | `/arms/yolo_detections`                                         |
-| `arms_detection_node`      | `/arms/image_raw`<br/>`/arms/yolo_detections`                                            | `/arms/detections`<br/>`/arms/roi_image`                        |
+| `arms_detection_node`      | `/arms/image_raw`<br/>`/arms/yolo_detections`                                            | `/arms/detections`<br/>`/arms/debug_image`<br/>`/arms/debug_absdiff` |
 | `arms_command_node`        | `/arms/mission_state`                                                                    | `/arms/command`                                                 |
-| `controller_input_node`    | —                                                                                        | `/arms/command`                                                 |
+| `arms_command_hw_node` | —                                                                                        | `/arms/command`                                                 |
 | `arms_control_node`        | `/arms/detections`<br/>`/arms/command`<br/>`/arms/scan_raw`<br/>`/arms/reset_cmd`        | `/arms/mission_state`<br/>`/arms/control_debug`<br/>CRSF serial |
 | `sitl_bridge_node`         | CRSF serial (`/tmp/crsf_rx`)                                                             | MAVLink RC_CHANNELS_OVERRIDE → PX4                              |
-| `arms_ui_node`             | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/roi_image` | —                                                               |
+| `arms_ui_node`             | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/control_debug` | —                                                           |
 | `gz_scan_bridge`           | `/arms_drone/upward_ray/scan` (gz)                                                       | `/arms/scan_raw`                                                |
 
 ### 3.2 노드별 역할
@@ -154,7 +151,7 @@ graph TD
 | `arms_yolo_detection_node` | `arms_detection` | YOLO 추론 후 `/arms/yolo_detections` 발행. **선택적** — Docker 컨테이너 안에서 실행                                                         | Docker (선택) |
 | `arms_detection_node`      | `arms_detection` | HSV·absdiff·YOLO 결과를 융합해 `/arms/detections` 발행. YOLO 노드 없이도 독립 동작 가능                                                     | 호스트        |
 | `arms_command_node`        | `arms_command`   | SITL용 tkinter GUI 패널. 드래그 스틱·스위치 클릭으로 `/arms/command` 발행                                                                   | 호스트        |
-| `controller_input_node`    | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. fake_mode 지원 | 호스트        |
+| `arms_command_hw_node` | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. fake_mode 지원 | 호스트        |
 | `arms_control_node`        | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환. CRSF 프레임을 시리얼로 직접 출력                          | 호스트        |
 | `sitl_bridge_node`         | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. CH5↑=ARM, CH6↑=LAND                   | 호스트 (SITL) |
 | `arms_ui_node`             | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                      | 호스트        |
@@ -547,7 +544,7 @@ nodes:
   - arms_ui_node       (arms_ui)
 
 # arms_command/launch/command.launch.py  (별도 실행)
-  - controller_input_node  (arms_command)  ESP32(ADS1115 + GPIO) USB Serial 수신 → /arms/command
+  - arms_command_hw_node  (arms_command)  ESP32(ADS1115 + GPIO) USB Serial 수신 → /arms/command
 
 별도 실행:
   docker compose -f docker-compose.jetson.yml up

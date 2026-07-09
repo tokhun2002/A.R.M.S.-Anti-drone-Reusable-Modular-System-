@@ -1,16 +1,11 @@
 """
-arms_ui_node — OpenCV overlay display (skeleton).
+arms_ui_node — OpenCV overlay display
 
 Subscribes to:
   /arms/image_raw      sensor_msgs/Image
   /arms/detections     arms_msgs/DetectionArray
   /arms/mission_state  arms_msgs/MissionState
-
-Displays:
-  - Live camera feed
-  - Bounding boxes with confidence
-  - Frame center crosshair
-  - Mission state overlay (state name, lock progress bar, error vector)
+  /arms/control_debug  geometry_msgs/Vector3
 """
 
 import cv2
@@ -23,7 +18,6 @@ from sensor_msgs.msg import Image
 from arms_msgs.msg import DetectionArray, MissionState
 from geometry_msgs.msg import Vector3
 
-# State → BGR color mapping
 STATE_COLORS = {
     "IDLE":   (128, 128, 128),
     "SEARCH": (0,   200, 255),
@@ -47,7 +41,6 @@ class ArmsUINode(Node):
         )
 
         self.create_subscription(Image, "/arms/image_raw", self._cb_image, best_effort_qos)
-        self.create_subscription(Image, "/arms/roi_image", self._cb_roi_image, best_effort_qos)
         self.create_subscription(DetectionArray, "/arms/detections", self._cb_detections, 10)
         self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
         self.create_subscription(Vector3, "/arms/control_debug", self._cb_debug, 10)
@@ -55,23 +48,15 @@ class ArmsUINode(Node):
         self._latest_detections = DetectionArray()
         self._latest_state = MissionState()
         self._latest_cmd = Vector3()
-        self._latest_roi_img = None   # cv2 BGR ndarray, ROI 활성 시만 갱신
 
-        # 창 크기 조절 가능 (검출 해상도는 작게 유지, 화면만 크게)
         cv2.namedWindow("A.R.M.S.", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("A.R.M.S.", 960, 720)   # 기본 표시 크기 (마우스로 조절 가능)
+        cv2.resizeWindow("A.R.M.S.", 960, 720)
 
         self.get_logger().info("arms_ui_node started.")
 
     # ------------------------------------------------------------------
     # Callbacks
     # ------------------------------------------------------------------
-
-    def _cb_roi_image(self, msg: Image):
-        try:
-            self._latest_roi_img = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        except Exception as e:
-            self.get_logger().warn(f"roi_image cv_bridge error: {e}")
 
     def _cb_detections(self, msg: DetectionArray):
         self._latest_detections = msg
@@ -90,7 +75,6 @@ class ArmsUINode(Node):
             return
 
         self._draw_overlay(frame)
-        self._draw_roi_pip(frame)
         cv2.imshow("A.R.M.S.", frame)
         cv2.waitKey(1)
 
@@ -169,33 +153,6 @@ class ArmsUINode(Node):
 
         # --- State border ---
         cv2.rectangle(frame, (0, 0), (w - 1, h - 1), color, 3)
-
-    def _draw_roi_pip(self, frame):
-        """검출 중일 때만 우측 하단에 ROI 크롭 PiP 표시."""
-        if self._latest_roi_img is None:
-            return
-        if not self._latest_detections.detections:
-            self._latest_roi_img = None  # 검출 끊기면 캐시 초기화
-            return
-
-        h, w = frame.shape[:2]
-        rh, rw = self._latest_roi_img.shape[:2]
-        if rw == 0 or rh == 0:
-            return
-
-        pip_w = max(80, w // 5)
-        pip_h = int(pip_w * rh / rw)
-        pip = cv2.resize(self._latest_roi_img, (pip_w, pip_h))
-
-        margin = 10
-        x1 = w - pip_w - margin
-        y1 = h - pip_h - margin
-
-        frame[y1:y1 + pip_h, x1:x1 + pip_w] = pip
-        cv2.rectangle(frame, (x1 - 1, y1 - 1), (x1 + pip_w, y1 + pip_h), (255, 100, 0), 1)
-        cv2.putText(frame, "ROI", (x1, y1 - 4),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 100, 0), 1, cv2.LINE_AA)
-
 
 def main(args=None):
     rclpy.init(args=args)

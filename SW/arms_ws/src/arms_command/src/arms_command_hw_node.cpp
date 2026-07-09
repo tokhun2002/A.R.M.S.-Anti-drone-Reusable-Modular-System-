@@ -15,11 +15,11 @@
 namespace arms_command
 {
 
-class ControllerInputNode : public rclcpp::Node
+class ArmsCommandNode : public rclcpp::Node
 {
 public:
-  ControllerInputNode()
-  : Node("controller_input_node")
+  ArmsCommandNode()
+  : Node("arms_command_hw_node")
   {
     fake_mode_ = declare_parameter<bool>("fake_mode", true);
     topic_name_ = declare_parameter<std::string>("topic_name", "/arms/command");
@@ -234,7 +234,7 @@ private:
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<arms_command::ControllerInputNode>());
+  rclcpp::spin(std::make_shared<arms_command::ArmsCommandNode>());
   rclcpp::shutdown();
   return 0;
 }

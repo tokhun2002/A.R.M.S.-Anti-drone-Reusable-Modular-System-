@@ -1,4 +1,4 @@
-controller_input_node:
+arms_command_hw_node:
   ros__parameters:
     # true: no hardware required. Publishes simulated ADS1115-like raw values.
     # false: read /dev/i2c-1 ADS1115 and GPIO switch inputs.
