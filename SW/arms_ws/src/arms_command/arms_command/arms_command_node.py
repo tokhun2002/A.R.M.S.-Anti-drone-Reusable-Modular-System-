@@ -134,6 +134,9 @@ class PanelGUI:
         tk.Button(top, text="LAUNCH (→TRACK)", font=("Arial", 12, "bold"),
                   bg="#d0021b", fg="white", activebackground="#ff1744",
                   command=self._on_launch).pack(pady=(5, 2), fill="x", padx=40)
+        tk.Button(top, text="RESET (드론 원점 복귀)", font=("Arial", 10),
+                  bg="#37474f", fg="white", activebackground="#546e7a",
+                  command=self._on_reset).pack(pady=(0, 4), fill="x", padx=40)
 
         # ── 2열 레이아웃 ────────────────────────────────────────────────────
         cols = tk.Frame(root, bg="#1e1e1e")
@@ -239,7 +242,7 @@ class PanelGUI:
         self._poll()
 
     # ------------------------------------------------------------------
-    # LAUNCH 버튼
+    # LAUNCH / RESET 버튼
     # ------------------------------------------------------------------
     def _on_launch(self):
         self.node.fire_launch()
@@ -247,6 +250,25 @@ class PanelGUI:
 
     def _release_launch(self):
         self.node.release_launch()
+
+    def _on_reset(self):
+        # 1) arms_control → IDLE
+        _bg(lambda: subprocess.run(
+            ["ros2", "topic", "pub", "--once", "/arms/reset_cmd", "std_msgs/msg/Empty", "{}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        # 2) Gazebo 드론 원점 복귀
+        pose_args = (
+            "position: {x: 0.0, y: 0.0, z: 0.2}, "
+            "orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}"
+        )
+        _bg(lambda: subprocess.run([
+            "gz", "service",
+            "-s", f"/world/{WORLD}/set_pose",
+            "--reqtype", "gz.msgs.Pose",
+            "--reptype", "gz.msgs.Boolean",
+            "--timeout", "1000",
+            "--req", f"name: '{DRONE}', {pose_args}",
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
 
     # ------------------------------------------------------------------
     def toggle_det(self, key):
