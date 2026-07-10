@@ -117,7 +117,7 @@ class PanelGUI:
 
         root.title("A.R.M.S. Control Panel")
         root.configure(bg="#1e1e1e")
-        root.geometry("740x780")
+        root.geometry("740x580")
 
         # ── 상단: 미션 상태 (전체 폭) ──────────────────────────────────────
         top = tk.Frame(root, bg="#1e1e1e")
@@ -176,40 +176,59 @@ class PanelGUI:
         self.pitch_btn = tk.Button(sfrm, text="Pitch sign: +", width=13, command=self.flip_pitch)
         self.pitch_btn.grid(row=0, column=1, padx=3)
 
-        # ── 왼쪽: PID 슬라이더 ──────────────────────────────────────────────
-        SL = 320  # 슬라이더 길이
+        # ── 왼쪽: PID 입력 ──────────────────────────────────────────────────
+        def make_pid_group(parent, title, defaults, params):
+            """(P, I, D) 입력 행 + 적용 버튼. returns (ep, ei, ed) Entry widgets."""
+            tk.Label(parent, text=title, fg="#aaaaaa", bg="#1e1e1e",
+                     font=("Arial", 10, "bold")).pack(anchor="w", pady=(8, 2))
+            row = tk.Frame(parent, bg="#1e1e1e")
+            row.pack(anchor="w")
+            entries = []
+            for col, (lbl, val) in enumerate(zip(["P", "I", "D"], defaults)):
+                tk.Label(row, text=lbl, fg="white", bg="#1e1e1e",
+                         width=2).grid(row=0, column=col * 2, padx=(4, 0))
+                e = tk.Entry(row, width=7, bg="#2e2e2e", fg="white",
+                             insertbackground="white", relief="flat")
+                e.insert(0, str(val))
+                e.grid(row=0, column=col * 2 + 1, padx=(2, 6))
+                entries.append(e)
+            ep, ei, ed = entries
 
-        def make_slider(parent, label, lo, hi, res, default, param):
-            s = tk.Scale(parent, from_=lo, to=hi, resolution=res, orient="horizontal",
-                         length=SL, bg="#1e1e1e", fg="white", label=label,
-                         highlightthickness=0, troughcolor="#444")
-            s.set(default)
-            s.pack()
-            s.bind("<B1-Motion>",      lambda e, p=param, sl=s: ros_param_set(p, float(sl.get())))
-            s.bind("<ButtonRelease-1>", lambda e, p=param, sl=s: ros_param_set(p, float(sl.get())))
-            return s
+            def apply():
+                try:
+                    ros_param_set(params[0], float(ep.get()))
+                    ros_param_set(params[1], float(ei.get()))
+                    ros_param_set(params[2], float(ed.get()))
+                except ValueError:
+                    pass
 
-        tk.Label(left, text="Roll PID", fg="#aaaaaa", bg="#1e1e1e",
-                 font=("Arial", 10)).pack(pady=(6, 0))
-        self.roll_kp = make_slider(left, "P",  0, 500, 1,    20,   "control.roll_pid.kp")
-        self.roll_ki = make_slider(left, "I",  0,  20, 0.1,   0.8, "control.roll_pid.ki")
-        self.roll_kd = make_slider(left, "D",  0,   5, 0.05,  0.65,"control.roll_pid.kd")
+            tk.Button(row, text="적용", bg="#455a64", fg="white",
+                      activebackground="#607d8b", relief="flat",
+                      command=apply).grid(row=0, column=6, padx=(2, 0))
+            return ep, ei, ed
 
-        tk.Label(left, text="Pitch PID", fg="#aaaaaa", bg="#1e1e1e",
-                 font=("Arial", 10)).pack(pady=(6, 0))
-        self.pitch_kp = make_slider(left, "P",  0, 500, 1,    20,   "control.pitch_pid.kp")
-        self.pitch_ki = make_slider(left, "I",  0,  20, 0.1,   0.8, "control.pitch_pid.ki")
-        self.pitch_kd = make_slider(left, "D",  0,   5, 0.05,  0.65,"control.pitch_pid.kd")
+        self.roll_kp, self.roll_ki, self.roll_kd = make_pid_group(
+            left, "Roll PID", [20, 0.8, 0.65],
+            ["control.roll_pid.kp", "control.roll_pid.ki", "control.roll_pid.kd"])
 
-        self.thr = tk.Scale(left, from_=0.50, to=0.95, resolution=0.01, orient="horizontal",
-                            length=SL, bg="#1e1e1e", fg="white", label="상승 추력 (track_throttle)",
-                            highlightthickness=0, troughcolor="#444")
-        self.thr.set(0.85)
-        self.thr.pack()
-        self.thr.bind("<B1-Motion>",
-                      lambda e: ros_param_set("control.track_throttle", self.thr.get()))
-        self.thr.bind("<ButtonRelease-1>",
-                      lambda e: ros_param_set("control.track_throttle", self.thr.get()))
+        self.pitch_kp, self.pitch_ki, self.pitch_kd = make_pid_group(
+            left, "Pitch PID", [20, 0.8, 0.65],
+            ["control.pitch_pid.kp", "control.pitch_pid.ki", "control.pitch_pid.kd"])
+
+        # 추력 슬라이더는 아날로그 느낌이 있어서 유지
+        tk.Label(left, text="상승 추력 (track_throttle)", fg="#aaaaaa",
+                 bg="#1e1e1e", font=("Arial", 9)).pack(anchor="w", pady=(10, 0))
+        thr_row = tk.Frame(left, bg="#1e1e1e")
+        thr_row.pack(anchor="w")
+        self.thr_entry = tk.Entry(thr_row, width=7, bg="#2e2e2e", fg="white",
+                                  insertbackground="white", relief="flat")
+        self.thr_entry.insert(0, "0.77")
+        self.thr_entry.grid(row=0, column=0, padx=(4, 6))
+        tk.Button(thr_row, text="적용", bg="#455a64", fg="white",
+                  activebackground="#607d8b", relief="flat",
+                  command=lambda: ros_param_set(
+                      "control.track_throttle", float(self.thr_entry.get()))
+                  ).grid(row=0, column=1)
 
         # ── 오른쪽: 풍선 ────────────────────────────────────────────────────
         tk.Label(right, text="풍선 (red_ball)", fg="#aaaaaa", bg="#1e1e1e",
