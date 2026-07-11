@@ -24,7 +24,6 @@ ESP32-S3에서 짐벌 2개의 아날로그 축 4개와 스위치 4개의 상태�
 
 ## 2. 좌표계 및 회전 방향
 
-![드론 좌표계]
 <img width="886" height="666" alt="image" src="https://github.com/user-attachments/assets/ce088d08-abd4-4d44-a44c-a36500f112f2" />
 
 드론의 중심을 기준으로 다음 축을 사용합니다.
