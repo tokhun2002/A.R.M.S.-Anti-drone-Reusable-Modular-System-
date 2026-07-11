@@ -402,13 +402,3 @@ Kill  : 실제 ON/OFF 상태
 - `RAW_DEBUG_MODE=true`이면 Jetson으로 정상 조종 패킷이 전송되지 않습니다.
 
 ---
-
-## 16. 파일 구성
-
-```text
-ESP32_S3_Controller/
-├── controller.ino
-├── README.md
-└── docs/
-    └── controller_coordinate_system.png
-```
