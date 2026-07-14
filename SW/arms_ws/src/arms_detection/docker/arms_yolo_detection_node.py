@@ -1,8 +1,8 @@
 """
 A.R.M.S. Detection Node — runs inside the Docker container.
 
-Subscribes : /arms/image_raw  (sensor_msgs/Image)
-Publishes  : /arms/detections (arms_msgs/DetectionArray)
+Subscribes : /arms/image_raw       (sensor_msgs/Image)
+Publishes  : /arms/yolo_detections (arms_msgs/DetectionArray)
 
 Model path is read from the env var ARMS_MODEL (default: /models/drone.pt).
 """
@@ -18,7 +18,7 @@ from ultralytics import YOLO
 
 from arms_msgs.msg import BoundingBox, DetectionArray
 
-MODEL_PATH = os.environ.get("ARMS_MODEL", "/models/best.onnx")
+MODEL_PATH = os.environ.get("ARMS_MODEL", "/models/best.engine")
 CONFIDENCE = float(os.environ.get("ARMS_CONF", "0.5"))
 IOU = float(os.environ.get("ARMS_IOU",  "0.45"))
 
