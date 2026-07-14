@@ -30,9 +30,6 @@ ament_target_dependencies(arms_command_hw_node rclcpp sensor_msgs)
 install(TARGETS arms_command_hw_node
   DESTINATION lib/${PROJECT_NAME})
 
-install(DIRECTORY include/
-  DESTINATION include)
-
 install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME})
 
