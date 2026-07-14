@@ -19,28 +19,12 @@ install(PROGRAMS
   RENAME arms_command_node
 )
 
-# Optional GPIO support
-find_library(GPIOD_LIB gpiod)
 
-add_library(arms_command_hw STATIC
-  src/ads1115.cpp
-  src/gpio_input.cpp
+# ESP32 UART 수신 노드
+add_executable(arms_command_hw_node
+  src/arms_command_uart_node.cpp
 )
-target_include_directories(arms_command_hw PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-)
-if(GPIOD_LIB)
-  target_compile_definitions(arms_command_hw PRIVATE HAS_GPIOD)
-  target_link_libraries(arms_command_hw ${GPIOD_LIB})
-  message(STATUS "libgpiod found — GPIO support enabled.")
-else()
-  message(STATUS "libgpiod not found — GPIO real-input support disabled. fake_mode still works.")
-endif()
 
-add_executable(arms_command_hw_node src/arms_command_hw_node.cpp)
-target_include_directories(arms_command_hw_node PRIVATE include)
-target_link_libraries(arms_command_hw_node arms_command_hw)
 ament_target_dependencies(arms_command_hw_node rclcpp sensor_msgs)
 
 install(TARGETS arms_command_hw_node

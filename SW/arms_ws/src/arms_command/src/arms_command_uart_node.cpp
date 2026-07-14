@@ -1,0 +1,527 @@
+#include <algorithm>
+#include <array>
+#include <cerrno>
+#include <charconv>
+#include <chrono>
+#include <cstdint>
+#include <cstring>
+#include <fcntl.h>
+#include <functional>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <termios.h>
+#include <unistd.h>
+#include <vector>
+
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/joy.hpp>
+
+namespace arms_command
+{
+
+using SteadyClock = std::chrono::steady_clock;
+
+struct ControllerPacket
+{
+  uint32_t seq = 0;
+  int throttle = 0;
+  int roll = 0;
+  int pitch = 0;
+  int yaw = 0;
+  int fire = 0;
+  int mode = 0;
+  int eland = 0;
+  int kill = 0;
+};
+
+class ArmsCommandUartNode : public rclcpp::Node
+{
+public:
+  ArmsCommandUartNode()
+  : Node("arms_command_hw_node")
+  {
+    topic_name_ = declare_parameter<std::string>("topic_name", "/joy");
+
+    serial_device_ =
+      declare_parameter<std::string>("serial.device", "/dev/ttyTHS1");
+    serial_baud_ = declare_parameter<int>("serial.baud", 115200);
+    poll_rate_hz_ = declare_parameter<double>("serial.poll_rate_hz", 200.0);
+    max_line_length_ =
+      declare_parameter<int>("serial.max_line_length", 128);
+
+    failsafe_timeout_ms_ =
+      declare_parameter<int>("failsafe.timeout_ms", 300);
+    failsafe_publish_rate_hz_ =
+      declare_parameter<double>("failsafe.publish_rate_hz", 20.0);
+    status_log_rate_hz_ =
+      declare_parameter<double>("log.status_rate_hz", 1.0);
+
+    if (poll_rate_hz_ <= 0.0) {
+      throw std::runtime_error("serial.poll_rate_hz must be greater than 0");
+    }
+    if (max_line_length_ < 32) {
+      throw std::runtime_error("serial.max_line_length must be at least 32");
+    }
+    if (failsafe_timeout_ms_ <= 0) {
+      throw std::runtime_error("failsafe.timeout_ms must be greater than 0");
+    }
+    if (failsafe_publish_rate_hz_ <= 0.0) {
+      throw std::runtime_error("failsafe.publish_rate_hz must be greater than 0");
+    }
+
+    joy_pub_ = create_publisher<sensor_msgs::msg::Joy>(topic_name_, 10);
+
+    openSerialPort();
+
+    const auto now_steady = SteadyClock::now();
+    last_valid_packet_time_ = now_steady;
+    last_failsafe_publish_time_ = now_steady - std::chrono::seconds(1);
+    last_status_log_time_ = now_steady - std::chrono::seconds(1);
+
+    const auto period = std::chrono::duration<double>(1.0 / poll_rate_hz_);
+    poll_timer_ = create_wall_timer(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(period),
+      std::bind(&ArmsCommandUartNode::pollSerial, this));
+
+    RCLCPP_INFO(
+      get_logger(),
+      "UART controller node started: device=%s, baud=%d, topic=%s, poll=%.1f Hz",
+      serial_device_.c_str(), serial_baud_, topic_name_.c_str(), poll_rate_hz_);
+    RCLCPP_INFO(
+      get_logger(),
+      "Expected packet: CTRL,seq,throttle,roll,pitch,yaw,fire,mode,eland,kill");
+  }
+
+  ~ArmsCommandUartNode() override
+  {
+    closeSerialPort();
+  }
+
+private:
+  static speed_t baudToTermios(int baud)
+  {
+    switch (baud) {
+      case 9600:
+        return B9600;
+      case 19200:
+        return B19200;
+      case 38400:
+        return B38400;
+      case 57600:
+        return B57600;
+      case 115200:
+        return B115200;
+#ifdef B230400
+      case 230400:
+        return B230400;
+#endif
+      default:
+        throw std::runtime_error("Unsupported serial baud rate: " + std::to_string(baud));
+    }
+  }
+
+  void openSerialPort()
+  {
+    serial_fd_ = ::open(
+      serial_device_.c_str(),
+      O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
+
+    if (serial_fd_ < 0) {
+      throw std::runtime_error(
+              "Failed to open " + serial_device_ + ": " + std::strerror(errno));
+    }
+
+    termios tty{};
+    if (tcgetattr(serial_fd_, &tty) != 0) {
+      const std::string error = std::strerror(errno);
+      closeSerialPort();
+      throw std::runtime_error("tcgetattr failed: " + error);
+    }
+
+    cfmakeraw(&tty);
+
+    const speed_t speed = baudToTermios(serial_baud_);
+    cfsetispeed(&tty, speed);
+    cfsetospeed(&tty, speed);
+
+    // 8 data bits, no parity, 1 stop bit, no flow control (8N1).
+    tty.c_cflag &= ~CSIZE;
+    tty.c_cflag |= CS8;
+    tty.c_cflag &= ~PARENB;
+    tty.c_cflag &= ~CSTOPB;
+#ifdef CRTSCTS
+    tty.c_cflag &= ~CRTSCTS;
+#endif
+    tty.c_cflag |= CLOCAL | CREAD;
+
+    // Non-blocking read. The ROS timer performs polling.
+    tty.c_cc[VMIN] = 0;
+    tty.c_cc[VTIME] = 0;
+
+    if (tcsetattr(serial_fd_, TCSANOW, &tty) != 0) {
+      const std::string error = std::strerror(errno);
+      closeSerialPort();
+      throw std::runtime_error("tcsetattr failed: " + error);
+    }
+
+    tcflush(serial_fd_, TCIOFLUSH);
+  }
+
+  void closeSerialPort()
+  {
+    if (serial_fd_ >= 0) {
+      ::close(serial_fd_);
+      serial_fd_ = -1;
+    }
+  }
+
+  void pollSerial()
+  {
+    readAvailableBytes();
+    processCompleteLines();
+    publishFailsafeWhenTimedOut();
+  }
+
+  void readAvailableBytes()
+  {
+    if (serial_fd_ < 0) {
+      return;
+    }
+
+    std::array<char, 256> buffer{};
+
+    while (true) {
+      const ssize_t count = ::read(serial_fd_, buffer.data(), buffer.size());
+
+      if (count > 0) {
+        rx_buffer_.append(buffer.data(), static_cast<std::size_t>(count));
+        continue;
+      }
+
+      if (count == 0) {
+        break;
+      }
+
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        break;
+      }
+
+      RCLCPP_ERROR_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "UART read failed on %s: %s",
+        serial_device_.c_str(), std::strerror(errno));
+      break;
+    }
+
+    // Prevent unlimited growth if the sender is connected with a wrong baud rate
+    // or never sends a newline.
+    constexpr std::size_t kMaximumRxBuffer = 4096;
+    if (rx_buffer_.size() > kMaximumRxBuffer) {
+      RCLCPP_WARN(
+        get_logger(),
+        "UART receive buffer exceeded %zu bytes. Clearing corrupted data.",
+        kMaximumRxBuffer);
+      rx_buffer_.clear();
+    }
+  }
+
+  void processCompleteLines()
+  {
+    while (true) {
+      const std::size_t newline_pos = rx_buffer_.find('\n');
+      if (newline_pos == std::string::npos) {
+        return;
+      }
+
+      std::string line = rx_buffer_.substr(0, newline_pos);
+      rx_buffer_.erase(0, newline_pos + 1);
+
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
+
+      if (line.empty()) {
+        continue;
+      }
+
+      if (line.size() > static_cast<std::size_t>(max_line_length_)) {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 1000,
+          "Discarding overlong UART line (%zu bytes)", line.size());
+        continue;
+      }
+
+      ControllerPacket packet;
+      std::string parse_error;
+      if (!parsePacket(line, packet, parse_error)) {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 1000,
+          "Discarding invalid UART packet: %s; line='%s'",
+          parse_error.c_str(), line.c_str());
+        continue;
+      }
+
+      handleValidPacket(packet);
+    }
+  }
+
+  static std::vector<std::string_view> splitCsv(const std::string & line)
+  {
+    std::vector<std::string_view> fields;
+    std::size_t begin = 0;
+
+    while (true) {
+      const std::size_t comma = line.find(',', begin);
+      if (comma == std::string::npos) {
+        fields.emplace_back(line.data() + begin, line.size() - begin);
+        break;
+      }
+
+      fields.emplace_back(line.data() + begin, comma - begin);
+      begin = comma + 1;
+    }
+
+    return fields;
+  }
+
+  template<typename IntegerT>
+  static bool parseInteger(std::string_view text, IntegerT & value)
+  {
+    if (text.empty()) {
+      return false;
+    }
+
+    const char * first = text.data();
+    const char * last = text.data() + text.size();
+    const auto result = std::from_chars(first, last, value);
+    return result.ec == std::errc{} && result.ptr == last;
+  }
+
+  static bool inRange(int value, int minimum, int maximum)
+  {
+    return value >= minimum && value <= maximum;
+  }
+
+  static bool parsePacket(
+    const std::string & line,
+    ControllerPacket & packet,
+    std::string & error)
+  {
+    const auto fields = splitCsv(line);
+
+    // CTRL + 9 data fields = 10 CSV fields.
+    if (fields.size() != 10) {
+      error = "expected 10 CSV fields, got " + std::to_string(fields.size());
+      return false;
+    }
+
+    if (fields[0] != "CTRL") {
+      error = "packet prefix is not CTRL";
+      return false;
+    }
+
+    if (!parseInteger(fields[1], packet.seq) ||
+      !parseInteger(fields[2], packet.throttle) ||
+      !parseInteger(fields[3], packet.roll) ||
+      !parseInteger(fields[4], packet.pitch) ||
+      !parseInteger(fields[5], packet.yaw) ||
+      !parseInteger(fields[6], packet.fire) ||
+      !parseInteger(fields[7], packet.mode) ||
+      !parseInteger(fields[8], packet.eland) ||
+      !parseInteger(fields[9], packet.kill))
+    {
+      error = "one or more fields are not valid integers";
+      return false;
+    }
+
+    if (!inRange(packet.throttle, 0, 1000)) {
+      error = "throttle is outside 0..1000";
+      return false;
+    }
+    if (!inRange(packet.roll, -1000, 1000) ||
+      !inRange(packet.pitch, -1000, 1000) ||
+      !inRange(packet.yaw, -1000, 1000))
+    {
+      error = "roll, pitch, or yaw is outside -1000..1000";
+      return false;
+    }
+    if (!inRange(packet.fire, 0, 1) ||
+      !inRange(packet.mode, 0, 1) ||
+      !inRange(packet.eland, 0, 1) ||
+      !inRange(packet.kill, 0, 1))
+    {
+      error = "fire, mode, eland, and kill must be 0 or 1";
+      return false;
+    }
+
+    return true;
+  }
+
+  void handleValidPacket(const ControllerPacket & packet)
+  {
+    if (have_last_seq_) {
+      const uint32_t expected = last_seq_ + 1U;
+      if (packet.seq != expected) {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 1000,
+          "UART sequence jump: expected=%u received=%u",
+          expected, packet.seq);
+      }
+    }
+
+    last_seq_ = packet.seq;
+    have_last_seq_ = true;
+    last_valid_packet_time_ = SteadyClock::now();
+
+    if (failsafe_active_) {
+      RCLCPP_INFO(get_logger(), "UART packets recovered. Failsafe released.");
+      failsafe_active_ = false;
+    }
+
+    publishJoy(packet);
+    logStatus(packet);
+  }
+
+  void publishJoy(const ControllerPacket & packet)
+  {
+    sensor_msgs::msg::Joy msg;
+    msg.header.stamp = now();
+    msg.header.frame_id = "controller_input";
+
+    // Keep the old ROS2 Joy contract so downstream nodes do not need changes.
+    // axes[0] roll     : -1.0 .. +1.0
+    // axes[1] pitch    : -1.0 .. +1.0
+    // axes[2] throttle : -1.0 .. +1.0 (ESP32 0..1000 is converted)
+    // axes[3] yaw      : -1.0 .. +1.0
+    msg.axes = {
+      static_cast<float>(packet.roll) / 1000.0F,
+      static_cast<float>(packet.pitch) / 1000.0F,
+      static_cast<float>(packet.throttle) / 500.0F - 1.0F,
+      static_cast<float>(packet.yaw) / 1000.0F
+    };
+
+    // Keep the old button order. The former LAUNCH button is now ESP32 FIRE.
+    // buttons[0] kill, buttons[1] emergency landing,
+    // buttons[2] auto/manual mode, buttons[3] fire/launch.
+    msg.buttons = {
+      packet.kill,
+      packet.eland,
+      packet.mode,
+      packet.fire
+    };
+
+    joy_pub_->publish(msg);
+  }
+
+  void publishFailsafeWhenTimedOut()
+  {
+    const auto now_steady = SteadyClock::now();
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      now_steady - last_valid_packet_time_).count();
+
+    if (elapsed_ms <= failsafe_timeout_ms_) {
+      return;
+    }
+
+    if (!failsafe_active_) {
+      failsafe_active_ = true;
+      RCLCPP_ERROR(
+        get_logger(),
+        "No valid ESP32 packet for %lld ms. Publishing UART failsafe: throttle minimum, kill=1.",
+        static_cast<long long>(elapsed_ms));
+    }
+
+    const auto failsafe_period = std::chrono::duration<double>(
+      1.0 / failsafe_publish_rate_hz_);
+
+    if ((now_steady - last_failsafe_publish_time_) < failsafe_period) {
+      return;
+    }
+
+    ControllerPacket safe;
+    safe.throttle = 0;
+    safe.roll = 0;
+    safe.pitch = 0;
+    safe.yaw = 0;
+    safe.fire = 0;
+    safe.mode = 0;
+    safe.eland = 0;
+    safe.kill = 1;
+
+    publishJoy(safe);
+    last_failsafe_publish_time_ = now_steady;
+  }
+
+  void logStatus(const ControllerPacket & packet)
+  {
+    if (status_log_rate_hz_ <= 0.0) {
+      return;
+    }
+
+    const auto now_steady = SteadyClock::now();
+    const auto interval = std::chrono::duration<double>(1.0 / status_log_rate_hz_);
+    if ((now_steady - last_status_log_time_) < interval) {
+      return;
+    }
+
+    const float throttle_ros = static_cast<float>(packet.throttle) / 500.0F - 1.0F;
+
+    RCLCPP_INFO(
+      get_logger(),
+      "RX seq=%u raw[T,R,P,Y]=[%d,%d,%d,%d] ROS axes=[%.3f,%.3f,%.3f,%.3f] buttons[K,E,M,F]=[%d,%d,%d,%d]",
+      packet.seq,
+      packet.throttle, packet.roll, packet.pitch, packet.yaw,
+      static_cast<float>(packet.roll) / 1000.0F,
+      static_cast<float>(packet.pitch) / 1000.0F,
+      throttle_ros,
+      static_cast<float>(packet.yaw) / 1000.0F,
+      packet.kill, packet.eland, packet.mode, packet.fire);
+
+    last_status_log_time_ = now_steady;
+  }
+
+  std::string topic_name_;
+  std::string serial_device_;
+  int serial_baud_ = 115200;
+  double poll_rate_hz_ = 200.0;
+  int max_line_length_ = 128;
+
+  int failsafe_timeout_ms_ = 300;
+  double failsafe_publish_rate_hz_ = 20.0;
+  double status_log_rate_hz_ = 1.0;
+
+  int serial_fd_ = -1;
+  std::string rx_buffer_;
+
+  uint32_t last_seq_ = 0;
+  bool have_last_seq_ = false;
+  bool failsafe_active_ = false;
+
+  SteadyClock::time_point last_valid_packet_time_;
+  SteadyClock::time_point last_failsafe_publish_time_;
+  SteadyClock::time_point last_status_log_time_;
+
+  rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr joy_pub_;
+  rclcpp::TimerBase::SharedPtr poll_timer_;
+};
+
+}  // namespace arms_command
+
+int main(int argc, char ** argv)
+{
+  rclcpp::init(argc, argv);
+
+  try {
+    rclcpp::spin(std::make_shared<arms_command::ArmsCommandUartNode>());
+  } catch (const std::exception & error) {
+    RCLCPP_FATAL(rclcpp::get_logger("arms_command_uart"), "%s", error.what());
+    rclcpp::shutdown();
+    return 1;
+  }
+
+  rclcpp::shutdown();
+  return 0;
+}

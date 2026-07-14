@@ -1,29 +1,25 @@
 arms_command_hw_node:
   ros__parameters:
-    # true: no hardware required. Publishes simulated ADS1115-like raw values.
-    # false: read /dev/i2c-1 ADS1115 and GPIO switch inputs.
-    fake_mode: true
-
+    # ROS2 Joy 메시지를 발행할 토픽
     topic_name: /joy
-    publish_rate_hz: 50.0
 
-    i2c.device: /dev/i2c-1
-    i2c.address: 72          # 0x48, ADS1115 ADDR -> GND
+    # Jetson Orin Nano Super의 J12 UART RX
+    serial.device: /dev/ttyTHS1
 
-    # ADS1115 PGA ±4.096 V, joystick supplied by 3.3 V:
-    # 0.0 V  ≈ 0
-    # 1.65 V ≈ 13200
-    # 3.3 V  ≈ 26400
-    adc.raw_min: [0, 0, 0, 0]
-    adc.raw_center: [13200, 13200, 13200, 13200]
-    adc.raw_max: [26400, 26400, 26400, 26400]
+    # ESP32와 동일한 통신속도
+    serial.baud: 115200
 
-    # Change true/false if a stick direction is reversed.
-    adc.invert_axes: [false, false, false, false]
+    # UART 버퍼 확인 주기
+    serial.poll_rate_hz: 200.0
 
-    # libgpiod GPIO line offsets, NOT 40-pin BOARD numbers.
-    # Check with gpioinfo on Jetson. Keep [-1,-1,-1] while fake_mode=true.
-    gpio.chip: gpiochip0
-    gpio.lines: [-1, -1, -1, -1]   # [kill, emergency_land, mode, launch]
-    gpio.active_low: true      # switch to GND: LOW means ON/pressed
-    gpio.request_pullup: true
+    # 최대 패킷 길이
+    serial.max_line_length: 128
+
+    # 300ms 동안 패킷이 없으면 Kill failsafe
+    failsafe.timeout_ms: 300
+
+    # Failsafe 상태 메시지 발행 주기
+    failsafe.publish_rate_hz: 20.0
+
+    # 수신 상태 로그 표시 주기
+    log.status_rate_hz: 1.0
