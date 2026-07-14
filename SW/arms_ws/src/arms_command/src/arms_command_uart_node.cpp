@@ -13,6 +13,7 @@
 #include <string_view>
 #include <system_error>
 #include <termios.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 #include <vector>
 
@@ -46,7 +47,7 @@ public:
     topic_name_ = declare_parameter<std::string>("topic_name", "/joy");
 
     serial_device_ =
-      declare_parameter<std::string>("serial.device", "/dev/ttyTHS1");
+      declare_parameter<std::string>("serial.device", "/dev/ttyACM0");
     serial_baud_ = declare_parameter<int>("serial.baud", 115200);
     poll_rate_hz_ = declare_parameter<double>("serial.poll_rate_hz", 200.0);
     max_line_length_ =
@@ -72,7 +73,10 @@ public:
       throw std::runtime_error("failsafe.publish_rate_hz must be greater than 0");
     }
 
-    joy_pub_ = create_publisher<sensor_msgs::msg::Joy>(topic_name_, 10);
+    joy_pub_ = create_publisher<sensor_msgs::msg::Joy>(
+      topic_name_,
+      rclcpp::SensorDataQoS().keep_last(1)
+    );
 
     openSerialPort();
 
@@ -88,7 +92,7 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "UART controller node started: device=%s, baud=%d, topic=%s, poll=%.1f Hz",
+      "USB controller node started: device=%s, baud=%d, topic=%s, poll=%.1f Hz",
       serial_device_.c_str(), serial_baud_, topic_name_.c_str(), poll_rate_hz_);
     RCLCPP_INFO(
       get_logger(),
@@ -167,6 +171,25 @@ private:
       throw std::runtime_error("tcsetattr failed: " + error);
     }
 
+    // ESP32-S3 USB CDC는 호스트가 DTR을 활성화해야 데이터를 내보내는 경우가 있다.
+    // RTS는 비활성화하여 불필요한 리셋 신호를 피한다.
+    int modem_bits = 0;
+    if (::ioctl(serial_fd_, TIOCMGET, &modem_bits) == 0) {
+      modem_bits |= TIOCM_DTR;
+      modem_bits &= ~TIOCM_RTS;
+      if (::ioctl(serial_fd_, TIOCMSET, &modem_bits) != 0) {
+        RCLCPP_WARN(
+          get_logger(),
+          "Failed to set DTR/RTS on %s: %s",
+          serial_device_.c_str(), std::strerror(errno));
+      }
+    } else {
+      RCLCPP_WARN(
+        get_logger(),
+        "Failed to read DTR/RTS state on %s: %s",
+        serial_device_.c_str(), std::strerror(errno));
+    }
+
     tcflush(serial_fd_, TCIOFLUSH);
   }
 
@@ -211,7 +234,7 @@ private:
 
       RCLCPP_ERROR_THROTTLE(
         get_logger(), *get_clock(), 1000,
-        "UART read failed on %s: %s",
+        "USB serial read failed on %s: %s",
         serial_device_.c_str(), std::strerror(errno));
       break;
     }
@@ -222,7 +245,7 @@ private:
     if (rx_buffer_.size() > kMaximumRxBuffer) {
       RCLCPP_WARN(
         get_logger(),
-        "UART receive buffer exceeded %zu bytes. Clearing corrupted data.",
+        "USB serial receive buffer exceeded %zu bytes. Clearing corrupted data.",
         kMaximumRxBuffer);
       rx_buffer_.clear();
     }
@@ -250,7 +273,7 @@ private:
       if (line.size() > static_cast<std::size_t>(max_line_length_)) {
         RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 1000,
-          "Discarding overlong UART line (%zu bytes)", line.size());
+          "Discarding overlong USB serial line (%zu bytes)", line.size());
         continue;
       }
 
@@ -259,7 +282,7 @@ private:
       if (!parsePacket(line, packet, parse_error)) {
         RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 1000,
-          "Discarding invalid UART packet: %s; line='%s'",
+          "Discarding invalid USB serial packet: %s; line='%s'",
           parse_error.c_str(), line.c_str());
         continue;
       }
@@ -367,7 +390,7 @@ private:
       if (packet.seq != expected) {
         RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 1000,
-          "UART sequence jump: expected=%u received=%u",
+          "USB serial sequence jump: expected=%u received=%u",
           expected, packet.seq);
       }
     }
@@ -377,7 +400,7 @@ private:
     last_valid_packet_time_ = SteadyClock::now();
 
     if (failsafe_active_) {
-      RCLCPP_INFO(get_logger(), "UART packets recovered. Failsafe released.");
+      RCLCPP_INFO(get_logger(), "USB packets recovered. Failsafe released.");
       failsafe_active_ = false;
     }
 
@@ -391,26 +414,24 @@ private:
     msg.header.stamp = now();
     msg.header.frame_id = "controller_input";
 
-    // Keep the old ROS2 Joy contract so downstream nodes do not need changes.
-    // axes[0] roll     : -1.0 .. +1.0
-    // axes[1] pitch    : -1.0 .. +1.0
-    // axes[2] throttle : -1.0 .. +1.0 (ESP32 0..1000 is converted)
+    // ESP32 패킷과 같은 순서를 유지한다.
+    // axes[0] throttle :  0.0 .. +1.0
+    // axes[1] roll     : -1.0 .. +1.0
+    // axes[2] pitch    : -1.0 .. +1.0
     // axes[3] yaw      : -1.0 .. +1.0
     msg.axes = {
+      static_cast<float>(packet.throttle) / 1000.0F,
       static_cast<float>(packet.roll) / 1000.0F,
       static_cast<float>(packet.pitch) / 1000.0F,
-      static_cast<float>(packet.throttle) / 500.0F - 1.0F,
       static_cast<float>(packet.yaw) / 1000.0F
     };
 
-    // Keep the old button order. The former LAUNCH button is now ESP32 FIRE.
-    // buttons[0] kill, buttons[1] emergency landing,
-    // buttons[2] auto/manual mode, buttons[3] fire/launch.
+    // ESP32 패킷 순서: fire, mode, eland, kill.
     msg.buttons = {
-      packet.kill,
-      packet.eland,
+      packet.fire,
       packet.mode,
-      packet.fire
+      packet.eland,
+      packet.kill
     };
 
     joy_pub_->publish(msg);
@@ -430,7 +451,7 @@ private:
       failsafe_active_ = true;
       RCLCPP_ERROR(
         get_logger(),
-        "No valid ESP32 packet for %lld ms. Publishing UART failsafe: throttle minimum, kill=1.",
+        "No valid ESP32 packet for %lld ms. Publishing USB failsafe: throttle minimum, kill=1.",
         static_cast<long long>(elapsed_ms));
     }
 
@@ -467,18 +488,18 @@ private:
       return;
     }
 
-    const float throttle_ros = static_cast<float>(packet.throttle) / 500.0F - 1.0F;
+    const float throttle_ros = static_cast<float>(packet.throttle) / 1000.0F;
 
     RCLCPP_INFO(
       get_logger(),
-      "RX seq=%u raw[T,R,P,Y]=[%d,%d,%d,%d] ROS axes=[%.3f,%.3f,%.3f,%.3f] buttons[K,E,M,F]=[%d,%d,%d,%d]",
+      "RX seq=%u raw[T,R,P,Y]=[%d,%d,%d,%d] ROS axes[T,R,P,Y]=[%.3f,%.3f,%.3f,%.3f] buttons[F,M,E,K]=[%d,%d,%d,%d]",
       packet.seq,
       packet.throttle, packet.roll, packet.pitch, packet.yaw,
+      throttle_ros,
       static_cast<float>(packet.roll) / 1000.0F,
       static_cast<float>(packet.pitch) / 1000.0F,
-      throttle_ros,
       static_cast<float>(packet.yaw) / 1000.0F,
-      packet.kill, packet.eland, packet.mode, packet.fire);
+      packet.fire, packet.mode, packet.eland, packet.kill);
 
     last_status_log_time_ = now_steady;
   }

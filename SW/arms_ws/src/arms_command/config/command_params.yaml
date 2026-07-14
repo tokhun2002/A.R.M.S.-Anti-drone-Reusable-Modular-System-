@@ -3,8 +3,8 @@ arms_command_hw_node:
     # ROS2 Joy 메시지를 발행할 토픽
     topic_name: /joy
 
-    # Jetson Orin Nano Super의 J12 UART RX
-    serial.device: /dev/ttyTHS1
+    # Jetson Orin Nano Super의 USB CDC 장치
+    serial.device: /dev/ttyACM0
 
     # ESP32와 동일한 통신속도
     serial.baud: 115200
