@@ -9,8 +9,14 @@
 FROM ultralytics/ultralytics:latest-jetson-jetpack6
 
 # ---- ROS2 Humble repository ----
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl gnupg lsb-release \
+# 'universe' repo must be enabled: several transitive deps of the ros-humble-*
+# packages live there (official ROS 2 Humble install prerequisite).
+# DEBIAN_FRONTEND=noninteractive prevents tzdata (pulled in by
+# software-properties-common) from blocking the build on an interactive prompt.
+RUN export DEBIAN_FRONTEND=noninteractive \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        curl gnupg lsb-release software-properties-common \
+    && add-apt-repository -y universe \
     && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
         -o /usr/share/keyrings/ros-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) \
@@ -18,6 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
         > /etc/apt/sources.list.d/ros2.list \
     && apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        python3-dev \
         ros-humble-rclpy \
         ros-humble-sensor-msgs \
         ros-humble-rosidl-default-generators \

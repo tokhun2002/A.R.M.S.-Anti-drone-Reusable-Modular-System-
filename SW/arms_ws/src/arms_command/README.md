@@ -1,213 +1,129 @@
-# controller_input_node
+# arms_command
 
-Jetson Orin Nano Super에서 조종기 입력을 읽어 ROS2 `/joy` 토픽으로 publish하는 노드이다.  
-`arms_command` 패키지에 통합되어 있다.
-
-- ADS1115 A0~A3 → `sensor_msgs/msg/Joy.axes[0..3]`
-- GPIO 스위치 4개 → `sensor_msgs/msg/Joy.buttons[0..3]`
-- 출력 토픽: `/joy`
-
----
-
-## 사용 부품
-
-### 짐벌 2개
-
-- 링크: https://www.rcbank.co.kr/shop/goods/goods_view.php?goodsno=99100&category=026002008005#review
-
-### 스위치 4개
-
-- 링크: https://www.devicemart.co.kr/goods/view?no=1065126&srsltid=AfmBOooxtzKZoxFYRMIDeEqnLqjBQQcpw4nxR1Z-YsNGoK2pu-5FIOxv
-- 스위치1: 킬스위치
-- 스위치2: 비상착륙
-- 스위치3: 자동/수동 비행모드 선택
-- 스위치4: LAUNCH (LOCK → TRACK 전환)
+ESP32-S3 조종기 패킷을 Jetson의 USB CDC 장치에서 읽어 ROS2 `sensor_msgs/msg/Joy`로 변환하는 패키지입니다. 기본 출력 토픽은 `/joy`입니다.
 
 ```text
-OFF / 안 눌림 = 0
-ON / 눌림     = 1
+ESP32-S3 USB-C → Jetson USB → /dev/ttyACM0 → arms_command_hw_node → /joy
 ```
 
-### ADS1115 ADC
+## 패킷 및 ROS2 순서
 
-- 링크: https://www.devicemart.co.kr/goods/view?no=1327550
-
----
-
-## 전체 구조
+ESP32 패킷:
 
 ```text
-controller_input_node
-    ↓
-/dev/i2c-1 에서 ADS1115 A0~A3 읽기
-    ↓
-GPIO 스위치 4개 읽기
-    ↓
-sensor_msgs/msg/Joy publish
+CTRL,seq,throttle,roll,pitch,yaw,fire,mode,eland,kill
 ```
 
----
-
-## Joy 메시지 매핑
+ROS2에서도 ESP32와 같은 순서를 사용합니다.
 
 ```text
-axes[0] = 왼쪽 짐벌 Signal 1
-axes[1] = 왼쪽 짐벌 Signal 2
-axes[2] = 오른쪽 짐벌 Signal 1
-axes[3] = 오른쪽 짐벌 Signal 2
+axes[0] = throttle
+axes[1] = roll
+axes[2] = pitch
+axes[3] = yaw
 
-buttons[0] = 킬스위치
-buttons[1] = 비상착륙
-buttons[2] = 자동/수동 비행모드 선택
-buttons[3] = LAUNCH (LOCK → TRACK 전환)
+buttons[0] = fire
+buttons[1] = mode
+buttons[2] = eland
+buttons[3] = kill
 ```
 
-짐벌 값은 `-1.0 ~ 1.0` 범위로 정규화된다.
+축 변환 범위:
 
 ```text
-최소 방향 ≈ -1.0
-중앙     ≈  0.0
-최대 방향 ≈  1.0
+Throttle 0~1000      →  0.0~1.0
+Roll/Pitch/Yaw ±1000 → -1.0~1.0
 ```
 
----
-
-## fake_mode
-
-설정 파일 위치:
+통신이 300 ms 이상 끊기면 failsafe로 다음 값을 발행합니다.
 
 ```text
-arms_command/config/controller_input_params.yaml
+axes   = [0.0, 0.0, 0.0, 0.0]
+buttons = [0, 0, 0, 1]
 ```
 
-부품 없이 가상값으로 테스트할 때:
+## Jetson 최초 설정
 
-```yaml
-fake_mode: true
-```
-
-실제 ADS1115와 GPIO를 읽을 때:
-
-```yaml
-fake_mode: false
-```
-
-`fake_mode: true`에서는 실제 하드웨어 대신 가상의 ADS1115 raw 값을 생성한다.  
-짐벌은 3.3V 구동, ADS1115는 ±4.096V 범위로 설정한다고 가정한다.
-
-```text
-0.0V   ≈ raw 0
-1.65V  ≈ raw 13200
-3.3V   ≈ raw 26400
-```
-
----
-
-## ADS1115 설정
-
-기본 설정:
-
-```yaml
-i2c:
-  device: "/dev/i2c-1"
-  address: 72
-```
-
-`72`는 10진수 주소이고, 16진수로는 `0x48`이다.  
-ADS1115의 `ADDR` 핀을 GND에 연결하면 기본 주소는 `0x48`이다.
-
-I2C 인식 확인:
+ESP32-S3를 데이터 통신이 가능한 USB 케이블로 연결한 뒤 장치를 확인합니다.
 
 ```bash
-i2cdetect -y -r 1
+ls -l /dev/ttyACM*
 ```
 
-정상 연결 시 `0x48` 주소가 보여야 한다.
-
----
-
-## GPIO 주의사항
-
-Jetson 40핀 기준으로는 29번, 31번, 33번, 35번 핀 등을 사용한다.
-
-하지만 C++ `libgpiod`에서는 40핀 보드 번호가 아니라 **GPIO line offset**을 사용한다.
-
-```text
-Jetson 40핀 BOARD pin number ≠ libgpiod GPIO line offset
-```
-
-따라서 실제 하드웨어 모드에서는 `gpioinfo`로 line offset을 확인한 뒤 설정 파일에 넣어야 한다.
+시리얼 권한이 없다면 다음을 한 번 실행하고 재부팅합니다.
 
 ```bash
-gpioinfo
-```
-
-설정 예시:
-
-```yaml
-gpio:
-  chip: "gpiochip0"
-  lines: [12, 13, 14, 15]   # [kill, emergency_land, mode, launch]
-```
-
-위 숫자는 예시이며, 실제 Jetson에서 확인한 값을 사용해야 한다.
-
----
-
-## 필요한 패키지 설치
-
-```bash
-sudo apt update
-sudo apt install -y libgpiod-dev gpiod i2c-tools
-sudo usermod -aG i2c,gpio $USER
+sudo usermod -aG dialout $USER
 sudo reboot
 ```
 
----
-
-## 빌드
+직접 수신 테스트에 필요한 패키지:
 
 ```bash
-cd ~/SW/arms_ws
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select arms_command
-source install/setup.bash
+sudo apt update
+sudo apt install -y python3-serial
 ```
 
----
+## 설정
 
-## 실행
+`config/command_params.yaml`:
 
-실기체:
+```yaml
+serial.device: /dev/ttyACM0
+serial.baud: 115200
+serial.poll_rate_hz: 200.0
+failsafe.timeout_ms: 300
+log.status_rate_hz: 1.0
+```
+
+USB 연결 순서에 따라 장치가 `/dev/ttyACM1`로 바뀌면 설정 파일도 동일하게 수정합니다.
+
+## 빌드 및 실행
+
+저장소 최상위 폴더에서 실행합니다.
 
 ```bash
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-up-to arms_command
+source install/setup.bash
 ros2 launch arms_command command.launch.py
 ```
 
----
-
-## 토픽 확인
-
-다른 터미널에서 실행한다.
+새 터미널에서 출력 확인:
 
 ```bash
-cd ~/SW/arms_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 topic echo /joy
 ```
 
-정상 실행 시 `/joy` 토픽에서 `axes`와 `buttons` 값이 출력된다.
+발행 주기 확인:
 
-```text
-axes:
-- 0.12
-- -0.35
-- 0.48
-- -0.02
-buttons:
-- 0
-- 1
-- 0
-- 0
+```bash
+ros2 topic hz /joy
+```
+
+ESP32가 100 Hz로 전송하므로 정상 상태에서는 약 100 Hz가 나옵니다.
+
+> Arduino Serial Monitor, Python 시리얼 테스트, ROS2 노드는 `/dev/ttyACM0`을 동시에 열 수 없습니다.
+
+## 출력이 느려 보이는 이유
+
+`log.status_rate_hz: 1.0`은 실행 터미널 로그를 1초에 한 번만 출력하도록 제한합니다. 실제 `/joy` 발행 속도와는 다릅니다.
+
+또한 `ros2 topic echo /joy`는 100 Hz 메시지를 YAML 형식으로 계속 출력하므로 터미널 출력이 밀려 실제 제어 입력보다 늦게 보일 수 있습니다. 실제 통신 속도는 다음 명령으로 확인합니다.
+
+```bash
+ros2 topic hz /joy
+```
+
+ESP32의 LPF도 약간의 반응 지연을 만듭니다. 현재 `LPF_ALPHA=0.82`, 100 Hz 설정에서는 통신 자체보다 필터와 터미널 표시가 체감 지연의 주요 원인입니다.
+
+## 주의사항
+
+- 기존 ROS2 순서인 `[roll, pitch, throttle, yaw]`와 `[kill, eland, mode, fire]`를 사용하던 하위 노드는 새 순서에 맞게 수정해야 합니다.
+- 패킷이 수신되지 않으면 다른 프로그램이 `/dev/ttyACM0`을 사용 중인지 확인합니다.
+
+```bash
+sudo fuser -v /dev/ttyACM0
 ```

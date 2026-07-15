@@ -1,58 +1,62 @@
 """
-ONNX → TensorRT FP16 변환 스크립트
+best.pt → TensorRT FP16 엔진 변환 (ultralytics 방식)
 
-입력 : SW/arms_ws/src/arms_detection/docker/models/best.onnx
-출력 : SW/arms_ws/src/arms_detection/docker/models/best_fp16.engine
+ultralytics 의 export 를 쓰면 엔진 파일에 메타데이터(class names / imgsz / task)가
+함께 기록되어, 추론 노드의 `YOLO('...engine')` 가 그대로 로드할 수 있다.
+(raw TensorRT 로 만든 엔진은 이 메타데이터가 없어 ultralytics 가 로드하지 못한다.)
 
-실행:
-    python export_trt.py
+입력 : <models>/best.pt
+출력 : <models>/best.engine   (FP16 양자화)
 
-요구사항: tensorrt, CUDA GPU
-주의: .engine 파일은 빌드한 GPU 아키텍처(Jetson Orin 등)에 종속됨.
-      반드시 실기체(Jetson)에서 실행할 것.
+주의:
+  * .engine 은 빌드한 GPU 아키텍처 + TensorRT 버전에 종속된다.
+    반드시 실기체(Jetson)의 ultralytics 컨테이너 안에서 실행할 것.
+    호스트에는 torch/ultralytics 가 없을 수 있다.
+  * 추론 컨테이너와 동일한 base 이미지(ultralytics jetson jetpack6)에서 만들면
+    TensorRT 버전이 일치해 호환된다.
+
+컨테이너에서 실행 예 (models 디렉토리를 /models 로 마운트):
+    # 스크립트는 반드시 /tmp 등에 마운트할 것. 루트(/)에 두면 컨테이너의
+    # /ultralytics 디렉토리가 패키지를 가려 import 가 깨진다.
+    docker run --rm --runtime nvidia -e NVIDIA_VISIBLE_DEVICES=all -w /tmp \\
+        -v "$PWD/../arms_ws/src/arms_detection/docker/models:/models" \\
+        -v "$PWD/export_trt.py:/tmp/export_trt.py:ro" \\
+        ultralytics/ultralytics:latest-jetson-jetpack6 \\
+        python3 /tmp/export_trt.py
+
+또는 ultralytics CLI 한 줄로도 동일하다:
+    yolo export model=/models/best.pt format=engine half=True device=0
 """
 
+import os
+
+# Jetson(통합 메모리) 워크어라운드: PyTorch 2.x 의 expandable_segments 가
+# Tegra NvMap 에서 큰 가상영역 예약에 실패해 export 중 "NVML_SUCCESS == r" /
+# NvMap error 12 로 죽는다. torch import 전에 꺼야 효과가 있으므로 최상단에서 설정.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:False")
+
 from pathlib import Path
-import tensorrt as trt
 
-ONNX_PATH   = Path(__file__).parent / "../arms_ws/src/arms_detection/docker/models/best.onnx"
-ENGINE_PATH = ONNX_PATH.parent / "best_fp16.engine"
+from ultralytics import YOLO
 
-TRT_LOGGER = trt.Logger(trt.Logger.INFO)
+# 컨테이너에서는 /models/best.pt, 호스트에서 직접 돌릴 땐 repo 경로를 기본값으로.
+_default = Path(__file__).parent / "../arms_ws/src/arms_detection/docker/models/best.pt"
+MODEL_PATH = os.environ.get("ARMS_PT", "/models/best.pt")
+if not Path(MODEL_PATH).exists():
+    MODEL_PATH = str(_default.resolve())
+
+HALF = os.environ.get("ARMS_HALF", "1") not in ("0", "false", "False")
 
 
-def build_engine(onnx_path: Path, engine_path: Path):
-    builder = trt.Builder(TRT_LOGGER)
-    network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
-    parser  = trt.OnnxParser(network, TRT_LOGGER)
+def main():
+    print(f"[INFO] 모델 로드: {MODEL_PATH}")
+    model = YOLO(MODEL_PATH)
 
-    print(f"[INFO] ONNX 파싱 중: {onnx_path}")
-    with open(onnx_path, "rb") as f:
-        if not parser.parse(f.read()):
-            for i in range(parser.num_errors):
-                print(f"[ERROR] {parser.get_error(i)}")
-            raise RuntimeError("ONNX 파싱 실패")
+    print(f"[INFO] TensorRT 엔진 빌드 시작 (half={HALF}) — 수 분 소요...")
+    engine_path = model.export(format="engine", half=HALF, device=0)
 
-    config = builder.create_builder_config()
-    config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 2 << 30)  # 2 GB
-
-    if builder.platform_has_fast_fp16:
-        config.set_flag(trt.BuilderFlag.FP16)
-        print("[INFO] FP16 모드 활성화")
-    else:
-        print("[WARN] 이 GPU는 FP16을 지원하지 않음 → FP32로 빌드")
-
-    print("[INFO] 엔진 빌드 중 (수 분 소요)...")
-    serialized = builder.build_serialized_network(network, config)
-    if serialized is None:
-        raise RuntimeError("엔진 빌드 실패")
-
-    with open(engine_path, "wb") as f:
-        f.write(serialized)
-
-    print(f"[INFO] 저장 완료: {engine_path.resolve()}")
-    print(f"[INFO] 파일 크기: {engine_path.stat().st_size / 1e6:.1f} MB")
+    print(f"[INFO] 저장 완료: {engine_path}")
 
 
 if __name__ == "__main__":
-    build_engine(ONNX_PATH.resolve(), ENGINE_PATH.resolve())
+    main()
