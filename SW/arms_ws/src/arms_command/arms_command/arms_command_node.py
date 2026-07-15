@@ -271,23 +271,19 @@ class PanelGUI:
         self.node.release_launch()
 
     def _on_reset(self):
-        # 1) arms_control → IDLE
+        # 1) Gazebo 월드 전체 초기화 (드론 위치/속도/물리 + PX4 내부 상태 리셋)
+        _bg(lambda: subprocess.run([
+            "gz", "service",
+            "-s", f"/world/{WORLD}/reset",
+            "--reqtype", "gz.msgs.Empty",
+            "--reptype", "gz.msgs.Boolean",
+            "--timeout", "2000",
+            "--req", "",
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        # 2) arms_control → SEARCH (LAUNCH 누르면 바로 TRACK 진입)
         _bg(lambda: subprocess.run(
             ["ros2", "topic", "pub", "--once", "/arms/reset_cmd", "std_msgs/msg/Empty", "{}"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
-        # 2) Gazebo 드론 원점 복귀
-        pose_args = (
-            "position: {x: 0.0, y: 0.0, z: 0.2}, "
-            "orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}"
-        )
-        _bg(lambda: subprocess.run([
-            "gz", "service",
-            "-s", f"/world/{WORLD}/set_pose",
-            "--reqtype", "gz.msgs.Pose",
-            "--reptype", "gz.msgs.Boolean",
-            "--timeout", "1000",
-            "--req", f"name: '{DRONE}', {pose_args}",
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
 
     # ------------------------------------------------------------------
     def toggle_det(self, key):
