@@ -134,9 +134,10 @@ class PanelGUI:
         tk.Button(top, text="LAUNCH (→TRACK)", font=("Arial", 12, "bold"),
                   bg="#d0021b", fg="white", activebackground="#ff1744",
                   command=self._on_launch).pack(pady=(5, 2), fill="x", padx=40)
-        tk.Button(top, text="RESET (드론 원점 복귀)", font=("Arial", 10),
-                  bg="#37474f", fg="white", activebackground="#546e7a",
-                  command=self._on_reset).pack(pady=(0, 4), fill="x", padx=40)
+        self.reset_btn = tk.Button(top, text="RESET (드론 원점 복귀)", font=("Arial", 10),
+                                   bg="#37474f", fg="white", activebackground="#546e7a",
+                                   command=self._on_reset)
+        self.reset_btn.pack(pady=(0, 4), fill="x", padx=40)
 
         # ── 2열 레이아웃 ────────────────────────────────────────────────────
         cols = tk.Frame(root, bg="#1e1e1e")
@@ -271,19 +272,30 @@ class PanelGUI:
         self.node.release_launch()
 
     def _on_reset(self):
-        # 1) Gazebo 월드 전체 초기화 (드론 위치/속도/물리 + PX4 내부 상태 리셋)
-        _bg(lambda: subprocess.run([
-            "gz", "service",
-            "-s", f"/world/{WORLD}/reset",
-            "--reqtype", "gz.msgs.Empty",
-            "--reptype", "gz.msgs.Boolean",
-            "--timeout", "2000",
-            "--req", "",
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
-        # 2) arms_control → SEARCH (LAUNCH 누르면 바로 TRACK 진입)
-        _bg(lambda: subprocess.run(
-            ["ros2", "topic", "pub", "--once", "/arms/reset_cmd", "std_msgs/msg/Empty", "{}"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        self.reset_btn.config(text="리셋 중...", state="disabled", bg="#5d4037")
+
+        def do_reset():
+            # 1) Gazebo 월드 전체 초기화 — 모든 모델을 spawn 위치로 teleport + 물리 초기화
+            subprocess.run([
+                "gz", "service",
+                "-s", f"/world/{WORLD}/control",
+                "--reqtype", "gz.msgs.WorldControl",
+                "--reptype", "gz.msgs.Boolean",
+                "--timeout", "2000",
+                "--req", "reset: {all: true}",
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # 2) PX4 EKF 안정화 대기
+            import time; time.sleep(2.0)
+            # 3) arms_control → SEARCH
+            subprocess.run(
+                ["ros2", "topic", "pub", "--once", "/arms/reset_cmd", "std_msgs/msg/Empty", "{}"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        def restore_btn():
+            self.reset_btn.config(text="RESET (드론 원점 복귀)", state="normal", bg="#37474f")
+
+        _bg(do_reset)
+        self.root.after(3000, restore_btn)
 
     # ------------------------------------------------------------------
     def toggle_det(self, key):
