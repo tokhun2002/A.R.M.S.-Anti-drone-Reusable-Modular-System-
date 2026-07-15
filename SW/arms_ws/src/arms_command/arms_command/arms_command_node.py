@@ -275,14 +275,14 @@ class PanelGUI:
         self.reset_btn.config(text="리셋 중...", state="disabled", bg="#5d4037")
 
         def do_reset():
-            # 1) Gazebo 월드 전체 초기화 — 모든 모델을 spawn 위치로 teleport + 물리 초기화
+            # 1) 드론을 spawn 위치로 teleport (WorldControl reset은 동적 spawn 모델 삭제함)
             subprocess.run([
                 "gz", "service",
-                "-s", f"/world/{WORLD}/control",
-                "--reqtype", "gz.msgs.WorldControl",
+                "-s", f"/world/{WORLD}/set_pose",
+                "--reqtype", "gz.msgs.Pose",
                 "--reptype", "gz.msgs.Boolean",
                 "--timeout", "2000",
-                "--req", "reset: {all: true}",
+                "--req", 'name: "arms_drone" position: {x: 0.0, y: 0.0, z: 0.3} orientation: {w: 1.0, x: 0.0, y: 0.0, z: 0.0}',
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             # 2) PX4 EKF 안정화 대기
             import time; time.sleep(2.0)
