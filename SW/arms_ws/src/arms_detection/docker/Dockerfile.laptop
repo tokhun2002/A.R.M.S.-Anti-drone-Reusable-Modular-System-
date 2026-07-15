@@ -1,15 +1,10 @@
 # ============================================================
 # A.R.M.S. Detection Container — Laptop (x86, CPU or CUDA)
-# Base: ros:humble (Ubuntu 22.04 Jammy) — ROS2 Humble 사전 설치
-# Adds: onnxruntime + torch + torchvision + arms_msgs + detection node
+# Base: ros:humble (Ubuntu 22.04 Jammy)
+# Model: YOLOv11 .pt (PyTorch)
 #
 # Build context: arms_ws/src/
 #   docker compose -f docker-compose.laptop.yml up --build
-#
-# NOTE: ultralytics/ultralytics:latest 는 Ubuntu 24.04(Noble) 기반으로
-#       업데이트되어 ros-humble-* 패키지가 존재하지 않음.
-#       ros:humble(Jammy) 을 베이스로 사용하고 pip 으로 ML 패키지 설치.
-#       추론 백엔드: ONNX Runtime (Jetson 은 TensorRT 사용)
 # ============================================================
 FROM ros:humble
 
@@ -24,18 +19,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ---- ML 패키지 (pip) ----
-# ultralytics: YOLO 추론 라이브러리. .onnx 파일을 넘기면 내부적으로 ONNX Runtime 사용
-# onnxruntime: ultralytics 가 .onnx 추론 시 요구하는 백엔드
-# opencv-python-headless: ultralytics 의존성인 opencv-python 을 headless 버전으로 교체
-#   (opencv-python 은 libGL.so.1 을 요구하는데 GUI 없는 컨테이너에서 ImportError 발생)
+# ultralytics: YOLO 추론 (.pt 파일을 PyTorch로 직접 실행)
+# opencv-python-headless: GUI 없는 컨테이너용 opencv
 RUN pip3 install --no-cache-dir \
         ultralytics \
-        onnxruntime \
  && pip3 install --no-cache-dir --force-reinstall \
         opencv-python-headless
 
 # ---- Build arms_msgs inside the container ----
-# Build context is arms_ws/src/, so arms_msgs/ is available at COPY time.
 WORKDIR /ros_ws/src
 COPY arms_msgs/ arms_msgs/
 

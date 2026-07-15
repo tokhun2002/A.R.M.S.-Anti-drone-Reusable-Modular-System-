@@ -23,12 +23,14 @@ source arms_ws/install/setup.bash    # 새 터미널이면 한 번
 이후 `run_arms.sh` 하나로 PX4 SITL + Gazebo + 전체 ROS 스택 + 패널 GUI 가 다 뜬다.
 
 ### 미션 흐름
+
 ```
 IDLE → (auto-arm) → SEARCH(지상 대기) → 풍선 인식 → LOCK
      → [패널 LAUNCH] → TRACK(추적, P 게인 시간 램프) → 거리<5m → FIRE → RTL
 ```
 
 ### 패널 조작
+
 - **🚀 LAUNCH** : LOCK 에서 누르면 TRACK 시작
 - **시작 P / 최대 P / P 증가 시간** : TRACK 진입 후 시작 P 로 출발 → 설정 시간 동안 최대 P 까지 서서히 증가
   (시작부터 센 P 면 중심을 잃어서 천천히 올리는 구조)
@@ -37,9 +39,10 @@ IDLE → (auto-arm) → SEARCH(지상 대기) → 풍선 인식 → LOCK
 - **풍선 비행/고도** : 표적 풍선 제어 (기본 시작 고도 50m)
 
 ### 안 될 때
+
 - SEARCH 에서 안 넘어감 → 검출 안 됨. 카메라 창에 풍선 보이는지, 검출 모드(YOLO ON/ABSDIFF/BOTH) 바꿔보기
 - 드론이 풍선 반대로 감 → Roll/Pitch sign 뒤집기
-- 추적 느림 → 최대 P ↑ / P 증가 시간 ↓ ;  근접 발작 → 최대 P ↓ / 증가 시간 ↑
+- 추적 느림 → 최대 P ↑ / P 증가 시간 ↓ ; 근접 발작 → 최대 P ↓ / 증가 시간 ↑
 - `arms_drone` 모델 못 찾음 → `setup_sim.sh` 다시 실행(링크 갱신) 또는 `run_arms.sh` 의 `GZ_SIM_RESOURCE_PATH` 확인
 
 ## 문서
@@ -69,6 +72,6 @@ SW/
 ├── tools/              # arms_panel / balloon_referee / fusion_detector (런치가 자동 실행)
 ├── setup_sim.sh        # 최초 셋업 (한 번)
 ├── run_arms.sh         # 실행 (매번)
-├── YOLO_balloon/       # YOLOv11 학습 및 ONNX 모델
+├── YOLO_balloon/       # YOLOv11 학습
 └── gpio_ws/            # GPIO 테스트 워크스페이스
 ```

@@ -6,13 +6,13 @@
 
 ## test_camera.py — YOLO 모델 테스트
 
-카메라 영상을 받아 ONNX 모델로 실시간 풍선 탐지.
+카메라 영상을 받아 YOLO 모델로 실시간 풍선 탐지.
 
 ### 의존성 설치
 
 ```bash
 # 가상환경 사용을 권장
-pip install ultralytics opencv-python onnx onnxruntime
+pip install ultralytics opencv-python
 ```
 
 ### 실행

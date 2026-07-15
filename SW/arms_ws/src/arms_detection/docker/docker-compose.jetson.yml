@@ -25,6 +25,6 @@ services:
       - ARMS_CONF=${ARMS_CONF:-0.5}
       - ARMS_IOU=${ARMS_IOU:-0.45}
     volumes:
-      - ./models:/models:ro # place .onnx model file here
+      - ./models:/models:ro # place .engine model file here
       - ./fastdds_udp.xml:/fastdds_udp.xml:ro
     restart: unless-stopped

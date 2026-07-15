@@ -4,7 +4,7 @@ from pathlib import Path
 import cv2
 from ultralytics import YOLO
 
-MODEL = Path(__file__).parent / "../arms_ws/src/arms_detection/docker/models/best.onnx"
+MODEL = Path(__file__).parent / "../arms_ws/src/arms_detection/docker/models/best.pt"
 CAMERA = 0
 CONF = 0.5
 IOU = 0.45

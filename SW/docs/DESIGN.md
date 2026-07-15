@@ -332,14 +332,12 @@ docker compose -f docker-compose.laptop.yml up --build
 
 - 데이터셋: [Roboflow — Balloon Project](https://universe.roboflow.com/balloon-kutdi/balloon-project-az6w8)에서 다운로드. 풍선을 단일 클래스로 학습
 - 모델: YOLOv11 small
-- 경량화: FP16 양자화 후 TensorRT 형식으로 변환
+- 모델 포맷
 
-| 플랫폼       | TensorRT 변환                  |
-| ------------ | ------------------------------ |
-| 노트북 (x86) | `trtexec` (CUDA 드라이버 필요) |
-| Jetson (ARM) | `trtexec` (JetPack 내장)       |
-
-> TensorRT engine은 변환한 GPU 아키텍처에서만 동작한다.
+| 플랫폼       | 포맷        | 비고                                       |
+| ------------ | ----------- | ------------------------------------------ |
+| 노트북 (x86) | `.pt`       | PyTorch, ultralytics가 직접 로드           |
+| Jetson (ARM) | `.engine`   | TensorRT 변환 후 사용 (`trtexec`, JetPack) |
 
 ## 7. 비행 제어 및 통신 (arms_control)
 
