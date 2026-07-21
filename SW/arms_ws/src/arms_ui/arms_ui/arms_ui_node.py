@@ -68,10 +68,14 @@ class ArmsUINode(Node):
         self._latest_cmd = msg
 
     def _cb_image(self, msg: Image):
+        if msg.width == 0 or msg.height == 0 or len(msg.data) == 0:
+            return   # 빈 프레임(image_publisher 루프 경계 등) → 스킵
         try:
             frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
         except Exception as e:
             self.get_logger().warn(f"cv_bridge error: {e}")
+            return
+        if frame is None or frame.size == 0:
             return
 
         self._draw_overlay(frame)

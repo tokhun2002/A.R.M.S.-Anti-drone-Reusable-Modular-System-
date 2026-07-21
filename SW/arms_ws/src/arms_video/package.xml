@@ -10,6 +10,8 @@
 
   <!-- 실기체 캡처 드라이버 (C++, stepwise 캡처 동글 지원) -->
   <exec_depend>v4l2_camera</exec_depend>
+  <!-- 샘플 비디오 replay (C++) -->
+  <exec_depend>image_publisher</exec_depend>
   <!-- SITL 영상 브리지 -->
   <exec_depend>ros_gz_bridge</exec_depend>
 

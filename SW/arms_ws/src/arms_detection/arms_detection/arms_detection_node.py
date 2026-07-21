@@ -19,6 +19,7 @@ arms_detection_node — A.R.M.S. 다중 검출기 (우선순위 기반)
   use_hsv               : bool  (기본 true)
   use_absdiff           : bool  (기본 true)
   yolo_ttl              : float YOLO 결과 신선도 초, 초과 시 폴백 (기본 0.5)
+  proc_width            : int   검출 처리 가로 해상도, 0=원본 (기본 480)
   absdiff.diff_thresh   : int   배경 대비 임계값 (기본 25)
   absdiff.bg_blur       : int   배경 추정 median 커널, 홀수 (기본 15)
   absdiff.pre_blur      : int   노이즈 제거 Gaussian 커널, 홀수 (기본 3)
@@ -39,6 +40,9 @@ from arms_msgs.msg import BoundingBox, DetectionArray
 # ---------------------------------------------------------------------------
 # Image conversion helpers (cv_bridge 없이)
 # ---------------------------------------------------------------------------
+
+_OPEN_KERNEL = np.ones((3, 3), np.uint8)   # absdiff 마스크 노이즈 제거용
+
 
 def imgmsg_to_bgr(msg: Image) -> np.ndarray:
     ch = {"rgb8": 3, "bgr8": 3, "mono8": 1}.get(msg.encoding, 3)
@@ -83,6 +87,8 @@ class ArmsDetectionNode(Node):
         # HSV/ABSDIFF 로 폴백 → 컨테이너가 죽어도 오래된 박스를 계속 쓰지 않는다.
         # 비동기 YOLO(저속) 와 30fps 루프의 레이트 브리징을 위한 짧은 hold.
         self.declare_parameter("yolo_ttl", 0.5)
+        # 검출 처리 해상도(가로 px). 0=원본. 출력은 비율이라 정확도 무관, CV 비용만 절감.
+        self.declare_parameter("proc_width", 480)
         self.declare_parameter("absdiff.diff_thresh",    25)
         self.declare_parameter("absdiff.bg_blur",        15)
         self.declare_parameter("absdiff.pre_blur",        3)
@@ -113,11 +119,21 @@ class ArmsDetectionNode(Node):
         self._yolo_stamp_ns = self.get_clock().now().nanoseconds
 
     def _cb_image(self, msg: Image):
+        if msg.width == 0 or msg.height == 0 or len(msg.data) == 0:
+            return   # 빈 프레임(image_publisher 루프 경계 등) → 스킵
         try:
             bgr = imgmsg_to_bgr(msg)
         except Exception as e:
             self.get_logger().warn(f"image convert failed: {e}")
             return
+        if bgr is None or bgr.size == 0:
+            return
+
+        # 검출 처리 다운스케일 (출력은 비율이라 정확도 무관, CV 비용만 절감)
+        proc_w = int(self.get_parameter("proc_width").value)
+        if proc_w > 0 and bgr.shape[1] > proc_w:
+            ph = int(bgr.shape[0] * proc_w / bgr.shape[1])
+            bgr = cv2.resize(bgr, (proc_w, ph), interpolation=cv2.INTER_AREA)
 
         use_yolo    = bool(self.get_parameter("use_yolo").value)
         use_hsv     = bool(self.get_parameter("use_hsv").value)
@@ -136,7 +152,9 @@ class ArmsDetectionNode(Node):
             out.detections.append(target)
         self.pub_det.publish(out)
 
-        if bool(self.get_parameter("publish_debug").value):
+        # 디버그 이미지는 구독자가 있을 때만 그려서 발행 (없으면 발행 비용 전부 절감)
+        if bool(self.get_parameter("publish_debug").value) \
+                and self.pub_debug.get_subscription_count() > 0:
             self._publish_debug(bgr, msg.header, yolo_box, hsv_box, absdiff_box, target,
                                 use_yolo, use_hsv, use_absdiff)
 
@@ -194,9 +212,12 @@ class ArmsDetectionNode(Node):
 
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (pre, pre), 0)
-        bg   = cv2.medianBlur(gray, bg_k)
+        # 배경 추정: GaussianBlur (medianBlur(15)는 ~85ms 로 너무 느림 → ~6ms)
+        bg   = cv2.GaussianBlur(gray, (bg_k, bg_k), 0)
         diff = cv2.absdiff(gray, bg)
         _, mask = cv2.threshold(diff, diff_thresh, 255, cv2.THRESH_BINARY)
+        # 잔점(엣지 노이즈) 제거 → contour 수 급감 → 아래 루프 대폭 가속 + 노이즈 정리
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, _OPEN_KERNEL)
 
         if header is not None and self.pub_absdiff.get_subscription_count() > 0:
             self.pub_absdiff.publish(mono_to_imgmsg(mask, header))
