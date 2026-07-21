@@ -31,6 +31,11 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(video_launch)),
         ),
+        # 검출 노드
+        Node(
+            package="arms_detection", executable="arms_detection_node",
+            name="arms_detection_node", output="screen",
+        ),
         # 제어 (상태머신 + PID + CRSF 시리얼 출력 → ELRS TX → FC)
         Node(
             package="arms_control",
