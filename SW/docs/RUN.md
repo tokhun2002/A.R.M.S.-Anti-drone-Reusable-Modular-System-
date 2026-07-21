@@ -22,8 +22,14 @@ source /opt/ros/humble/setup.bash
 ### 의존성 설치
 
 ```bash
-# usb_cam
-sudo apt install ros-humble-usb-cam
+# 카메라 드라이버 (실기체 FPV 캡처 — usb_cam 대신 v4l2_camera 사용)
+#   아날로그→USB 캡처 동글(MS210x/EasierCAP)은 프레임 간격을 stepwise 로
+#   보고해 usb_cam 이 포맷 열거에 실패한다. v4l2_camera(C++)는 정상 동작.
+sudo apt install ros-humble-v4l2-camera
+
+# NumPy 1.x 고정 (apt python3-opencv 4.5.4 는 NumPy 1.x 로 빌드됨.
+#   pip numpy 2.x 가 있으면 cv2 import 시 크래시)
+pip3 install "numpy<2"
 
 # MAVSDK (arms_control C++ 빌드에 필요)
 sudo apt install libmavsdk-dev
@@ -99,6 +105,12 @@ arms_ui_node      ← /arms/image_raw, /arms/detections, /arms/mission_state
 ros2 launch arms_bringup arms_full.launch.py \
   mavlink.connection:=/dev/ttyUSB0
 ```
+
+### 카메라 테스트
+```
+ffplay -f v4l2 -framerate 30 -video_size 720x480 -i /dev/video0 
+```
+
 
 ## B. SITL 실행
 
@@ -222,7 +234,9 @@ Ctrl+C  (PX4 터미널)
 
 | 증상                             | 원인                                   | 해결                                                                                   |
 | -------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------- |
-| `/arms/image_raw` 토픽 없음      | usb_cam 미설치 또는 `/dev/video0` 없음 | `sudo apt install ros-humble-usb-cam`, `ls /dev/video*` 확인                           |
+| `/arms/image_raw` 토픽 없음      | v4l2_camera 미설치 또는 `/dev/video0` 없음 | `sudo apt install ros-humble-v4l2-camera`, `ls /dev/video*` 확인                       |
+| 카메라 영상이 처음 몇 초간 검정  | 아날로그 캡처 동글의 신호 락 지연(정상) | ~5초 대기. 계속 검정이면 FPV 수신기 전원/채널, 컴포지트 케이블 확인                    |
+| `import cv2` 크래시 (NumPy 오류) | pip numpy 2.x 가 apt opencv(numpy 1.x)와 충돌 | `pip3 install "numpy<2"`                                                          |
 | `/arms/detections` 토픽 없음     | Docker 컨테이너 미기동                 | `docker compose up` 확인, `docker ps`                                                  |
 | Detection이 컨테이너에서 안 보임 | `ROS_DOMAIN_ID` 불일치                 | 호스트와 컨테이너 `ROS_DOMAIN_ID` 동일한지 확인                                        |
 | MAVLink heartbeat timeout        | FC 미연결 또는 포트 오류               | 포트/baudrate 확인, `control_params.yaml`의 `mavlink.connection` 확인                  |

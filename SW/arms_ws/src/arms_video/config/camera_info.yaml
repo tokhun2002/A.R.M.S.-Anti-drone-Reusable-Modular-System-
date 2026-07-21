@@ -1,0 +1,30 @@
+# 기본(미보정) 카메라 캘리브레이션 — 720x480 FPV 캡처용 플레이스홀더.
+# 실제 보정을 하지 않아 focal length/중심은 근사값이고 왜곡은 0 이다.
+# 정밀 측정이 필요하면 `ros2 run camera_calibration cameracalibrator` 로
+# 보정 후 이 파일을 교체할 것.
+image_width: 720
+image_height: 480
+camera_name: arms_fpv
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [600.0,   0.0, 360.0,
+           0.0, 600.0, 240.0,
+           0.0,   0.0,   1.0]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.0, 0.0, 0.0, 0.0, 0.0]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         0.0, 0.0, 1.0]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [600.0,   0.0, 360.0, 0.0,
+           0.0, 600.0, 240.0, 0.0,
+           0.0,   0.0,   1.0, 0.0]

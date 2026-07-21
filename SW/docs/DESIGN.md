@@ -44,7 +44,7 @@ _Anti-drone Reusable Modular System — Software Architecture_
 arms_ws/
 └── src/
     ├── arms_bringup/          # 최상위 런치 파일 및 설정
-    ├── arms_video/            # 영상 소스 추상화 (usb_cam / gz_ros2_bridge)
+    ├── arms_video/            # 영상 소스 추상화 (v4l2_camera / gz_ros2_bridge)
     ├── arms_detection/        # 융합 검출 노드 + YOLO Docker 노드
     ├── arms_command/          # 조종 인터페이스 (tkinter GUI / ADS1115 + GPIO)
     ├── arms_control/          # 상태 머신 + PID + CRSF 출력 (C++/Python hybrid)
@@ -67,7 +67,7 @@ graph TD
     V4L2["/dev/video0<br/>(USB FPV Receiver)"]
 
     subgraph arms_video ["arms_video"]
-        VN_REAL["arms_video_node<br/>(usb_cam) 실기체"]
+        VN_REAL["arms_video_node<br/>(v4l2_camera) 실기체"]
         VN_SITL["arms_video_node<br/>(gz_ros2_bridge) SITL"]
     end
 
@@ -147,7 +147,7 @@ graph TD
 
 | 노드                       | 패키지           | 역할                                                                                                                                        | 실행 환경     |
 | -------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `arms_video_node`          | `arms_video`     | 영상 소스 추상화. 실기체는 usb_cam, SITL은 gz_ros2_bridge로 `/arms/image_raw` 발행                                                          | 호스트        |
+| `arms_video_node`          | `arms_video`     | 영상 소스 추상화. 실기체는 v4l2_camera, SITL은 gz_ros2_bridge로 `/arms/image_raw` 발행                                                      | 호스트        |
 | `arms_yolo_detection_node` | `arms_detection` | YOLO 추론 후 `/arms/yolo_detections` 발행. **선택적** — Docker 컨테이너 안에서 실행                                                         | Docker (선택) |
 | `arms_detection_node`      | `arms_detection` | HSV·absdiff·YOLO 결과를 융합해 `/arms/detections` 발행. YOLO 노드 없이도 독립 동작 가능                                                     | 호스트        |
 | `arms_command_node`        | `arms_command`   | SITL용 tkinter GUI 패널. 드래그 스틱·스위치 클릭으로 `/arms/command` 발행                                                                   | 호스트        |
@@ -267,8 +267,12 @@ arms_video_node는 영상 소스에 따라 두 가지 모드로 동작한다.
 **실기체 모드**
 
 - FPV 수신기 → USB Video Capture 장치 (`/dev/video0`)
-- V4L2 드라이버를 통해 프레임 수신
-- `image_transport`를 통해 `/arms/image_raw` 발행
+- `v4l2_camera`(C++) 노드로 프레임 수신 → `/arms/image_raw` 발행
+- 아날로그→USB 캡처 동글(MS210x/EasierCAP)은 프레임 간격을 stepwise 로
+  보고해 `usb_cam` 이 포맷 열거에 실패한다. 그래서 `v4l2_camera` 를 사용.
+  (파이썬+OpenCV 캡처도 가능하나 대형 프레임에서 rclpy 오버헤드로 지연이 커
+  C++ 드라이버를 쓴다.)
+- 아날로그 신호 락에 ~5초 걸릴 수 있어 기동 직후 몇 초는 검은 화면(정상).
 
 **SITL 모드**
 
@@ -278,16 +282,19 @@ arms_video_node는 영상 소스에 따라 두 가지 모드로 동작한다.
 ### 5.2 런치 파라미터
 
 ```yaml
-# arms_video/config/video_params.yaml
-video:
-  mode: "v4l2" # "v4l2" (실기체) | "gazebo" (SITL)
-  device: "/dev/video0"
-  width: 1280
-  height: 720
-  fps: 30
-  pixel_format: "YUYV"
-  topic_name: "/arms/image_raw"
+# arms_video/config/video_params.yaml  (v4l2_camera 파라미터)
+/**:
+  ros__parameters:
+    video_device: "/dev/video0"
+    pixel_format: "YUYV"          # 캡처 동글은 YUYV만 출력
+    image_size: [720, 480]        # NTSC=720x480 / PAL=720x576
+    output_encoding: "rgb8"       # YUYV → rgb8 변환 발행
+    camera_info_url: "package://arms_video/config/camera_info.yaml"
 ```
+
+`/arms/image_raw` 로의 remapping 은 `launch/video.launch.py` 에서 수행한다.
+캘리브레이션은 `config/camera_info.yaml`(기본 미보정 플레이스홀더)에서 로드하며,
+실측 보정 시 이 파일을 교체한다.
 
 ## 6. 객체 인식 (arms_detection)
 

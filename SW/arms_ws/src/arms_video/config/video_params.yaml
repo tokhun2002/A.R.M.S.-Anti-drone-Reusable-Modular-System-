@@ -1,10 +1,13 @@
-usb_cam_node_exe:
+# v4l2_camera 노드 파라미터 (실기체 FPV 캡처).
+# 노드 이름과 무관하게 적용되도록 와일드카드(/**) 사용.
+/**:
   ros__parameters:
     video_device: "/dev/video0"
-    image_width: 1280
-    image_height: 720
-    framerate: 30.0
-    pixel_format: "yuyv"       # or "mjpeg" depending on capture card
-    camera_name: "fpv_camera"
-    camera_info_url: ""
-    # Topic will be remapped to /arms/image_raw in the launch file
+    # 아날로그→USB 캡처 동글(MS210x/EasierCAP, A2539)은 YUYV만 출력.
+    # NTSC 신호(Predator 기본) = [720, 480] / PAL = [720, 576] 로 바꿀 것.
+    pixel_format: "YUYV"
+    image_size: [720, 480]
+    # 장치는 YUYV 출력 → rgb8 로 변환 발행 (detection 노드가 rgb8/bgr8 처리).
+    output_encoding: "rgb8"
+    # 기본(미보정) 캘리브레이션. 실측 보정 시 이 파일을 교체.
+    camera_info_url: "package://arms_video/config/camera_info.yaml"

@@ -2,12 +2,16 @@
 <package format="3">
   <name>arms_video</name>
   <version>0.1.0</version>
-  <description>Launch file for usb_cam (FPV video capture).</description>
+  <description>FPV 영상 수신 런치 (실기체: v4l2_camera, SITL: gz_ros2_bridge).</description>
   <maintainer email="dev@arms.local">arms</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <exec_depend>usb_cam</exec_depend>
+
+  <!-- 실기체 캡처 드라이버 (C++, stepwise 캡처 동글 지원) -->
+  <exec_depend>v4l2_camera</exec_depend>
+  <!-- SITL 영상 브리지 -->
+  <exec_depend>ros_gz_bridge</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
