@@ -15,9 +15,10 @@ arms_detection_node — A.R.M.S. 다중 검출기 (우선순위 기반)
   발행 : /arms/debug_absdiff    sensor_msgs/Image  (mono8, absdiff 이진 마스크)
 
 파라미터 (ros2 param set /arms_detection_node ...)
-  use_yolo              : bool  (기본 false)
+  use_yolo              : bool  (기본 true)
   use_hsv               : bool  (기본 true)
   use_absdiff           : bool  (기본 true)
+  yolo_ttl              : float YOLO 결과 신선도 초, 초과 시 폴백 (기본 0.5)
   absdiff.diff_thresh   : int   배경 대비 임계값 (기본 25)
   absdiff.bg_blur       : int   배경 추정 median 커널, 홀수 (기본 15)
   absdiff.pre_blur      : int   노이즈 제거 Gaussian 커널, 홀수 (기본 3)
@@ -75,9 +76,13 @@ class ArmsDetectionNode(Node):
     def __init__(self):
         super().__init__("arms_detection_node")
 
-        self.declare_parameter("use_yolo",   False)
+        self.declare_parameter("use_yolo",   True)
         self.declare_parameter("use_hsv",    True)
         self.declare_parameter("use_absdiff", True)
+        # YOLO 결과 신선도(초). 마지막 YOLO 수신 후 이 시간이 지나면 캐시를 무시하고
+        # HSV/ABSDIFF 로 폴백 → 컨테이너가 죽어도 오래된 박스를 계속 쓰지 않는다.
+        # 비동기 YOLO(저속) 와 30fps 루프의 레이트 브리징을 위한 짧은 hold.
+        self.declare_parameter("yolo_ttl", 0.5)
         self.declare_parameter("absdiff.diff_thresh",    25)
         self.declare_parameter("absdiff.bg_blur",        15)
         self.declare_parameter("absdiff.pre_blur",        3)
@@ -88,6 +93,7 @@ class ArmsDetectionNode(Node):
                          history=HistoryPolicy.KEEP_LAST, depth=1)
 
         self._yolo_cache: list[BoundingBox] = []
+        self._yolo_stamp_ns: int = 0   # 마지막 YOLO 수신 시각 (TTL 판정용)
 
         self.create_subscription(Image, "/arms/image_raw", self._cb_image, qos)
         self.create_subscription(DetectionArray, "/arms/yolo_detections", self._cb_yolo, 10)
@@ -104,6 +110,7 @@ class ArmsDetectionNode(Node):
 
     def _cb_yolo(self, msg: DetectionArray):
         self._yolo_cache = list(msg.detections)
+        self._yolo_stamp_ns = self.get_clock().now().nanoseconds
 
     def _cb_image(self, msg: Image):
         try:
@@ -140,6 +147,10 @@ class ArmsDetectionNode(Node):
     def _detect_yolo(self) -> BoundingBox | None:
         if not self._yolo_cache:
             return None
+        ttl = float(self.get_parameter("yolo_ttl").value)
+        age = (self.get_clock().now().nanoseconds - self._yolo_stamp_ns) / 1e9
+        if age > ttl:
+            return None   # 오래된 YOLO 결과 → 폴백 (컨테이너 미기동/지연)
         return max(self._yolo_cache, key=lambda b: b.confidence)
 
     def _detect_hsv(self, bgr: np.ndarray) -> BoundingBox | None:
