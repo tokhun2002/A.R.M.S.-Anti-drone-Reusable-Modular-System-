@@ -27,7 +27,10 @@ fi
 
 echo "[1/5] airframe 복사 (4022_gz_arms_drone)"
 # 구버전 4021 잔재 제거 (x500_flow와 번호 충돌 방지)
+#   파일뿐 아니라 CMake 등록 줄도 지워야 함. 등록 줄만 남으면 CMake 가
+#   존재하지 않는 4021 파일을 참조하다 설정 단계에서 실패한다.
 rm -f "$PX4_AIRFRAME_DIR/4021_gz_arms_drone"
+sed -i '/^\t4021_gz_arms_drone$/d' "$CMAKE"
 cp "$AIRFRAME_SRC" "$PX4_AIRFRAME_DIR/"
 
 echo "[2/5] airframe CMake 등록"
