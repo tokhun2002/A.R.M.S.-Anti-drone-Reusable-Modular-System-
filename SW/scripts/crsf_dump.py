@@ -83,9 +83,11 @@ def main() -> None:
             if now >= next_report:
                 span = now - (next_report - args.interval)
                 elapsed = now - t0
-                if last_channels is None:
-                    print(f"[{elapsed:6.1f}s] 수신 프레임 없음 "
-                          f"(CRC/동기 실패 {report_err})")
+                # 이번 구간에 실제로 들어온 프레임이 없으면 채널값을 절대 찍지 않는다.
+                # (이전 값을 계속 보여주면 계속 수신 중인 것처럼 오해하게 된다)
+                if report_good == 0:
+                    note = f"  (CRC/동기 실패 {report_err})" if report_err else ""
+                    print(f"[{elapsed:6.1f}s]    0.0 Hz  ---- 수신 없음 ----{note}")
                 else:
                     vals = " ".join(
                         f"{crsf.CH_NAMES[i]}={last_channels[i]:4d}"
