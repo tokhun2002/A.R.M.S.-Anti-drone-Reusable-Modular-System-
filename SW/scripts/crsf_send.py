@@ -31,6 +31,12 @@ except ImportError:
     sys.exit("pyserial 없음:  pip3 install pyserial")
 
 
+# baud 탐색 후보 — 흔한 것부터.
+#   400000 : ELRS/EdgeTX 계열에서 가장 흔함
+#   420000 : CRSF 표준으로 널리 인용되는 값
+#   460800 : 현재 crsf_output.cpp 가 쓰는 값 (표준 baud 중 420000 에 가장 가까움)
+SWEEP_BAUDS = [400000, 420000, 416666, 460800, 115200, 921600]
+
 BANNER = """
 ╔══════════════════════════════════════════════════════════════╗
 ║  CRSF UART 송신 테스트                                       ║
@@ -50,15 +56,15 @@ def open_port(port: str, baud: int) -> "serial.Serial":
     """
     try:
         return serial.Serial(port=port, baudrate=baud, timeout=0, write_timeout=1.0)
-    except serial.SerialException as e:
+    except (OSError, ValueError) as e:
+        # SerialException 은 OSError 하위지만, 드라이버가 비표준 baud 를 거부할 때는
+        # ioctl 이 맨 OSError 를 던지므로 둘 다 받아야 한다.
         sys.exit(
             f"포트 열기 실패 ({port} @ {baud}): {e}\n"
             f"  - 권한 문제면:  sudo usermod -aG dialout $USER  (재로그인 필요)\n"
             f"  - 시리얼 콘솔이 점유 중이면:  sudo systemctl disable --now nvgetty\n"
-            f"  - baud 를 드라이버가 거부하면 --baud 460800 으로 시도"
+            f"  - 이 baud 를 드라이버가 거부하는 것이면:  --baud-sweep 으로 후보 탐색"
         )
-    except ValueError as e:
-        sys.exit(f"baud {baud} 를 이 플랫폼에서 설정할 수 없음: {e}")
 
 
 def make_channels(mode: str, t: float, allow_throttle: bool) -> list:
@@ -97,6 +103,55 @@ def send_failsafe(ser, rate_hz: float) -> None:
         time.sleep(period)
 
 
+def baud_sweep(args) -> None:
+    """
+    후보 baud 를 하나씩 돌아가며 중립 프레임을 송신한다.
+    모듈 LED 가 "CRSF 없음"(느린 명멸) → "정상"(고정) 으로 바뀌는 순간의 baud 가 정답.
+    """
+    print("=" * 62)
+    print("  baud 탐색 — 모듈 LED 를 계속 지켜볼 것")
+    print(f"  각 baud 당 {args.sweep_secs:g}초씩 중립 프레임 송신")
+    print("  LED 가 느린 명멸을 멈추고 고정되는 구간의 baud 가 정답")
+    print("=" * 62 + "\n")
+
+    frame = crsf.build_rc_frame(crsf.neutral_channels())
+    period = 1.0 / args.rate
+
+    for baud in SWEEP_BAUDS:
+        try:
+            ser = serial.Serial(port=args.port, baudrate=baud,
+                                timeout=0, write_timeout=1.0)
+        except (OSError, ValueError) as e:
+            # 드라이버가 그 baud 를 거부하면 건너뛰고 계속 — 탐색이 여기서 죽으면 안 된다
+            print(f"  {baud:>7d} baud … 열기 실패 (드라이버 미지원): {e}")
+            continue
+
+        print(f"→ {baud:>7d} baud 송신 중 … ", end="", flush=True)
+        t_end = time.monotonic() + args.sweep_secs
+        sent = 0
+        try:
+            while time.monotonic() < t_end:
+                ser.write(frame)
+                sent += 1
+                time.sleep(period)
+            ser.flush()
+            print(f"{sent} 프레임 전송 완료")
+        except serial.SerialTimeoutException:
+            print(f"write timeout ({sent} 프레임에서 막힘)")
+        except serial.SerialException as e:
+            print(f"쓰기 실패: {e}")
+        except KeyboardInterrupt:
+            ser.close()
+            print("\n\n중단됨.")
+            return
+        finally:
+            ser.close()
+
+    print("\n탐색 끝. LED 가 바뀐 baud 를 --baud 로 지정해서 다시 확인:")
+    print(f"  python3 crsf_send.py --baud <값> --mode hold")
+    print("어느 구간에서도 변화가 없었으면 baud 가 아니라 배선/핀 문제일 가능성이 높다.")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
         description="Jetson UART → ELRS 모듈 CRSF 송신 테스트",
@@ -111,6 +166,10 @@ def main() -> None:
                    help="스로틀 강제 MIN 해제 (위험 — 프로펠러 제거 확인)")
     p.add_argument("--throttle", type=float, default=0.0,
                    help="--allow-throttle 일 때의 스로틀 0..1")
+    p.add_argument("--baud-sweep", action="store_true",
+                   help="후보 baud 를 차례로 송신 — 모듈 LED 가 언제 바뀌는지 보고 판별")
+    p.add_argument("--sweep-secs", type=float, default=6.0,
+                   help="--baud-sweep 에서 baud 하나당 송신 시간 [s]")
     args = p.parse_args()
 
     if args.rate <= 0:
@@ -119,6 +178,10 @@ def main() -> None:
     print(BANNER)
     if args.allow_throttle:
         print(f"!! --allow-throttle 활성: 스로틀 {args.throttle:.2f} 로 송신됨\n")
+
+    if args.baud_sweep:
+        baud_sweep(args)
+        return
 
     ser = open_port(args.port, args.baud)
     print(f"열림: {args.port} @ {args.baud} baud")
