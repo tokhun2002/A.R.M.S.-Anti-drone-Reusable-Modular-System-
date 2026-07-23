@@ -9,6 +9,7 @@ Subscribes to:
 """
 
 import cv2
+import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from rclpy.node import Node
@@ -40,14 +41,19 @@ class ArmsUINode(Node):
             depth=1,
         )
 
+        # PiP 크기 (프레임 폭 대비 ROI 표시 폭 비율)
+        self.declare_parameter("ui.roi_pip_frac", 0.25)
+
         self.create_subscription(Image, "/arms/image_raw", self._cb_image, best_effort_qos)
         self.create_subscription(DetectionArray, "/arms/detections", self._cb_detections, 10)
         self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
         self.create_subscription(Vector3, "/arms/control_debug", self._cb_debug, 10)
+        self.create_subscription(Image, "/arms/roi_image", self._cb_roi, best_effort_qos)
 
         self._latest_detections = DetectionArray()
         self._latest_state = MissionState()
         self._latest_cmd = Vector3()
+        self._latest_roi = None
 
         cv2.namedWindow("A.R.M.S.", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("A.R.M.S.", 960, 720)
@@ -67,6 +73,14 @@ class ArmsUINode(Node):
     def _cb_debug(self, msg: Vector3):
         self._latest_cmd = msg
 
+    def _cb_roi(self, msg: Image):
+        if msg.width == 0 or msg.height == 0 or len(msg.data) == 0:
+            return
+        try:
+            self._latest_roi = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+        except Exception as e:
+            self.get_logger().warn(f"roi cv_bridge error: {e}")
+
     def _cb_image(self, msg: Image):
         if msg.width == 0 or msg.height == 0 or len(msg.data) == 0:
             return   # 빈 프레임(image_publisher 루프 경계 등) → 스킵
@@ -79,8 +93,30 @@ class ArmsUINode(Node):
             return
 
         self._draw_overlay(frame)
+        self._draw_roi_pip(frame)
         cv2.imshow("A.R.M.S.", frame)
         cv2.waitKey(1)
+
+    def _draw_roi_pip(self, frame):
+        """추적 ROI 확대 뷰를 우측 하단 PiP 로 합성."""
+        roi = self._latest_roi
+        if roi is None or roi.size == 0:
+            return
+        h, w = frame.shape[:2]
+        frac = float(self.get_parameter("ui.roi_pip_frac").value)
+        pip_w = max(1, int(w * frac))
+        pip_h = max(1, int(pip_w * roi.shape[0] / roi.shape[1]))
+        pip_h = min(pip_h, h // 2)   # 너무 세로로 길어지지 않게 제한
+        pip = cv2.resize(roi, (pip_w, pip_h), interpolation=cv2.INTER_NEAREST)
+        m = 8  # 가장자리 여백
+        x2, y2 = w - m, h - m
+        x1, y1 = x2 - pip_w, y2 - pip_h
+        if x1 < 0 or y1 < 0:
+            return
+        frame[y1:y2, x1:x2] = pip
+        cv2.rectangle(frame, (x1 - 1, y1 - 1), (x2, y2), (0, 220, 0), 2)
+        cv2.putText(frame, "ROI", (x1, y1 - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 220, 0), 1, cv2.LINE_AA)
 
     # ------------------------------------------------------------------
     # Drawing
