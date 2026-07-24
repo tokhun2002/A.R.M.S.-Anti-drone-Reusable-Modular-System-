@@ -7,7 +7,7 @@ arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
   - arms_sitl_bridge_node   (CRSF→MAVLink RC override → PX4 Stabilized)
   - arms_ui_node            (OpenCV 영상 오버레이)
   - arms_detection_node     (융합검출: HSV + absdiff, YOLO 선택)
-  - balloon_referee.py      (풍선 비행 + 명중 연출)
+  - balloon_referee_diagonal.py      (풍선 비행 + 명중 연출)
   - arms_command_node       (컨트롤 패널 GUI)
 
 전제: 환경변수 ARMS_SW 가 SW 폴더(=tools, simulation 들어있는 곳)를 가리켜야 함.
@@ -77,8 +77,10 @@ def generate_launch_description():
     ]
 
     if tools and tools.is_dir():
+        # 풍선 심판 노드만 실행. 컨트롤 패널은 arms_command_node(위에서 실행)가 담당하므로
+        # tools/arms_panel.py(중복 패널)는 띄우지 않음.
         actions += [
-            ExecuteProcess(cmd=["python3", str(tools / "balloon_referee.py")], output="screen"),
+            ExecuteProcess(cmd=["python3", str(tools / "balloon_referee_diagonal.py")], output="screen"),
         ]
     else:
         actions.append(LogInfo(msg=(

@@ -49,8 +49,11 @@ else
 fi
 
 echo "[1/2] PX4 SITL + Gazebo (arms_drone)..."
+# Wayland 세션에서 gz sim 3D 뷰 마우스 입력이 막히는 문제 → Qt 를 X11(xcb)로 강제.
+# (휠 줌 / 드래그 회전이 안 먹으면 대부분 이게 원인. gnome-terminal 자식이 부모 env 를
+#  못 물려받는 경우가 있어 명령 문자열 안에서 직접 export.)
 TERM_CMD "PX4 SITL" \
-  "cd $PX4_DIR && PX4_GZ_WORLD=arms_sitl make px4_sitl gz_arms_drone"
+  "export QT_QPA_PLATFORM=xcb; cd $PX4_DIR && PX4_GZ_WORLD=arms_sitl make px4_sitl gz_arms_drone"
 
 echo "      부팅 대기 (15s)..."
 sleep 15

@@ -84,10 +84,10 @@
           <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz></inertia>
         </inertial>
         <collision name="collision">
-          <geometry><sphere><radius>0.3</radius></sphere></geometry>
+          <geometry><sphere><radius>1.0</radius></sphere></geometry>
         </collision>
         <visual name="visual">
-          <geometry><sphere><radius>0.3</radius></sphere></geometry>
+          <geometry><sphere><radius>1.0</radius></sphere></geometry>
           <material>
             <ambient>1 0 0 1</ambient>
             <diffuse>1 0 0 1</diffuse>

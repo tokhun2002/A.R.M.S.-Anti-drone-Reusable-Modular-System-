@@ -10,17 +10,17 @@ arms_control_node:
       auto_launch_delay_sec: 1.0
     control:
       roll_pid:
-        kp: 20.0
-        ki: 0.8
-        kd: 0.65
-        output_limit: 90.0
+        kp: 257.0
+        ki: 0.2
+        kd: 2.2
+        output_limit: 40.0
       pitch_pid:
-        kp: 20.0
-        ki: 0.8
-        kd: 0.65
-        output_limit: 90.0
+        kp: 252.0
+        ki: 0.2
+        kd: 2.2
+        output_limit: 40.0
       throttle: 0.55
-      track_throttle: 0.77
+      track_throttle: 0.84
       roll_sign: 1.0
       pitch_sign: 1.0
       error_lpf_alpha: 0.3

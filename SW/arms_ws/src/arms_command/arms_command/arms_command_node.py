@@ -259,6 +259,24 @@ class PanelGUI:
         self.alt.bind("<ButtonRelease-1>",
                       lambda e: ros_param_set_node(REFEREE_NODE, "alt", float(self.alt.get())))
 
+        # 풍선 근접 속도 슬라이더 (카메라 반경 안 = 저속, referee speed)
+        self.ball_speed = tk.Scale(right, from_=2, to=40, resolution=1, orient="horizontal",
+                                   length=150, bg="#1e1e1e", fg="white", label="풍선 속도(근접) [m/s]",
+                                   highlightthickness=0, troughcolor="#444")
+        self.ball_speed.set(12)
+        self.ball_speed.pack(pady=(2, 0))
+        self.ball_speed.bind("<ButtonRelease-1>",
+                             lambda e: ros_param_set_node(REFEREE_NODE, "speed", float(self.ball_speed.get())))
+
+        # 풍선 접근 속도 슬라이더 (카메라 반경 밖 = 고속 접근, referee speed_far)
+        self.ball_speed_far = tk.Scale(right, from_=5, to=80, resolution=1, orient="horizontal",
+                                       length=150, bg="#1e1e1e", fg="white", label="풍선 접근속도(먼거리) [m/s]",
+                                       highlightthickness=0, troughcolor="#444")
+        self.ball_speed_far.set(40)
+        self.ball_speed_far.pack(pady=(2, 0))
+        self.ball_speed_far.bind("<ButtonRelease-1>",
+                                 lambda e: ros_param_set_node(REFEREE_NODE, "speed_far", float(self.ball_speed_far.get())))
+
         self._poll()
 
     # ------------------------------------------------------------------

@@ -320,19 +320,32 @@ class ArmsControlNode : public rclcpp::Node {
       // ---- 중앙 데드존 ----
       double ex = apply_deadzone(filt_err_x_, deadzone_);
       double ey = apply_deadzone(filt_err_y_, deadzone_);
+      if (dt > 1e-6) {
+        err_dot_x_ = (filt_err_x_ - prev_err_x_) / dt;
+        err_dot_y_ = (filt_err_y_ - prev_err_y_) / dt;
+      }
+      prev_err_x_ = filt_err_x_;
+      prev_err_y_ = filt_err_y_;
 
       bool held = sm_->is_detection_held();
       pid_roll_->set_integral_frozen(held);
       pid_pitch_->set_integral_frozen(held);
-      roll_deg = roll_sign_ * pid_roll_->compute(ex, dt);
-      pitch_deg = pitch_sign_ * pid_pitch_->compute(ey, dt);
+      double emag_g = std::hypot(ex, ey);
+      double gain_scale = 1.0;
+      if (emag_g < 0.08)      gain_scale = 0.5;
+      else if (emag_g < 0.20) gain_scale = 0.75;
+      roll_deg = roll_sign_ * gain_scale * pid_roll_->compute(ex, dt);
+      double pitch_scale = 1.0;
+      if (fabs(ex) > 0.12)      pitch_scale = 0.3;
+      else if (fabs(ex) > 0.06) pitch_scale = 0.6;
+      pitch_deg = pitch_sign_ * gain_scale * pitch_scale * pid_pitch_->compute(ey, dt);
 
       // ---- 정렬 게이트 + 라이다 거리제어 ----
       {
         const double up = track_throttle_;
         const double hover = 0.62;
         const double fire_d = 5.0;
-        const double align_thr = 0.10;
+        const double align_thr = 0.05;
         double emag = std::hypot(filt_err_x_, filt_err_y_);
 
         if (!align_locked_ && emag < align_thr) {
@@ -366,8 +379,8 @@ class ArmsControlNode : public rclcpp::Node {
 
       if (++dbg_count_ % 6 == 0) {
         RCLCPP_INFO(get_logger(),
-                    "TRACK err=(%.2f,%.2f) d=%.1fm roll=%.1f pitch=%.1f",
-                    filt_err_x_, filt_err_y_,
+                    "TRACK err=(%.2f,%.2f) edot=(%.2f,%.2f) d=%.1fm roll=%.1f pitch=%.1f",
+                    filt_err_x_, filt_err_y_, err_dot_x_, err_dot_y_,
                     distance_valid() ? last_distance_ : -1.0, roll_deg,
                     pitch_deg);
       }
@@ -504,6 +517,10 @@ class ArmsControlNode : public rclcpp::Node {
   double error_lpf_alpha_{0.3};
   double filt_err_x_{0.0};
   double filt_err_y_{0.0};
+  double prev_err_x_{0.0};
+  double prev_err_y_{0.0};
+  double err_dot_x_{0.0};
+  double err_dot_y_{0.0};
   double kp_now_{0.0};
   double deadzone_{0.04};
   double deriv_lpf_alpha_{0.25};

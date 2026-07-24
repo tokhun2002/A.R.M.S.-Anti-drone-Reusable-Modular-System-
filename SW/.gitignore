@@ -14,3 +14,10 @@ install/
 log/
 __pycache__/
 *.zip
+*.bak
+*.widebak
+*.panelbak
+*.dualpanelbak
+*.buttonbak
+*.speedbak
+*.waylandbak
