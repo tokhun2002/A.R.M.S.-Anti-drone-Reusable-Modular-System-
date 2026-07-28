@@ -407,7 +407,11 @@ class ControllerGUI:
         stick_frm = tk.Frame(root, bg="#1e1e1e")
         stick_frm.pack(pady=6)
 
-        # 왼쪽 스틱 (ax0=X, ax1=Y)
+        # 왼쪽 스틱 (ax0=X=yaw, ax1=Y=throttle)
+        # 세로(throttle)는 실제 조종기처럼 기본 바닥, 놓아도 그 자리 유지.
+        # 가로(yaw)만 놓으면 중앙 복귀.
+        self._thr_hold = -1.0            # throttle 초기값 = 바닥
+        self.node.set_axis(1, -1.0)
         lfrm = tk.Frame(stick_frm, bg="#1e1e1e")
         lfrm.grid(row=0, column=0, padx=16)
         tk.Label(lfrm, text="L-STICK", fg="#888888", bg="#1e1e1e",
@@ -415,12 +419,12 @@ class ControllerGUI:
         self.l_canvas = tk.Canvas(lfrm, width=STICK_SIZE, height=STICK_SIZE,
                                   bg="#2a2a2a", highlightthickness=0, cursor="crosshair")
         self.l_canvas.pack()
-        tk.Label(lfrm, text="ax0, ax1", fg="#666666", bg="#1e1e1e",
+        tk.Label(lfrm, text="yaw, throttle", fg="#666666", bg="#1e1e1e",
                  font=("Arial", 7)).pack()
         self._draw_stick_bg(self.l_canvas)
         self.l_dot = self.l_canvas.create_oval(
-            *self._dot_coords(0, 0), fill="#e53935", outline="")
-        self._bind_stick(self.l_canvas, self.l_dot, 0, 1)
+            *self._dot_coords(0, self._thr_hold), fill="#e53935", outline="")
+        self._bind_throttle_stick(self.l_canvas, self.l_dot, 0, 1)
 
         # 오른쪽 스틱 (ax2=X, ax3=Y)
         rfrm = tk.Frame(stick_frm, bg="#1e1e1e")
@@ -430,7 +434,7 @@ class ControllerGUI:
         self.r_canvas = tk.Canvas(rfrm, width=STICK_SIZE, height=STICK_SIZE,
                                   bg="#2a2a2a", highlightthickness=0, cursor="crosshair")
         self.r_canvas.pack()
-        tk.Label(rfrm, text="ax2, ax3", fg="#666666", bg="#1e1e1e",
+        tk.Label(rfrm, text="roll, pitch", fg="#666666", bg="#1e1e1e",
                  font=("Arial", 7)).pack()
         self._draw_stick_bg(self.r_canvas)
         self.r_dot = self.r_canvas.create_oval(
@@ -438,8 +442,9 @@ class ControllerGUI:
         self._bind_stick(self.r_canvas, self.r_dot, 2, 3)
 
         # 스위치 (buttons[0..3])
+        #   KILL / ARM / MODE(0=auto·Manual, 1=manual·Altitude) / LAUNCH(→TRACK 트리거)
         SW_COLORS = ["#c62828", "#1565c0", "#2e7d32", "#e65100"]
-        SW_NAMES  = ["KILL", "LAND", "MODE", "LAUNCH"]
+        SW_NAMES  = ["KILL", "ARM", "MODE", "LAUNCH"]
         sw_frm = tk.Frame(root, bg="#1e1e1e")
         sw_frm.pack(pady=4)
         self.sw_labels = []
@@ -450,6 +455,27 @@ class ControllerGUI:
             lbl.grid(row=0, column=i, padx=2)
             lbl.bind("<Button-1>", lambda e, idx=i, c=col_on, n=name: self._toggle_switch(idx, c, n))
             self.sw_labels.append(lbl)
+
+    def _bind_throttle_stick(self, canvas, dot_id, ax_x, ay_thr):
+        """왼쪽 스틱: 가로(ax_x)=yaw는 놓으면 중앙 복귀,
+        세로(ay_thr)=throttle은 놓아도 그 자리 유지(기본 바닥)."""
+        def _move(event):
+            cx = cy = STICK_SIZE // 2
+            dx = max(-1.0, min(1.0, (event.x - cx) / STICK_R))
+            dy = max(-1.0, min(1.0, (cy - event.y) / STICK_R))
+            self.node.set_axis(ax_x, dx)
+            self.node.set_axis(ay_thr, dy)
+            self._thr_hold = dy
+            canvas.coords(dot_id, *self._dot_coords(dx, dy))
+
+        def _release(event):
+            # yaw만 중앙 복귀, throttle은 마지막 위치 유지
+            self.node.set_axis(ax_x, 0.0)
+            canvas.coords(dot_id, *self._dot_coords(0.0, self._thr_hold))
+
+        canvas.bind("<Button-1>", _move)
+        canvas.bind("<B1-Motion>", _move)
+        canvas.bind("<ButtonRelease-1>", _release)
 
     def _bind_stick(self, canvas, dot_id, ax_idx, ay_idx):
         def _move(event):
@@ -476,7 +502,7 @@ class ControllerGUI:
     def _toggle_switch(self, idx, col_on, name):
         val = self.node.toggle_button(idx)
         lbl = self.sw_labels[idx]
-        SW_NAMES = ["KILL", "LAND", "MODE", "LAUNCH"]
+        SW_NAMES = ["KILL", "ARM", "MODE", "LAUNCH"]
         if val:
             lbl.config(text=f"{SW_NAMES[idx]}: ON", bg=col_on)
         else:

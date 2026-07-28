@@ -25,6 +25,10 @@ namespace arms_command
 
 using SteadyClock = std::chrono::steady_clock;
 
+// ESP32 펌웨어가 보내는 CSV 패킷 필드(고정, 변경 불가).
+//   throttle: 0..1000,  roll/pitch/yaw: -1000..1000,  버튼: 0/1
+//   CTRL,seq,throttle,roll,pitch,yaw,fire,mode,eland,kill
+// control 노드 Joy 규약으로의 변환은 publishJoy 에서 수행한다.
 struct ControllerPacket
 {
   uint32_t seq = 0;
@@ -57,8 +61,6 @@ public:
       declare_parameter<int>("failsafe.timeout_ms", 300);
     failsafe_publish_rate_hz_ =
       declare_parameter<double>("failsafe.publish_rate_hz", 20.0);
-    status_log_rate_hz_ =
-      declare_parameter<double>("log.status_rate_hz", 1.0);
 
     if (poll_rate_hz_ <= 0.0) {
       throw std::runtime_error("serial.poll_rate_hz must be greater than 0");
@@ -83,7 +85,6 @@ public:
     const auto now_steady = SteadyClock::now();
     last_valid_packet_time_ = now_steady;
     last_failsafe_publish_time_ = now_steady - std::chrono::seconds(1);
-    last_status_log_time_ = now_steady - std::chrono::seconds(1);
 
     const auto period = std::chrono::duration<double>(1.0 / poll_rate_hz_);
     poll_timer_ = create_wall_timer(
@@ -405,7 +406,6 @@ private:
     }
 
     publishJoy(packet);
-    logStatus(packet);
   }
 
   void publishJoy(const ControllerPacket & packet)
@@ -414,24 +414,23 @@ private:
     msg.header.stamp = now();
     msg.header.frame_id = "controller_input";
 
-    // ESP32 패킷과 같은 순서를 유지한다.
-    // axes[0] throttle :  0.0 .. +1.0
-    // axes[1] roll     : -1.0 .. +1.0
-    // axes[2] pitch    : -1.0 .. +1.0
-    // axes[3] yaw      : -1.0 .. +1.0
+    // ESP32 패킷 → control 노드(arms_control) Joy 규약으로 변환.
+    //   axes[0]=yaw, axes[1]=throttle, axes[2]=roll, axes[3]=pitch  (모두 -1..1)
+    //     throttle: ESP32 0..1000 → -1..1 (바닥 0 → -1 = 최소 스로틀)
     msg.axes = {
-      static_cast<float>(packet.throttle) / 1000.0F,
+      static_cast<float>(packet.yaw) / 1000.0F,
+      static_cast<float>(packet.throttle) / 500.0F - 1.0F,
       static_cast<float>(packet.roll) / 1000.0F,
-      static_cast<float>(packet.pitch) / 1000.0F,
-      static_cast<float>(packet.yaw) / 1000.0F
+      static_cast<float>(packet.pitch) / 1000.0F
     };
 
-    // ESP32 패킷 순서: fire, mode, eland, kill.
+    //   buttons[0]=kill, [1]=arm, [2]=mode, [3]=launch
+    //     ESP32 eland 스위치 → arm,  fire 버튼 → launch 로 매핑
     msg.buttons = {
-      packet.fire,
-      packet.mode,
+      packet.kill,
       packet.eland,
-      packet.kill
+      packet.mode,
+      packet.fire
     };
 
     joy_pub_->publish(msg);
@@ -476,34 +475,6 @@ private:
     last_failsafe_publish_time_ = now_steady;
   }
 
-  void logStatus(const ControllerPacket & packet)
-  {
-    if (status_log_rate_hz_ <= 0.0) {
-      return;
-    }
-
-    const auto now_steady = SteadyClock::now();
-    const auto interval = std::chrono::duration<double>(1.0 / status_log_rate_hz_);
-    if ((now_steady - last_status_log_time_) < interval) {
-      return;
-    }
-
-    const float throttle_ros = static_cast<float>(packet.throttle) / 1000.0F;
-
-    RCLCPP_INFO(
-      get_logger(),
-      "RX seq=%u raw[T,R,P,Y]=[%d,%d,%d,%d] ROS axes[T,R,P,Y]=[%.3f,%.3f,%.3f,%.3f] buttons[F,M,E,K]=[%d,%d,%d,%d]",
-      packet.seq,
-      packet.throttle, packet.roll, packet.pitch, packet.yaw,
-      throttle_ros,
-      static_cast<float>(packet.roll) / 1000.0F,
-      static_cast<float>(packet.pitch) / 1000.0F,
-      static_cast<float>(packet.yaw) / 1000.0F,
-      packet.fire, packet.mode, packet.eland, packet.kill);
-
-    last_status_log_time_ = now_steady;
-  }
-
   std::string topic_name_;
   std::string serial_device_;
   int serial_baud_ = 115200;
@@ -512,7 +483,6 @@ private:
 
   int failsafe_timeout_ms_ = 300;
   double failsafe_publish_rate_hz_ = 20.0;
-  double status_log_rate_hz_ = 1.0;
 
   int serial_fd_ = -1;
   std::string rx_buffer_;
@@ -523,7 +493,6 @@ private:
 
   SteadyClock::time_point last_valid_packet_time_;
   SteadyClock::time_point last_failsafe_publish_time_;
-  SteadyClock::time_point last_status_log_time_;
 
   rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr joy_pub_;
   rclcpp::TimerBase::SharedPtr poll_timer_;

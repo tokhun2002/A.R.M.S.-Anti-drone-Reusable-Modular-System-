@@ -91,7 +91,7 @@ graph TD
 
     DETECTIONS(["/arms/detections"])
     MISSION_STATE(["/arms/mission_state"])
-    CRSF_SERIAL(["CRSF serial<br/>/tmp/crsf_tx (SITL)<br/>/dev/ttyUSB0 (실기체)"])
+    CRSF_SERIAL(["CRSF serial<br/>/tmp/crsf_tx (SITL)<br/>/dev/ttyTHS1 (실기체)"])
 
     subgraph arms_control ["arms_control"]
         CN["arms_control_node (C++)<br/>State Machine + PID + CRSF output"]
@@ -102,9 +102,9 @@ graph TD
         UN["arms_ui_node"]
     end
 
-    FC_SITL["PX4 SITL<br/>(Stabilized mode)"]
-    FC_HW["Flight Controller<br/>(ELRS RX → Stabilized)"]
-    ELRS_TX["ELRS TX module<br/>(UART 420kbaud)"]
+    FC_SITL["PX4 SITL<br/>(Manual/Altitude, CH6)"]
+    FC_HW["Flight Controller<br/>(ELRS RX → Manual/Altitude)"]
+    ELRS_TX["ELRS TX module<br/>(UART 400kbaud)"]
 
     V4L2 -->|V4L2 capture| VN_REAL
     GAZEBO -->|gz topic| VN_SITL
@@ -153,7 +153,7 @@ graph TD
 | `arms_command_node`        | `arms_command`   | SITL용 tkinter GUI 패널. 드래그 스틱·스위치 클릭으로 `/arms/command` 발행                                                                   | 호스트        |
 | `arms_command_hw_node` | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. fake_mode 지원 | 호스트        |
 | `arms_control_node`        | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환. CRSF 프레임을 시리얼로 직접 출력                          | 호스트        |
-| `sitl_bridge_node`         | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. CH5↑=ARM, CH6↑=LAND                   | 호스트 (SITL) |
+| `sitl_bridge_node`         | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. CH5=arm(레벨), CH6=flight mode(Manual/Altitude) | 호스트 (SITL) |
 | `arms_ui_node`             | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                      | 호스트        |
 | `gz_scan_bridge`           | `ros_gz_bridge`  | SITL 전용. Gazebo 거리 센서 토픽을 ROS2로 브릿지                                                                                            | 호스트        |
 
@@ -197,8 +197,8 @@ float32         kp_now               # 현재 적용 중인 P 게인 (시간 램
 | **SEARCH** | 타겟 탐색 중 (FC 미무장)        | CH3=min, CH5=disarm                         | 노란색, "Searching..."    |
 | **LOCK**   | 타겟 포착 확인 중 (잠금 타이머) | CH5=arm → PX4 arm                           | 주황색 박스, "Locking..." |
 | **TRACK**  | 위치 보정 추적                  | PID → CH1/2 + track_throttle → CH3          | 빨간 박스, "LOCKED"       |
-| **FIRE**   | 추적 유지 + 페이로드 즉시 발사  | PID 유지 + CH8=fire (1초 hold)              | 빨간 박스, "FIRED!"       |
-| **RTL**    | 귀환 및 착륙                    | CH6=land (SITL bridge: AUTO LAND 모드 전환) | "Returning..."            |
+| **FIRE**   | 추적 유지 + 페이로드 즉시 발사  | PID 유지 (전용 fire 채널 없음; mission_state로 신호) | 빨간 박스, "FIRED!"       |
+| **RTL**    | 귀환 및 착륙                    | 전용 land 채널 없음 (수동 Altitude 착륙 등 별도 경로) | "Returning..."            |
 
 ### 4.2 상태 전이 다이어그램
 
@@ -231,7 +231,7 @@ stateDiagram-v2
     TRACK --> SEARCH : 타겟 소실
 
     TRACK --> FIRE : 거리 < fire_distance_m<br/>(ray 센서 / 초음파)
-    FIRE --> RTL : 페이로드 트리거 즉시 (CH8 1초 hold)
+    FIRE --> RTL : 페이로드 트리거 즉시 (mission_state 신호)
 
     RTL --> IDLE : 착륙 완료
 ```
@@ -373,22 +373,50 @@ SITL:
 | 2   | pitch       | -1..1 → 172..1811                                         | RC_MAP_PITCH=2      |
 | 3   | throttle    | 0..1 → 172..1811                                          | RC_MAP_THROTTLE=3   |
 | 4   | yaw         | -1..1 → 172..1811 (auto: 992)                             | RC_MAP_YAW=4        |
-| 5   | arm switch  | IDLE=172, else=1811                                       | RC_MAP_ARM_SW=5     |
-| 6   | land switch | 정상=172, RTL/LAND=1811                                   | RC_MAP_LAND_SW=6    |
+| 5   | arm switch  | disarm=172, arm=1811 (auto=상태머신, manual=arm 스위치)   | RC_MAP_ARM_SW=5     |
+| 6   | flight mode | Manual=172(auto), Altitude=1811(manual)                   | RC_MAP_FLTMODE=6    |
 | 7   | kill switch | 정상=172, kill=1811 (상태 머신 무관, FC가 직접 모터 차단) | RC_MAP_KILL_SW=7    |
-| 8   | launch/fire | 정상=172, FIRE=1811 (1s hold)                             | RC_MAP_AUX1=8       |
+| 8   | (미사용)    | 172 고정                                                  | —                   |
+
+> - **CH6 flight mode**는 오퍼레이터 모드 스위치(joy buttons[2])와 1:1이다.
+>   auto(영상유도)=PX4 **Manual**(172), manual(손제어)=PX4 **Altitude**(1811).
+>   실기체는 PX4쪽 `RC_MAP_FLTMODE=6` + `COM_FLTMODE1/COM_FLTMODE6` 설정 필요.
+> - **CH5 arm**은 auto 모드에서 arm 스위치 값을 무시하고 상태 머신이 arm/disarm,
+>   manual 모드에서만 arm 스위치(buttons[1])를 따른다.
+> - **launch 버튼(buttons[3])** 과 **land/fire** 는 CRSF 채널로 내보내지 않는다.
+>   launch는 상태 머신 LOCK→TRACK 전이 트리거로만 쓰이고, CH8은 비워 둔다.
 
 CRSF 프레임 포맷: `[0xC8][24][0x16][22 bytes: 16ch × 11bit][CRC8-DVB-S2]`  
-전송 속도: 460800 baud (표준 ELRS 420000과 근접값)
+전송 속도: 400000 baud (커스텀 baud, termios2 `BOTHER`. 실기체 UART에서 확정)
 
 ### 7.3 auto / manual 모드
 
-`joy buttons[2]` 토글로 arms_control_node 내부에서 전환한다. PX4 flight mode는 항상 **Stabilized 고정**.
+모드 스위치(`joy buttons[2]`, **레벨 스위치**)로 arms_control_node 내부에서 전환한다.
+오퍼레이터 관점의 두 모드이며, 모드 스위치가 CH1-4 소스와 CH6 flight mode를 함께 결정한다.
 
-| 모드   | CH1-4 소스                   | CH5-8 소스              |
-| ------ | ---------------------------- | ----------------------- |
-| auto   | PID 계산 (roll/pitch/thrust) | 상태 머신 + joy buttons |
-| manual | joy axes[0-3] 패스스루       | joy buttons[0-3]        |
+- **auto (영상유도)**: 젯슨이 FPV 영상으로 각도 제어 명령 생성. PX4는 **Manual** 모드.
+  arm은 상태 머신이 관리(arm 스위치 무시).
+- **manual (손제어)**: 사람이 스틱으로 직접 조종. PX4는 **Altitude** 모드(손조종 편의).
+  arm은 arm 스위치(buttons[1])를 따름.
+
+| 모드   | PX4 flight mode | CH1-4 소스                                              | CH5 arm      |
+| ------ | --------------- | ------------------------------------------------------- | ------------ |
+| auto   | Manual          | PID 계산 (roll/pitch), throttle=track_throttle, yaw=992 | 상태 머신    |
+| manual | Altitude        | Mode2 스틱 패스스루 (아래 축 재배치)                    | arm 스위치   |
+
+manual 모드 축→채널 매핑 (Mode2 조종기 → AETR 채널 순서):
+
+| CH          | joy axis  | Mode2 스틱   |
+| ----------- | --------- | ------------ |
+| CH1 roll    | axes[2]   | R-stick X    |
+| CH2 pitch   | axes[3]   | R-stick Y    |
+| CH3 throttle| axes[1]   | L-stick Y    |
+| CH4 yaw     | axes[0]   | L-stick X    |
+
+> GUI 좌측 스틱의 세로(throttle, axes[1])는 실제 조종기처럼 **기본 바닥(-1.0,
+> CRSF 172 ≈ 988µs), 놓아도 그 자리 유지**한다(가로 yaw만 중앙 복귀). 나머지
+> 축(roll/pitch/yaw)은 스프링 복귀형(중앙=992 ≈ 1500µs). QGC RC 캘리브레이션은
+> 각 스틱을 최소↔최대로 끝까지 훑으면 CH별 172~1811(≈988~2012µs)이 잡힌다.
 
 ### 7.4 좌표계 및 오차 정의
 
@@ -439,8 +467,9 @@ arms_control_node:
       kp_ramp_sec: 5.0
       control_rate_hz: 30.0
     crsf:
-      port: "/tmp/crsf_tx" # SITL: socat PTY / 실기체: /dev/ttyUSB0 등
-      max_angle_deg: 35.0 # roll/pitch deg → CRSF 정규화 기준각
+      port: "/tmp/crsf_tx" # SITL 기본값(socat PTY). 실기체는 crsf_hw.yaml로 오버레이
+      baud: 400000         # 커스텀 baud (termios2 BOTHER). 실기체 UART 확정값
+      max_angle_deg: 35.0  # roll/pitch deg → CRSF 정규화 기준각
 ```
 
 PID 구현 특이사항:
@@ -455,11 +484,15 @@ PID 구현 특이사항:
 CRSF serial (/tmp/crsf_rx)
   └─ decode frame → channels[0..15]
         │
-        ├─ CH5 172→1811 (상승 에지) → MAV_CMD_COMPONENT_ARM_DISARM (arm)
-        ├─ CH5 1811→172 (하강 에지) → MAV_CMD_COMPONENT_ARM_DISARM (disarm)
-        ├─ CH6 172→1811 (상승 에지) → MAV_CMD_DO_SET_MODE (AUTO LAND)
-        └─ CH1-4, CH7, CH8 → RC_CHANNELS_OVERRIDE (50Hz, UDP → PX4)
+        ├─ CH5 레벨 (arm 스위치) → 실제 armed 상태와 다르면 재전송
+        │       MAV_CMD_COMPONENT_ARM_DISARM (arm/disarm)
+        ├─ CH6 에지 → MAV_CMD_DO_SET_MODE
+        │       low(<1500)=Manual(auto), high(≥1500)=Altitude(manual)
+        └─ CH1-4, CH7 → RC_CHANNELS_OVERRIDE (50Hz, UDP → PX4)
 ```
+
+> 실기체는 PX4가 CRSF를 직접 읽으므로 이 브리지가 없다. flight mode는
+> PX4 `RC_MAP_FLTMODE=6` + `COM_FLTMODE*` 슬롯으로 CH6를 매핑해 처리한다.
 
 ### 7.7 arms_control_node 내부 구조
 
@@ -544,8 +577,8 @@ nodes:
 # arms_bringup/launch/arms_full.launch.py
 
 nodes:
-  - arms_control_node  (arms_control)   상태머신 + PID + CRSF → /dev/ttyUSB0
-      파라미터: crsf_port=/dev/ttyUSB0
+  - arms_control_node  (arms_control)   상태머신 + PID + CRSF → /dev/ttyTHS1
+      파라미터: config/crsf_hw.yaml 오버레이 (crsf.port=/dev/ttyTHS1, crsf.baud=400000)
   - arms_ui_node       (arms_ui)
 
 # arms_command/launch/command.launch.py  (별도 실행)
@@ -554,8 +587,8 @@ nodes:
 별도 실행:
   docker compose -f docker-compose.jetson.yml up
 
-# arms_control/launch/control_real.launch.py  (단독 실행용)
-  arms_control_node only
+# arms_control/launch/control.launch.py  (단독 실행용)
+  arms_control_node only (control_params.yaml + crsf_hw.yaml 오버레이)
 ```
 
 ## 10. 전체 데이터 흐름 요약
@@ -583,25 +616,24 @@ arms_control_node  (state machine + PID)
       +──────────────────────────────> arms_ui_node (state display)
       |
       | CRSF serial (30Hz)
-      |   CH1: roll   CH2: pitch   CH3: throttle   CH4: yaw
-      |   CH5: arm    CH6: land    CH7: kill        CH8: fire
+      |   CH1: roll   CH2: pitch      CH3: throttle   CH4: yaw
+      |   CH5: arm    CH6: flightmode CH7: kill        CH8: (미사용)
       |
       +─── SITL ──────────────────────────────────────────────
       |    /tmp/crsf_tx → [socat] → /tmp/crsf_rx
       |         sitl_bridge_node
-      |           ├─ CH5↑ → ARM (MAVLink)
-      |           ├─ CH6↑ → AUTO LAND (MAVLink)
-      |           └─ CH1-8 → RC_CHANNELS_OVERRIDE (50Hz UDP)
-      |                              → PX4 Stabilized
+      |           ├─ CH5 레벨 → ARM/DISARM (MAVLink)
+      |           ├─ CH6 에지 → SET_MODE Manual(low)/Altitude(high)
+      |           └─ CH1-4,7 → RC_CHANNELS_OVERRIDE (50Hz UDP)
+      |                              → PX4 (Manual/Altitude)
       |
       +─── 실기체 ─────────────────────────────────────────────
-           /dev/ttyUSB0 (UART 460800)
+           /dev/ttyTHS1 (UART 400000)
                 → ELRS TX module → [RF 433/868/915MHz]
-                       → ELRS RX → FC (Stabilized mode)
-                                     ├─ ESC → Motors
-                                     └─ AUX1 (CH8) → Payload servo
+                       → ELRS RX → FC (CH6로 Manual/Altitude 전환)
+                                     └─ ESC → Motors
 ```
 
 ---
 
-_Document version: 0.5 — 2026-07-08_
+_Document version: 0.6 — 2026-07-28_

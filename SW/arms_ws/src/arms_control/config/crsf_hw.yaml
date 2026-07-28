@@ -1,0 +1,10 @@
+# 실제 하드웨어(Jetson) CRSF 출력 설정.
+# control.launch.py 에서 control_params.yaml 위에 덮어써서 로드됨.
+# ELRS TX 모듈이 연결된 UART 에 맞게 port 를 조정할 것.
+#   - 40핀 헤더 UART (8=TXD, 10=RXD): /dev/ttyTHS1
+#   - 그 외 UART:                     /dev/ttyTHS2
+arms_control_node:
+  ros__parameters:
+    crsf:
+      port: "/dev/ttyTHS1"
+      baud: 400000

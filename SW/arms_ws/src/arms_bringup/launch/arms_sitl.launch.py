@@ -51,10 +51,12 @@ def generate_launch_description():
             name="arms_detection_node", output="screen",
         ),
         # 제어 (상태머신 + PID + CRSF 시리얼 출력)
+        # SITL: socat PTY(/tmp/crsf_tx)로 출력 → sitl_bridge가 /tmp/crsf_rx에서 수신
         Node(
             package="arms_control", executable="arms_control_node",
             name="arms_control_node", output="screen",
-            parameters=[str(control_config)],
+            parameters=[str(control_config),
+                        {"crsf.port": "/tmp/crsf_tx"}],
         ),
         # SITL 브리지 (CRSF → MAVLink RC_CHANNELS_OVERRIDE → PX4)
         Node(

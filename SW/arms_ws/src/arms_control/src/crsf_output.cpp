@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <fcntl.h>
-#include <termios.h>
+#include <sys/ioctl.h>
+#include <asm/termbits.h>
 #include <unistd.h>
 
 namespace arms_control {
 
-CrsfOutput::CrsfOutput(std::string port) : port_(std::move(port)) {}
+CrsfOutput::CrsfOutput(std::string port, int baud)
+    : port_(std::move(port)), baud_(baud) {}
 
 CrsfOutput::~CrsfOutput() {
   if (fd_ >= 0) {
@@ -20,17 +22,36 @@ bool CrsfOutput::try_open() {
   fd_ = ::open(port_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
   if (fd_ < 0) return false;
 
-  struct termios tty{};
-  tcgetattr(fd_, &tty);
-  cfmakeraw(&tty);
-  // B460800 is the closest standard baud to ELRS 420000.
-  // For Jetson real UART, custom baud via ioctl can be set separately.
-  cfsetospeed(&tty, B460800);
-  cfsetispeed(&tty, B460800);
-  tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;
-  tty.c_cflag &= ~(PARENB | CSTOPB | CRTSCTS);
-  tty.c_cflag |= CREAD | CLOCAL;
-  tcsetattr(fd_, TCSANOW, &tty);
+  // Use termios2 to set a custom (non-standard) baud rate (default 400000,
+  // confirmed working on the Jetson UART for this ELRS receiver).
+  struct termios2 tty{};
+  if (ioctl(fd_, TCGETS2, &tty) < 0) {
+    ::close(fd_);
+    fd_ = -1;
+    return false;
+  }
+
+  // Raw mode: clear input/output/local processing flags.
+  tty.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL |
+                   IXON);
+  tty.c_oflag &= ~OPOST;
+  tty.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+
+  // 8N1, no flow control, enable receiver.
+  tty.c_cflag &= ~(CSIZE | PARENB | CSTOPB | CRTSCTS);
+  tty.c_cflag |= CS8 | CREAD | CLOCAL;
+
+  // Custom baud rate.
+  tty.c_cflag &= ~CBAUD;
+  tty.c_cflag |= BOTHER;
+  tty.c_ispeed = baud_;
+  tty.c_ospeed = baud_;
+
+  if (ioctl(fd_, TCSETS2, &tty) < 0) {
+    ::close(fd_);
+    fd_ = -1;
+    return false;
+  }
   return true;
 }
 

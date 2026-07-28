@@ -14,7 +14,8 @@ public:
 
   using Channels = std::array<uint16_t, 16>;
 
-  explicit CrsfOutput(std::string port);
+  // baud: custom serial baud rate (ELRS CRSF typically 400000).
+  explicit CrsfOutput(std::string port, int baud = 400000);
   ~CrsfOutput();
 
   // Send CRSF RC frame. Opens port lazily; returns false if port unavailable.
@@ -27,6 +28,7 @@ public:
 
 private:
   std::string port_;
+  int baud_{400000};
   int fd_{-1};
 
   bool try_open();

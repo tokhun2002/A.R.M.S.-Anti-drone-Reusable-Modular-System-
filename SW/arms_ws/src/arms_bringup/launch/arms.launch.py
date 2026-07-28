@@ -16,16 +16,17 @@ from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
-    control_config = (
-        Path(get_package_share_directory("arms_control")) / "config" / "control_params.yaml"
-    )
+    control_dir = Path(get_package_share_directory("arms_control")) / "config"
+    control_config = control_dir / "control_params.yaml"
+    # 실기체 CRSF 오버레이: crsf.port=/dev/ttyTHS1, crsf.baud=400000
+    crsf_hw_config = control_dir / "crsf_hw.yaml"
     video_launch = (
         Path(get_package_share_directory("arms_video")) / "launch" / "video.launch.py"
     )
 
     return LaunchDescription([
-        DeclareLaunchArgument("crsf_port", default_value="/dev/ttyUSB0",
-                              description="ELRS TX serial port (CRSF output)"),
+        DeclareLaunchArgument("crsf_port", default_value="/dev/ttyTHS1",
+                              description="ELRS TX serial port (CRSF output, 실기체 UART)"),
 
         # Video capture (arms_video_node)
         IncludeLaunchDescription(
@@ -44,7 +45,8 @@ def generate_launch_description():
             output="screen",
             parameters=[
                 str(control_config),
-                {"crsf.port": LaunchConfiguration("crsf_port")},
+                str(crsf_hw_config),                              # port + baud (실기체 확정값)
+                {"crsf.port": LaunchConfiguration("crsf_port")},  # 필요시 포트만 오버라이드
             ],
         ),
         # OpenCV UI

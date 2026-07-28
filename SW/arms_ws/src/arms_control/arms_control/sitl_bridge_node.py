@@ -6,8 +6,10 @@ Reads CRSF RC frames from a virtual serial port (socat PTY pair) and converts
 them to MAVLink RC_CHANNELS_OVERRIDE toward PX4.
 
 Channel mapping:
-  CH1: roll     CH2: pitch    CH3: throttle  CH4: yaw
-  CH5: arm sw   CH6: land sw  CH7: kill sw   CH8: launch/fire
+  CH1: roll     CH2: pitch     CH3: throttle  CH4: yaw
+  CH5: arm sw   CH6: mode sw   CH7: kill sw   CH8: (unused)
+
+CH6 flight mode: low=Manual(auto/영상유도), high=Altitude(manual/손제어).
 """
 
 import threading
@@ -24,9 +26,8 @@ except ImportError:
 
 # PX4 mode constants
 PX4_BASE_MODE_CUSTOM          = 1
-PX4_CUSTOM_MAIN_MODE_STABILIZED = 7
-PX4_CUSTOM_MAIN_MODE_AUTO     = 4
-PX4_CUSTOM_SUB_MODE_AUTO_LAND = 6
+PX4_CUSTOM_MAIN_MODE_MANUAL   = 1   # auto/영상유도 (CH6 low)
+PX4_CUSTOM_MAIN_MODE_ALTCTL   = 2   # manual/손제어 Altitude (CH6 high)
 
 CRSF_SYNC   = 0xC8
 CRSF_TYPE_RC = 0x16
@@ -119,9 +120,9 @@ class ArmsSITLCommNode(Node):
 
         self._channels  = [CRSF_MIN] * 16
         self._channels[2] = CRSF_MIN   # throttle min
-        self._prev_ch6  = CRSF_MIN     # land switch
+        self._prev_ch6  = CRSF_MIN     # flight-mode switch (for edge detect)
         self._ch5_high  = False        # arm switch, level (not edge) — kept in sync with CH5
-        self._land_pending = False
+        self._mode_pending = None      # desired PX4 main mode on CH6 edge
 
         self._armed = False            # last known FC armed state, from HEARTBEAT
         self._last_arm_send = 0.0      # throttle for arm/disarm resend
@@ -162,14 +163,15 @@ class ArmsSITLCommNode(Node):
                 time.sleep(3.0)
 
     def _initial_setup(self):
-        """Set Stabilized mode after EKF convergence; arming is done via CH5."""
+        """Set default Manual mode after EKF convergence; arming is done via CH5.
+        Flight mode thereafter follows CH6 (low=Manual, high=Altitude)."""
         time.sleep(3.0)
-        self.get_logger().info("Setting Stabilized mode...")
-        self._send_set_mode(PX4_CUSTOM_MAIN_MODE_STABILIZED)
+        self.get_logger().info("Setting Manual mode (CH6 default)...")
+        self._send_set_mode(PX4_CUSTOM_MAIN_MODE_MANUAL)
         time.sleep(0.5)
 
         self._connected = True
-        self.get_logger().info("SITL: Stabilized mode set. Waiting for arm signal (CH5).")
+        self.get_logger().info("SITL: Manual mode set. Waiting for arm signal (CH5).")
 
     # ------------------------------------------------------------------
     # MAVLink RX (armed-state tracking via HEARTBEAT)
@@ -207,12 +209,15 @@ class ArmsSITLCommNode(Node):
                 time.sleep(2.0)
 
     def _process_switches(self, channels):
-        """Track CH5 switch level (arm target) and detect CH6 rising edge (land)."""
+        """Track CH5 switch level (arm target) and CH6 flight-mode edges."""
         self._ch5_high = channels[4] > SWITCH_THRESH
 
         ch6 = channels[5]
-        if ch6 > SWITCH_THRESH and self._prev_ch6 <= SWITCH_THRESH:
-            self._land_pending = True
+        ch6_high = ch6 > SWITCH_THRESH
+        if ch6_high != (self._prev_ch6 > SWITCH_THRESH):
+            # CH6 low→Manual(auto/영상유도), high→Altitude(manual/손제어)
+            self._mode_pending = (PX4_CUSTOM_MAIN_MODE_ALTCTL if ch6_high
+                                  else PX4_CUSTOM_MAIN_MODE_MANUAL)
         self._prev_ch6 = ch6
 
     # ------------------------------------------------------------------
@@ -225,8 +230,8 @@ class ArmsSITLCommNode(Node):
         with self._lock:
             chs = list(self._channels)
             ch5_high = self._ch5_high
-            land_req = self._land_pending
-            self._land_pending = False
+            mode_req = self._mode_pending
+            self._mode_pending = None
 
         # Arm/disarm: keep resending while the FC's actual armed state doesn't match
         # CH5 yet. A single MAV_CMD_COMPONENT_ARM_DISARM can be TEMPORARILY_REJECTED
@@ -240,10 +245,11 @@ class ArmsSITLCommNode(Node):
                 f"sending {'ARM' if ch5_high else 'DISARM'}")
             self._send_arm(ch5_high)
 
-        # Handle pending land
-        if land_req:
-            self.get_logger().info("CH6↑ → LAND mode")
-            self._send_set_mode(PX4_CUSTOM_MAIN_MODE_AUTO, PX4_CUSTOM_SUB_MODE_AUTO_LAND)
+        # Handle pending flight-mode change (CH6)
+        if mode_req is not None:
+            name = "Altitude" if mode_req == PX4_CUSTOM_MAIN_MODE_ALTCTL else "Manual"
+            self.get_logger().info(f"CH6 → {name} mode")
+            self._send_set_mode(mode_req)
 
         # RC_CHANNELS_OVERRIDE: CRSF → microseconds
         us = [_crsf_to_us(v) for v in chs]
