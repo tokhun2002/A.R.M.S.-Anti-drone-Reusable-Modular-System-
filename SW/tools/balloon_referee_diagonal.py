@@ -43,11 +43,11 @@ except Exception:
     _GZ_OK = False
 
 # 비행 패턴: 실제 적 드론처럼 상공에서 곡선 기동하며 가로지르고, 화면 밖이면 재등장
-ALT = 44.0          # 기본 비행 고도 [m] (드론 도달가능·추락방지, 진짜요격)
+ALT = 26.0          # 기본 비행 고도 [m] (드론 도달가능·추락방지, 진짜요격)
 # 광역 비행: 카메라 화각 밖 먼 지점에서 시작 → 대각선으로 시야 통과 → 반대편 먼 곳으로 이탈.
 # 화각 제약 scale 을 제거하고 SPAN 을 기존(28) 대비 ~2.5배로 키움.
 SPAN = 100.0         # 대각선 가로지르는 총 거리 [m] (먼곳→먼곳). x/y 각각 ±SPAN/2 이동
-SPEED = 12.0        # 근접(카메라 반경 안) 속도 [m/s] — 요격 시간 확보용 저속
+SPEED = 1.8        # 근접(카메라 반경 안) 속도 [m/s] — 요격 시간 확보용 저속
 SPEED_FAR = 40.0    # 접근(카메라 반경 밖) 속도 [m/s] — 멀리서 빠르게 날아옴
 FOV_FRAC = 0.45     # 카메라 반경 ≈ 고도 × 이 값 [m]. 이 반경 안이면 저속으로 감속
 RATE_HZ = 60.0      # 위치 갱신 주기
@@ -170,11 +170,8 @@ class BalloonReferee(Node):
         #   밖이면 speed_far(빠르게 접근), 안이면 speed(느리게)로 감속 → 요격 시간 확보.
         f_now = 1.0 - 2.0 * self.t
         dist_now = math.hypot((span / 2.0) * f_now, (span / 2.0) * f_now)
-        cam_r = alt * self.get_parameter("fov_frac").value
-        if dist_now < cam_r:
-            speed = self.get_parameter("speed").value        # 반경 안: 저속
-        else:
-            speed = self.get_parameter("speed_far").value    # 반경 밖: 고속 접근
+        # 속도 통일: 반경 안/밖 구분 없이 speed 하나만 사용
+        speed = self.get_parameter("speed").value
         self.t += (speed / max(span, 0.1)) * (1.0 / RATE_HZ)
         f = 1.0 - 2.0 * self.t
         x = (span / 2.0) * f

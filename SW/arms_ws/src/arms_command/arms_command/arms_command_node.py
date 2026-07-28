@@ -251,7 +251,7 @@ class PanelGUI:
         self.ball_state_lbl.pack(pady=(2, 6), ipady=4)
         self._refresh_ball_btns()
 
-        self.alt = tk.Scale(right, from_=2, to=100, resolution=1, orient="horizontal",
+        self.alt = tk.Scale(right, from_=5, to=100, resolution=1, orient="horizontal",
                             length=150, bg="#1e1e1e", fg="white", label="풍선 고도 [m]",
                             highlightthickness=0, troughcolor="#444")
         self.alt.set(50)
@@ -260,7 +260,7 @@ class PanelGUI:
                       lambda e: ros_param_set_node(REFEREE_NODE, "alt", float(self.alt.get())))
 
         # 풍선 근접 속도 슬라이더 (카메라 반경 안 = 저속, referee speed)
-        self.ball_speed = tk.Scale(right, from_=2, to=40, resolution=1, orient="horizontal",
+        self.ball_speed = tk.Scale(right, from_=0.2, to=20, resolution=0.2, orient="horizontal",
                                    length=150, bg="#1e1e1e", fg="white", label="풍선 속도(근접) [m/s]",
                                    highlightthickness=0, troughcolor="#444")
         self.ball_speed.set(12)
@@ -269,13 +269,21 @@ class PanelGUI:
                              lambda e: ros_param_set_node(REFEREE_NODE, "speed", float(self.ball_speed.get())))
 
         # 풍선 접근 속도 슬라이더 (카메라 반경 밖 = 고속 접근, referee speed_far)
-        self.ball_speed_far = tk.Scale(right, from_=5, to=80, resolution=1, orient="horizontal",
+        self.ball_speed_far = tk.Scale(right, from_=0.2, to=40, resolution=0.2, orient="horizontal",
                                        length=150, bg="#1e1e1e", fg="white", label="풍선 접근속도(먼거리) [m/s]",
                                        highlightthickness=0, troughcolor="#444")
         self.ball_speed_far.set(40)
         self.ball_speed_far.pack(pady=(2, 0))
         self.ball_speed_far.bind("<ButtonRelease-1>",
                                  lambda e: ros_param_set_node(REFEREE_NODE, "speed_far", float(self.ball_speed_far.get())))
+        # 예측 조준(lead pursuit) 계수 — 표적이 갈 곳을 미리 조준 [s]
+        self.lead = tk.Scale(right, from_=0.0, to=0.8, resolution=0.05, orient="horizontal",
+                             length=150, bg="#1e1e1e", fg="white", label="예측 조준 lead [s]",
+                             highlightthickness=0, troughcolor="#444")
+        self.lead.set(0.0)
+        self.lead.pack(pady=(2, 0))
+        self.lead.bind("<ButtonRelease-1>",
+                       lambda e: ros_param_set("control.lead_gain", float(self.lead.get())))
 
         self._poll()
 

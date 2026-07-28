@@ -2,25 +2,26 @@ arms_control_node:
   ros__parameters:
     mission:
       detection_confidence_threshold: 0.65
-      lock_duration_sec: 2.0
+      lock_duration_sec: 0.3
       detection_timeout_sec: 1.0
-      lock_box_tolerance: 0.15
-      fire_distance_m: 5.0
+      lock_box_tolerance: 0.5
+      fire_distance_m: 9.0
       sitl_auto_launch: false
       auto_launch_delay_sec: 1.0
     control:
       roll_pid:
-        kp: 257.0
-        ki: 0.2
+        kp: 160.0
+        ki: 0.0
         kd: 2.2
-        output_limit: 40.0
+        output_limit: 30.0
       pitch_pid:
-        kp: 252.0
-        ki: 0.2
+        kp: 160.0
+        ki: 0.0
         kd: 2.2
-        output_limit: 40.0
+        output_limit: 30.0
       throttle: 0.55
       track_throttle: 0.84
+      lead_gain: 0.15
       roll_sign: 1.0
       pitch_sign: 1.0
       error_lpf_alpha: 0.3

@@ -214,10 +214,10 @@ class PanelGUI:
                       lambda e: ros_param_set_node(REFEREE_NODE, "alt", float(self.alt.get())))
 
         # 풍선 속도 슬라이더 (referee speed 파라미터 실시간 변경)
-        self.ball_speed = tk.Scale(root, from_=2, to=40, resolution=1, orient="horizontal",
+        self.ball_speed = tk.Scale(root, from_=0.2, to=20, resolution=0.2, orient="horizontal",
                                    length=300, bg="#1e1e1e", fg="white", label="풍선 속도 [m/s]",
                                    highlightthickness=0, troughcolor="#444")
-        self.ball_speed.set(12)
+        self.ball_speed.set(1.0)
         self.ball_speed.pack(pady=(2, 0))
         self.ball_speed.bind("<ButtonRelease-1>",
                              lambda e: ros_param_set_node(REFEREE_NODE, "speed", float(self.ball_speed.get())))

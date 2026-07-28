@@ -43,6 +43,7 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.pitch_pid.output_limit", 90.0);
     declare_parameter("control.throttle", 0.55);
     declare_parameter("control.track_throttle", 0.60);
+    declare_parameter("control.lead_gain", 0.0);
     declare_parameter("control.roll_sign", 1.0);
     declare_parameter("control.pitch_sign", 1.0);
     declare_parameter("control.error_lpf_alpha", 0.3);
@@ -102,6 +103,7 @@ class ArmsControlNode : public rclcpp::Node {
 
     throttle_ = get_parameter("control.throttle").as_double();
     track_throttle_ = get_parameter("control.track_throttle").as_double();
+    lead_gain_ = get_parameter("control.lead_gain").as_double();
     roll_sign_ = get_parameter("control.roll_sign").as_double();
     pitch_sign_ = get_parameter("control.pitch_sign").as_double();
     error_lpf_alpha_ = get_parameter("control.error_lpf_alpha").as_double();
@@ -132,6 +134,8 @@ class ArmsControlNode : public rclcpp::Node {
               pitch_sign_ = p.as_double();
             else if (n == "control.track_throttle")
               track_throttle_ = p.as_double();
+            else if (n == "control.lead_gain")
+              lead_gain_ = p.as_double();
             else if (n == "control.throttle")
               throttle_ = p.as_double();
             else if (n == "control.error_lpf_alpha")
@@ -321,8 +325,12 @@ class ArmsControlNode : public rclcpp::Node {
       double ex = apply_deadzone(filt_err_x_, deadzone_);
       double ey = apply_deadzone(filt_err_y_, deadzone_);
       if (dt > 1e-6) {
-        err_dot_x_ = (filt_err_x_ - prev_err_x_) / dt;
-        err_dot_y_ = (filt_err_y_ - prev_err_y_) / dt;
+        // 생 미분은 탐지 노이즈로 ±1.5까지 튐 → 강한 LPF로 표적 이동 추세만 추출
+        const double DOT_A = 0.12;
+        double raw_dx = (filt_err_x_ - prev_err_x_) / dt;
+        double raw_dy = (filt_err_y_ - prev_err_y_) / dt;
+        err_dot_x_ = DOT_A * raw_dx + (1.0 - DOT_A) * err_dot_x_;
+        err_dot_y_ = DOT_A * raw_dy + (1.0 - DOT_A) * err_dot_y_;
       }
       prev_err_x_ = filt_err_x_;
       prev_err_y_ = filt_err_y_;
@@ -334,11 +342,13 @@ class ArmsControlNode : public rclcpp::Node {
       double gain_scale = 1.0;
       if (emag_g < 0.08)      gain_scale = 0.5;
       else if (emag_g < 0.20) gain_scale = 0.75;
-      roll_deg = roll_sign_ * gain_scale * pid_roll_->compute(ex, dt);
+      double ex_lead = ex + lead_gain_ * err_dot_x_;
+      double ey_lead = ey + lead_gain_ * err_dot_y_;
+      roll_deg = roll_sign_ * gain_scale * pid_roll_->compute(ex_lead, dt);
       double pitch_scale = 1.0;
-      if (fabs(ex) > 0.12)      pitch_scale = 0.3;
-      else if (fabs(ex) > 0.06) pitch_scale = 0.6;
-      pitch_deg = pitch_sign_ * gain_scale * pitch_scale * pid_pitch_->compute(ey, dt);
+      if (fabs(ex) > 0.12)      pitch_scale = 0.8;
+      else if (fabs(ex) > 0.06) pitch_scale = 0.9;
+      pitch_deg = pitch_sign_ * gain_scale * pitch_scale * pid_pitch_->compute(ey_lead, dt);
 
       // ---- 정렬 게이트 + 라이다 거리제어 ----
       {
@@ -512,6 +522,7 @@ class ArmsControlNode : public rclcpp::Node {
 
   double throttle_{0.55};
   double track_throttle_{0.60};
+  double lead_gain_{0.0};
   double roll_sign_{1.0};
   double pitch_sign_{1.0};
   double error_lpf_alpha_{0.3};
