@@ -2,7 +2,10 @@
 # 노드 이름과 무관하게 적용되도록 와일드카드(/**) 사용.
 /**:
   ros__parameters:
-    video_device: "/dev/video1"
+    # 이 캡처 동글은 index0(실캡처)/index1(더미) 두 노드를 만들고, USB 재열거 때마다
+    # /dev/videoN 번호가 뒤바뀐다. 번호(/dev/video0) 대신 캡처 인터페이스에 고정된
+    # by-id 경로(index0)를 써야 항상 실제 캡처 노드를 연다.
+    video_device: "/dev/v4l/by-id/usb-MACROSIL_AV_TO_USB2.0-video-index0"
     # 아날로그→USB 캡처 동글(MS210x/EasierCAP, A2539)은 YUYV만 출력.
     # NTSC 신호(Predator 기본) = [720, 480] / PAL = [720, 576] 로 바꿀 것.
     pixel_format: "YUYV"

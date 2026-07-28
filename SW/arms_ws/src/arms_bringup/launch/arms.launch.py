@@ -1,5 +1,6 @@
 """
-Full real-hardware launch: arms_video + arms_detection + arms_control + arms_ui
+Full real-hardware launch: arms_video + arms_command + arms_detection + arms_control + arms_ui
+- arms_command (ESP32 UART) → /arms/command → arms_control
 - arms_control → CRSF serial (crsf.port 파라미터) → ELRS TX → [RF] → ELRS RX → FC
 - Detection: start separately via docker compose up
     cd arms_detection/docker && docker compose -f docker-compose.jetson.yml up
@@ -23,6 +24,9 @@ def generate_launch_description():
     video_launch = (
         Path(get_package_share_directory("arms_video")) / "launch" / "video.launch.py"
     )
+    command_launch = (
+        Path(get_package_share_directory("arms_command")) / "launch" / "command.launch.py"
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument("crsf_port", default_value="/dev/ttyTHS1",
@@ -31,6 +35,10 @@ def generate_launch_description():
         # Video capture (arms_video_node)
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(video_launch)),
+        ),
+        # 실기체 조종기 입력 (ESP32 UART → /arms/command)
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(str(command_launch)),
         ),
         # 검출 노드
         Node(

@@ -3,8 +3,11 @@ arms_command_hw_node:
     # ROS2 Joy 메시지를 발행할 토픽 (arms_control 이 구독)
     topic_name: /arms/command
 
-    # Jetson Orin Nano Super의 USB CDC 장치
-    serial.device: /dev/ttyACM0
+    # ESP32(USB CDC) 안정 경로. /dev/ttyACM* 번호는 재열거 때 바뀔 수 있어
+    # by-id(보드 고정) 경로 사용. ESP32 유닛(보드)을 교체하면 이 경로도 갱신할 것.
+    #   - 다른 USB 포트로 옮겨도 OK, 대신 보드 바뀌면 MAC이 달라져 갱신 필요.
+    #   - 포트 기준 고정을 원하면 /dev/serial/by-path/platform-3610000.usb-usb-0:1:1.0 사용.
+    serial.device: /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_10:20:BA:41:81:08-if00
 
     # ESP32와 동일한 통신속도
     serial.baud: 115200
