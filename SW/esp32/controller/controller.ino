@@ -297,19 +297,34 @@ void sendControllerPacket(
   bool mode,
   bool fire
 ) {
+  // ==========================================================
+  // 최종 출력 반전
+  // ==========================================================
+
+  // 중앙 기준 축: -1000 ~ 1000 범위에서 부호 반전
+  const int output_roll  = constrain(-roll,  -1000, 1000);
+  const int output_pitch = constrain(-pitch, -1000, 1000);
+  const int output_yaw   = constrain(-yaw,   -1000, 1000);
+
+  // 스위치 신호 반전
+  const bool output_kill  = !kill;
+  const bool output_eland = !eland;
+  const bool output_mode  = !mode;
+  const bool output_fire  = fire;
+
   const int length = snprintf(
     tx_packet,
     sizeof(tx_packet),
     "CTRL,%lu,%d,%d,%d,%d,%d,%d,%d,%d\n",
     static_cast<unsigned long>(seq_count),
     throttle,
-    roll,
-    pitch,
-    yaw,
-    fire ? 1 : 0,
-    mode ? 1 : 0,
-    eland ? 1 : 0,
-    kill ? 1 : 0
+    output_roll,
+    output_pitch,
+    output_yaw,
+    output_fire ? 1 : 0,
+    output_mode ? 1 : 0,
+    output_eland ? 1 : 0,
+    output_kill ? 1 : 0
   );
 
   if (length <= 0 || length >= static_cast<int>(sizeof(tx_packet))) {
