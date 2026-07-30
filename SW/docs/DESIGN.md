@@ -45,7 +45,7 @@ arms_ws/
 └── src/
     ├── arms_bringup/          # 최상위 런치 파일 및 설정
     ├── arms_video/            # 영상 소스 추상화 (v4l2_camera / gz_ros2_bridge)
-    ├── arms_detection/        # 융합 검출 노드 + YOLO Docker 노드
+    ├── arms_detection/        # 융합 검출 노드 (YOLO in-process + HSV + absdiff, Docker)
     ├── arms_command/          # 조종 인터페이스 (tkinter GUI / ADS1115 + GPIO)
     ├── arms_control/          # 상태 머신 + PID + CRSF 출력 (C++/Python hybrid)
     │     ├── src/             #   C++: arms_control_node, crsf_output
@@ -74,9 +74,7 @@ graph TD
     IMAGE(["/arms/image_raw"])
 
     subgraph arms_detection ["arms_detection"]
-        DN_YOLO["arms_yolo_detection_node<br/>(YOLO · Docker)"]
-        DN_FUSION["arms_detection_node<br/>(fusion: HSV + absdiff + YOLO)"]
-        DN_YOLO -->|/arms/yolo_detections| DN_FUSION
+        DN_FUSION["arms_detection_node<br/>(YOLO in-process + HSV + absdiff<br/>+ detect-then-track, Docker)"]
     end
 
     subgraph arms_command ["arms_command"]
@@ -115,7 +113,6 @@ graph TD
     CMD_GUI --> JOY
     VN_REAL --> IMAGE
     VN_SITL --> IMAGE
-    IMAGE --> DN_YOLO
     IMAGE --> DN_FUSION
     IMAGE --> UN
     DN_FUSION --> DETECTIONS
@@ -134,8 +131,7 @@ graph TD
 | 노드                       | subscribe                                                                                | publish                                                         |
 | -------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | `arms_video_node`          | —                                                                                        | `/arms/image_raw`                                               |
-| `arms_yolo_detection_node` | `/arms/image_raw`                                                                        | `/arms/yolo_detections`                                         |
-| `arms_detection_node`      | `/arms/image_raw`<br/>`/arms/yolo_detections`                                            | `/arms/detections`<br/>`/arms/debug_image`<br/>`/arms/debug_absdiff` |
+| `arms_detection_node`      | `/arms/image_raw`                                                                        | `/arms/detections`<br/>`/arms/roi_image`<br/>`/arms/debug_image`<br/>`/arms/debug_absdiff` |
 | `arms_command_node`        | `/arms/mission_state`                                                                    | `/arms/command`                                                 |
 | `arms_command_hw_node` | —                                                                                        | `/arms/command`                                                 |
 | `arms_control_node`        | `/arms/detections`<br/>`/arms/command`<br/>`/arms/scan_raw`<br/>`/arms/reset_cmd`        | `/arms/mission_state`<br/>`/arms/control_debug`<br/>CRSF serial |
@@ -148,8 +144,7 @@ graph TD
 | 노드                       | 패키지           | 역할                                                                                                                                        | 실행 환경     |
 | -------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
 | `arms_video_node`          | `arms_video`     | 영상 소스 추상화. 실기체는 v4l2_camera, SITL은 gz_ros2_bridge로 `/arms/image_raw` 발행                                                      | 호스트        |
-| `arms_yolo_detection_node` | `arms_detection` | YOLO 추론 후 `/arms/yolo_detections` 발행. **선택적** — Docker 컨테이너 안에서 실행                                                         | Docker (선택) |
-| `arms_detection_node`      | `arms_detection` | HSV·absdiff·YOLO 결과를 융합해 `/arms/detections` 발행. YOLO 노드 없이도 독립 동작 가능                                                     | 호스트        |
+| `arms_detection_node`      | `arms_detection` | YOLO(in-process)·HSV·absdiff 를 우선순위 융합 + detect-then-track(CSRT/KCF, ROI) 후 `/arms/detections` 발행. 실기체는 GPU Docker, SITL/호스트는 YOLO 자동 비활성(HSV/absdiff만) | Docker(실기체) / 호스트(SITL) |
 | `arms_command_node`        | `arms_command`   | SITL용 tkinter GUI 패널. 드래그 스틱·스위치 클릭으로 `/arms/command` 발행                                                                   | 호스트        |
 | `arms_command_hw_node` | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. fake_mode 지원 | 호스트        |
 | `arms_control_node`        | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환. CRSF 프레임을 시리얼로 직접 출력                          | 호스트        |
@@ -305,14 +300,16 @@ arms_video_node는 영상 소스에 따라 두 가지 모드로 동작한다.
         |
         | DDS (network_mode: host)
         v
-    arms_detection_node.py (Docker 내부)
+    arms_detection_node.py (Docker 내부, GPU)
         |
-    YOLO inference
+    검출 stack: YOLO(in-process) > HSV > absdiff
+        |
+    detect-then-track (CSRT/KCF): TRACK 중엔 ROI 크롭에만 YOLO
         |
     BoundingBox 변환 (normalized coords)
         |
         v
-/arms/detections (arms_msgs/DetectionArray)
+/arms/detections (arms_msgs/DetectionArray)  [+ /arms/roi_image, debug]
 ```
 
 ### 6.2 Docker Compose
@@ -557,7 +554,7 @@ arms_control_node
 
 nodes:
   - gz_scan_bridge          (ros_gz_bridge)  Gazebo 거리 센서 → /arms/scan_raw
-  - arms_detection_node     (arms_detection)
+  - arms_detection_node     (arms_detection) 호스트 실행 → YOLO 자동 비활성, HSV/absdiff만
   - arms_control_node       (arms_control)   상태머신 + PID + CRSF → /tmp/crsf_tx
   - sitl_bridge_node        (arms_control)   /tmp/crsf_rx → MAVLink UDP → PX4
   - arms_ui_node            (arms_ui)
@@ -565,7 +562,8 @@ nodes:
 
 별도 실행:
   PX4 SITL: cd PX4-Autopilot && make px4_sitl gz_arms_drone
-  YOLO (선택): docker compose -f docker-compose.laptop.yml up
+  YOLO 포함 검출(선택): docker compose -f docker-compose.laptop.yml up
+    (컨테이너의 arms_detection_node 가 YOLO 포함 → 호스트 노드와 중복 실행 금지)
 
 # arms_control/launch/control_sitl.launch.py  (단독 실행용)
   arms_control_node + sitl_bridge_node
@@ -604,7 +602,7 @@ arms_video_node  ─────────────────────
       +──────────────────────────────> arms_ui_node (display)
       |
       v
-arms_detection_node  (Docker 컨테이너 내부, YOLO inference)
+arms_detection_node  (Docker, YOLO in-process + HSV/absdiff + detect-then-track)
       |
       | /arms/detections  [arms_msgs/DetectionArray]
       +──────────────────────────────> arms_ui_node (overlay boxes)

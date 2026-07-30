@@ -21,7 +21,6 @@ setup(
     entry_points={
         "console_scripts": [
             "arms_detection_node = arms_detection.arms_detection_node:main",
-            "arms_opencv_detection_node = arms_detection.arms_opencv_detection_node:main",
         ],
     },
 )
