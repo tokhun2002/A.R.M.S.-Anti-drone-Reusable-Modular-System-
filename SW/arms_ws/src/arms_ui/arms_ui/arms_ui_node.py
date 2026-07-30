@@ -6,18 +6,31 @@ Subscribes to:
   /arms/detections     arms_msgs/DetectionArray
   /arms/mission_state  arms_msgs/MissionState
   /arms/control_debug  geometry_msgs/Vector3
+  /arms/command        sensor_msgs/Joy   (buttons[2]: 0=AUTO, 1=MANUAL)
+
+오버레이(바운딩박스/십자선/상태/ROI 등)는 AUTO 모드에서만 그린다.
+MANUAL 모드(buttons[2]==1)에서는 원본 영상만 표시한다.
 """
+
+import os
+import shutil
+import subprocess
+import threading
 
 import cv2
 import numpy as np
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, Joy
 
 from arms_msgs.msg import DetectionArray, MissionState
 from geometry_msgs.msg import Vector3
+
+# /arms/command Joy 의 mode 스위치 인덱스 (arms_control_node.cpp btn(2) 와 일치)
+MODE_BUTTON_IDX = 2
 
 STATE_COLORS = {
     "IDLE":   (128, 128, 128),
@@ -44,16 +57,30 @@ class ArmsUINode(Node):
         # PiP 크기 (프레임 폭 대비 ROI 표시 폭 비율)
         self.declare_parameter("ui.roi_pip_frac", 0.25)
 
+        # 모드 전환 효과음 (MP3). 기본값 = 패키지 share/sounds 설치 경로.
+        try:
+            _snd_dir = os.path.join(get_package_share_directory("arms_ui"), "sounds")
+        except Exception:
+            _snd_dir = ""
+        self.declare_parameter("ui.sound_to_manual", os.path.join(_snd_dir, "to_manual.mp3"))
+        self.declare_parameter("ui.sound_to_auto", os.path.join(_snd_dir, "to_auto.mp3"))
+        self._player = shutil.which("ffplay")
+        if self._player is None:
+            self.get_logger().warn("ffplay 없음 — 모드 전환 효과음이 재생되지 않습니다.")
+
         self.create_subscription(Image, "/arms/image_raw", self._cb_image, best_effort_qos)
         self.create_subscription(DetectionArray, "/arms/detections", self._cb_detections, 10)
         self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
         self.create_subscription(Vector3, "/arms/control_debug", self._cb_debug, 10)
         self.create_subscription(Image, "/arms/roi_image", self._cb_roi, best_effort_qos)
+        self.create_subscription(Joy, "/arms/command", self._cb_command, 10)
 
         self._latest_detections = DetectionArray()
         self._latest_state = MissionState()
         self._latest_cmd = Vector3()
         self._latest_roi = None
+        self._manual_mode = False   # buttons[2]==1 → 수동 모드(오버레이 끔)
+        self._prev_manual = None    # 이전 mode 값 (None=아직 미수신, 첫 수신은 효과음 없음)
 
         cv2.namedWindow("A.R.M.S.", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("A.R.M.S.", 960, 720)
@@ -72,6 +99,34 @@ class ArmsUINode(Node):
 
     def _cb_debug(self, msg: Vector3):
         self._latest_cmd = msg
+
+    def _cb_command(self, msg: Joy):
+        if len(msg.buttons) <= MODE_BUTTON_IDX:
+            return
+        manual = bool(msg.buttons[MODE_BUTTON_IDX])
+        self._manual_mode = manual
+        # 전환 엣지에서만 효과음 (첫 수신 self._prev_manual is None 은 건너뜀)
+        if self._prev_manual is not None and manual != self._prev_manual:
+            param = "ui.sound_to_manual" if manual else "ui.sound_to_auto"
+            self._play_sound(self.get_parameter(param).value)
+        self._prev_manual = manual
+
+    def _play_sound(self, path):
+        """ffplay 로 효과음을 비동기 재생 (UI 렌더링을 막지 않음)."""
+        if not self._player or not path or not os.path.isfile(path):
+            if path and not os.path.isfile(path):
+                self.get_logger().warn(f"효과음 파일 없음: {path}")
+            return
+
+        def _run():
+            try:
+                subprocess.run(
+                    [self._player, "-nodisp", "-autoexit", "-loglevel", "quiet", path],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as e:
+                self.get_logger().warn(f"효과음 재생 실패: {e}")
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _cb_roi(self, msg: Image):
         if msg.width == 0 or msg.height == 0 or len(msg.data) == 0:
@@ -92,8 +147,10 @@ class ArmsUINode(Node):
         if frame is None or frame.size == 0:
             return
 
-        self._draw_overlay(frame)
-        self._draw_roi_pip(frame)
+        # 수동 모드에서는 원본 영상만 표시하고 오버레이는 생략한다.
+        if not self._manual_mode:
+            self._draw_overlay(frame)
+            self._draw_roi_pip(frame)
         cv2.imshow("A.R.M.S.", frame)
         cv2.waitKey(1)
 
