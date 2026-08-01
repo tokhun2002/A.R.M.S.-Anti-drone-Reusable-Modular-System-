@@ -1,5 +1,8 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -303,10 +306,73 @@ class ArmsControlNode : public rclcpp::Node {
     return 0.0;
   }
 
+  /* 수신된 CRSF 텔레메트리와 통신 오류를 시험용 로그로 출력한다. */
+  void handle_crsf_input() {
+    const auto result = crsf_out_->receive();                     // UART에 쌓인 응답을 모두 가져온다.
+
+    crsf_rx_bytes_ += result.bytes_read;                          // 누적 수신량을 갱신한다.
+    crsf_rx_echoes_ += result.echo_frames;                        // 자체 송신 에코 수를 갱신한다.
+    crsf_rx_crc_errors_ += result.crc_errors;                     // CRC 오류 수를 갱신한다.
+    crsf_rx_framing_errors_ += result.framing_errors;             // 프레임 길이 오류 수를 갱신한다.
+    crsf_rx_valid_frames_ += result.frames.size();                // 정상 텔레메트리 수를 갱신한다.
+
+    if (result.bytes_read > 0 || result.crc_errors > 0 ||
+        result.framing_errors > 0)
+    {
+      RCLCPP_INFO_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "CRSF RX: bytes=%zu valid=%zu echo=%zu crc_err=%zu frame_err=%zu",
+        crsf_rx_bytes_, crsf_rx_valid_frames_, crsf_rx_echoes_,
+        crsf_rx_crc_errors_, crsf_rx_framing_errors_);            // 2초마다 누적 통계를 보여준다.
+    }
+
+    for (const auto & frame : result.frames) {
+      if (!crsf_seen_types_[frame.type]) {
+        crsf_seen_types_[frame.type] = true;                      // 타입별 첫 수신 여부를 기록한다.
+        RCLCPP_INFO(
+          get_logger(), "CRSF telemetry detected: addr=0x%02X type=0x%02X payload=%zu",
+          static_cast<unsigned int>(frame.address),
+          static_cast<unsigned int>(frame.type), frame.payload.size());   // 새 텔레메트리 타입을 한 번 알린다.
+      }
+
+      if (frame.type == 0x14 && frame.payload.size() >= 10) {
+        const int up_rssi_1 = -static_cast<int>(frame.payload[0]);         // 상향 안테나 1 RSSI를 dBm으로 바꾼다.
+        const int up_rssi_2 = -static_cast<int>(frame.payload[1]);         // 상향 안테나 2 RSSI를 dBm으로 바꾼다.
+        const int up_lq = static_cast<int>(frame.payload[2]);              // 상향 링크 품질을 백분율로 읽는다.
+        const int up_snr = static_cast<int>(static_cast<int8_t>(frame.payload[3]));   // 상향 SNR의 부호를 복원한다.
+        const int down_rssi = -static_cast<int>(frame.payload[7]);         // 하향 RSSI를 dBm으로 바꾼다.
+        const int down_lq = static_cast<int>(frame.payload[8]);            // 하향 링크 품질을 백분율로 읽는다.
+        const int down_snr = static_cast<int>(static_cast<int8_t>(frame.payload[9]));   // 하향 SNR의 부호를 복원한다.
+
+        RCLCPP_INFO_THROTTLE(
+          get_logger(), *get_clock(), 1000,
+          "ELRS link: up_rssi=(%d,%d)dBm up_lq=%d%% up_snr=%ddB "
+          "down_rssi=%ddBm down_lq=%d%% down_snr=%ddB",
+          up_rssi_1, up_rssi_2, up_lq, up_snr,
+          down_rssi, down_lq, down_snr);                          // 링크 상태를 1초마다 보여준다.
+      } else if ((frame.type == 0x1C || frame.type == 0x1D) &&
+                 frame.payload.size() >= 5)
+      {
+        const int rssi = -static_cast<int>(frame.payload[0]);             // 단일 링크 RSSI를 dBm으로 바꾼다.
+        const int rssi_percent = static_cast<int>(frame.payload[1]);       // RSSI 백분율을 읽는다.
+        const int link_quality = static_cast<int>(frame.payload[2]);       // 링크 품질을 백분율로 읽는다.
+        const int snr = static_cast<int>(static_cast<int8_t>(frame.payload[3]));   // SNR의 부호를 복원한다.
+
+        RCLCPP_INFO_THROTTLE(
+          get_logger(), *get_clock(), 1000,
+          "ELRS %s link: rssi=%ddBm rssi_pct=%d%% lq=%d%% snr=%ddB",
+          frame.type == 0x1C ? "RX" : "TX",
+          rssi, rssi_percent, link_quality, snr);                 // 분리형 링크 상태를 1초마다 보여준다.
+      }
+    }
+  }
+
   // ----------------------------------------------------------------
   // 30 Hz control loop
   // ----------------------------------------------------------------
   void control_loop() {
+    handle_crsf_input();                                         // 직전 송신 이후 도착한 텔레메트리를 처리한다.
+
     auto now_t = now();
     double dt = (now_t - last_tick_).seconds();
     last_tick_ = now_t;
@@ -477,7 +543,11 @@ class ArmsControlNode : public rclcpp::Node {
 
       // CH8: 미사용 (crsf.fill(CRSF_MIN)으로 172 고정)
 
-      crsf_out_->send(crsf);
+      if (!crsf_out_->send(crsf)) {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 2000,
+          "CRSF TX failed: check UART port and baud rate.");      // 송신 실패를 과도한 반복 없이 알린다.
+      }
     }
 
     // ---- Debug publish ----
@@ -570,9 +640,15 @@ class ArmsControlNode : public rclcpp::Node {
   bool joy_manual_mode_{false};
   std::array<int, 4> prev_btn_{};
 
-  // CRSF output
-  std::unique_ptr<CrsfOutput> crsf_out_;
-  double crsf_max_angle_{35.0};
+  // CRSF 송수신 상태
+  std::unique_ptr<CrsfOutput> crsf_out_;                          // CRSF UART 송수신기를 소유한다.
+  double crsf_max_angle_{35.0};                                  // 자동 제어 각도의 CRSF 정규화 기준을 둔다.
+  std::array<bool, 256> crsf_seen_types_{};                       // 처음 발견한 텔레메트리 타입을 구분한다.
+  std::size_t crsf_rx_bytes_{0};                                 // 누적 UART 수신량을 센다.
+  std::size_t crsf_rx_valid_frames_{0};                          // 정상 텔레메트리 프레임 수를 센다.
+  std::size_t crsf_rx_echoes_{0};                                // 자체 송신 에코 프레임 수를 센다.
+  std::size_t crsf_rx_crc_errors_{0};                            // CRC 오류 프레임 수를 센다.
+  std::size_t crsf_rx_framing_errors_{0};                        // 길이 오류 프레임 수를 센다.
 
   rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
   rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr sub_distance_;
