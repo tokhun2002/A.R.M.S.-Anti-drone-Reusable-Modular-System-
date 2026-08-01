@@ -15,8 +15,8 @@ ELRS 텔레메트리를 수신하는지 확인한다.
 Jetson Orin Nano 40핀 헤더 기준으로 연결한다.
 
 ```text
-Jetson 핀 8 UART1_TXD ── 4.7kΩ ──┬── Ranger Micro CRSF
-                                  └── Jetson 핀 10 UART1_RXD
+Jetson 핀 10 UART1_TXD ── 2.2kΩ ──┬── Ranger Micro CRSF
+                                  └── Jetson 핀 8 UART1_RXD
 
 Jetson 핀 6 GND ───────────────────── Ranger Micro GND
 ```
