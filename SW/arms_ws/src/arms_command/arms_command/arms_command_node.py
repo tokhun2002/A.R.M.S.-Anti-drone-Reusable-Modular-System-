@@ -96,6 +96,10 @@ class PanelNode(Node):
         self._buttons[idx] ^= 1
         return self._buttons[idx]
 
+    def set_button(self, idx, val):
+        self._buttons[idx] = 1 if val else 0
+        return self._buttons[idx]
+
     def fire_launch(self):
         self._buttons[3] = 1
 
@@ -117,7 +121,7 @@ class PanelGUI:
 
         root.title("A.R.M.S. Control Panel")
         root.configure(bg="#1e1e1e")
-        root.geometry("740x580")
+        root.geometry("760x880")
 
         # ── 상단: 미션 상태 (전체 폭) ──────────────────────────────────────
         top = tk.Frame(root, bg="#1e1e1e")
@@ -133,11 +137,27 @@ class PanelGUI:
         self.info_lbl.pack()
         tk.Button(top, text="LAUNCH (→TRACK)", font=("Arial", 12, "bold"),
                   bg="#d0021b", fg="white", activebackground="#ff1744",
-                  command=self._on_launch).pack(pady=(5, 2), fill="x", padx=40)
-        self.reset_btn = tk.Button(top, text="RESET (드론 원점 복귀)", font=("Arial", 10),
-                                   bg="#37474f", fg="white", activebackground="#546e7a",
-                                   command=self._on_reset)
-        self.reset_btn.pack(pady=(0, 4), fill="x", padx=40)
+                  command=self._on_launch).pack(pady=(5, 4), fill="x", padx=40)
+
+        # ── 실기체 3-스위치 (조종기 토글 스위치와 동일) ──
+        #   기본: 자동 + DISARM + KILL off.  날리려면 ARM → (수동은 스로틀↑).
+        tk.Label(top, text="─ 스위치 (실기체 3-토글) ─", fg="#888888", bg="#1e1e1e",
+                 font=("Arial", 9)).pack(pady=(4, 2))
+        sw3 = tk.Frame(top, bg="#1e1e1e")
+        sw3.pack()
+        self._sw_mode = 0   # 0=AUTO, 1=MANUAL  → button[2]
+        self._sw_arm  = 0   # 0=DISARM, 1=ARM   → button[1]
+        self._sw_kill = 0   # 0=정상, 1=KILL    → button[0]
+        self.sw_mode_btn = tk.Button(sw3, text="모드: 자동", width=13, font=("Arial", 11, "bold"),
+                                     command=self.toggle_mode)
+        self.sw_mode_btn.grid(row=0, column=0, padx=3)
+        self.sw_arm_btn = tk.Button(sw3, text="DISARM", width=13, font=("Arial", 11, "bold"),
+                                    command=self.toggle_arm)
+        self.sw_arm_btn.grid(row=0, column=1, padx=3)
+        self.sw_kill_btn = tk.Button(sw3, text="KILL", width=9, font=("Arial", 11, "bold"),
+                                     command=self.toggle_kill)
+        self.sw_kill_btn.grid(row=0, column=2, padx=3)
+        self._refresh_switches()
 
         # ── 2열 레이아웃 ────────────────────────────────────────────────────
         cols = tk.Frame(root, bg="#1e1e1e")
@@ -209,11 +229,11 @@ class PanelGUI:
             return ep, ei, ed
 
         self.roll_kp, self.roll_ki, self.roll_kd = make_pid_group(
-            left, "Roll PID", [20, 0.8, 0.65],
+            left, "Roll PID", [160, 0.0, 2.2],
             ["control.roll_pid.kp", "control.roll_pid.ki", "control.roll_pid.kd"])
 
         self.pitch_kp, self.pitch_ki, self.pitch_kd = make_pid_group(
-            left, "Pitch PID", [20, 0.8, 0.65],
+            left, "Pitch PID", [160, 0.0, 2.2],
             ["control.pitch_pid.kp", "control.pitch_pid.ki", "control.pitch_pid.kd"])
 
         # 추력 슬라이더는 아날로그 느낌이 있어서 유지
@@ -254,41 +274,68 @@ class PanelGUI:
         self.alt = tk.Scale(right, from_=5, to=100, resolution=1, orient="horizontal",
                             length=150, bg="#1e1e1e", fg="white", label="풍선 고도 [m]",
                             highlightthickness=0, troughcolor="#444")
-        self.alt.set(50)
+        self.alt.set(42)
         self.alt.pack(pady=(2, 0))
         self.alt.bind("<ButtonRelease-1>",
                       lambda e: ros_param_set_node(REFEREE_NODE, "alt", float(self.alt.get())))
 
-        # 풍선 근접 속도 슬라이더 (카메라 반경 안 = 저속, referee speed)
-        self.ball_speed = tk.Scale(right, from_=0.2, to=20, resolution=0.2, orient="horizontal",
-                                   length=150, bg="#1e1e1e", fg="white", label="풍선 속도(근접) [m/s]",
+        # 풍선 속도 슬라이더 (근접/먼거리 통일 — 단일 속도)
+        self.ball_speed = tk.Scale(right, from_=0.2, to=40, resolution=0.2, orient="horizontal",
+                                   length=150, bg="#1e1e1e", fg="white", label="풍선 속도 [m/s]",
                                    highlightthickness=0, troughcolor="#444")
-        self.ball_speed.set(12)
+        self.ball_speed.set(1.6)
         self.ball_speed.pack(pady=(2, 0))
         self.ball_speed.bind("<ButtonRelease-1>",
                              lambda e: ros_param_set_node(REFEREE_NODE, "speed", float(self.ball_speed.get())))
 
-        # 풍선 접근 속도 슬라이더 (카메라 반경 밖 = 고속 접근, referee speed_far)
-        self.ball_speed_far = tk.Scale(right, from_=0.2, to=40, resolution=0.2, orient="horizontal",
-                                       length=150, bg="#1e1e1e", fg="white", label="풍선 접근속도(먼거리) [m/s]",
-                                       highlightthickness=0, troughcolor="#444")
-        self.ball_speed_far.set(40)
-        self.ball_speed_far.pack(pady=(2, 0))
-        self.ball_speed_far.bind("<ButtonRelease-1>",
-                                 lambda e: ros_param_set_node(REFEREE_NODE, "speed_far", float(self.ball_speed_far.get())))
-        # 예측 조준(lead pursuit) 계수 — 표적이 갈 곳을 미리 조준 [s]
-        self.lead = tk.Scale(right, from_=0.0, to=0.8, resolution=0.05, orient="horizontal",
-                             length=150, bg="#1e1e1e", fg="white", label="예측 조준 lead [s]",
+        # 예측 조준(lead) — 움직이는 공의 미래 위치를 겨냥 (control.lead_gain)
+        self.lead = tk.Scale(right, from_=0.0, to=1.5, resolution=0.05, orient="horizontal",
+                             length=150, bg="#1e1e1e", fg="white", label="예측 조준 lead",
                              highlightthickness=0, troughcolor="#444")
-        self.lead.set(0.0)
+        self.lead.set(0.20)
         self.lead.pack(pady=(2, 0))
         self.lead.bind("<ButtonRelease-1>",
                        lambda e: ros_param_set("control.lead_gain", float(self.lead.get())))
 
+        # ── ACRO 자세제어 (각속도 캐스케이드) — 왼쪽 컬럼 하단으로 이동 ──────────
+        tk.Label(left, text="ACRO 자세제어", fg="#aaaaaa", bg="#1e1e1e",
+                 font=("Arial", 10, "bold")).pack(anchor="w", pady=(12, 2))
+        self.att_p = tk.Scale(left, from_=1, to=15, resolution=0.5, orient="horizontal",
+                              length=150, bg="#1e1e1e", fg="white", label="자세게인 att_p (떨리면↓)",
+                              highlightthickness=0, troughcolor="#444")
+        self.att_p.set(6.5)
+        self.att_p.pack(anchor="w", pady=(2, 0))
+        self.att_p.bind("<ButtonRelease-1>",
+                        lambda e: ros_param_set("control.att_p", float(self.att_p.get())))
+        self.max_tilt = tk.Scale(left, from_=10, to=60, resolution=1, orient="horizontal",
+                                 length=150, bg="#1e1e1e", fg="white", label="최대 기울기 [deg]",
+                                 highlightthickness=0, troughcolor="#444")
+        self.max_tilt.set(35)
+        self.max_tilt.pack(anchor="w", pady=(2, 0))
+        self.max_tilt.bind("<ButtonRelease-1>",
+                           lambda e: ros_param_set("control.max_tilt_deg", float(self.max_tilt.get())))
+        # 자세보정 게인 (유도 ①): 0부터 올려 튜닝. 발산하면 ↓
+        self.att_comp = tk.Scale(left, from_=0.0, to=0.03, resolution=0.001, orient="horizontal",
+                                 length=150, bg="#1e1e1e", fg="white", label="자세보정 att_comp (0→↑)",
+                                 highlightthickness=0, troughcolor="#444")
+        self.att_comp.set(0.014)
+        self.att_comp.pack(anchor="w", pady=(2, 0))
+        self.att_comp.bind("<ButtonRelease-1>",
+                           lambda e: ros_param_set("control.att_comp", float(self.att_comp.get())))
+        # 자세 부호 뒤집기 — arm 하자마자 홱 자빠지면 여기를 -1 로
+        asgn = tk.Frame(left, bg="#1e1e1e")
+        asgn.pack(anchor="w", pady=4)
+        self.att_roll_sign = 1.0
+        self.att_pitch_sign = -1.0
+        self.att_roll_btn = tk.Button(asgn, text="자세Roll: +", width=11, command=self.flip_att_roll)
+        self.att_roll_btn.grid(row=0, column=0, padx=2)
+        self.att_pitch_btn = tk.Button(asgn, text="자세Pitch: -", width=11, command=self.flip_att_pitch)
+        self.att_pitch_btn.grid(row=0, column=1, padx=2)
+
         self._poll()
 
     # ------------------------------------------------------------------
-    # LAUNCH / RESET 버튼
+    # LAUNCH 버튼
     # ------------------------------------------------------------------
     def _on_launch(self):
         self.node.fire_launch()
@@ -296,32 +343,6 @@ class PanelGUI:
 
     def _release_launch(self):
         self.node.release_launch()
-
-    def _on_reset(self):
-        self.reset_btn.config(text="리셋 중...", state="disabled", bg="#5d4037")
-
-        def do_reset():
-            # 1) 드론을 spawn 위치로 teleport (WorldControl reset은 동적 spawn 모델 삭제함)
-            subprocess.run([
-                "gz", "service",
-                "-s", f"/world/{WORLD}/set_pose",
-                "--reqtype", "gz.msgs.Pose",
-                "--reptype", "gz.msgs.Boolean",
-                "--timeout", "2000",
-                "--req", 'name: "arms_drone" position: {x: 0.0, y: 0.0, z: 0.3} orientation: {w: 1.0, x: 0.0, y: 0.0, z: 0.0}',
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            # 2) PX4 EKF 안정화 대기
-            import time; time.sleep(2.0)
-            # 3) arms_control → SEARCH
-            subprocess.run(
-                ["ros2", "topic", "pub", "--once", "/arms/reset_cmd", "std_msgs/msg/Empty", "{}"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        def restore_btn():
-            self.reset_btn.config(text="RESET (드론 원점 복귀)", state="normal", bg="#37474f")
-
-        _bg(do_reset)
-        self.root.after(3000, restore_btn)
 
     # ------------------------------------------------------------------
     def toggle_det(self, key):
@@ -346,7 +367,48 @@ class PanelGUI:
         ros_param_set("control.pitch_sign", self.pitch_sign)
         self.pitch_btn.config(text=f"Pitch sign: {'+' if self.pitch_sign > 0 else '-'}")
 
+    def flip_att_roll(self):
+        self.att_roll_sign *= -1.0
+        ros_param_set("control.att_roll_sign", self.att_roll_sign)
+        self.att_roll_btn.config(text=f"자세Roll: {'+' if self.att_roll_sign > 0 else '-'}")
+
+    def flip_att_pitch(self):
+        self.att_pitch_sign *= -1.0
+        ros_param_set("control.att_pitch_sign", self.att_pitch_sign)
+        self.att_pitch_btn.config(text=f"자세Pitch: {'+' if self.att_pitch_sign > 0 else '-'}")
+
+    # ---- 실기체 3-스위치 ----
+    def toggle_mode(self):
+        self._sw_mode ^= 1
+        self.node.set_button(2, self._sw_mode)   # button[2]: 0=auto, 1=manual
+        self._refresh_switches()
+
+    def toggle_arm(self):
+        self._sw_arm ^= 1
+        self.node.set_button(1, self._sw_arm)    # button[1]: 0=disarm, 1=arm
+        self._refresh_switches()
+
+    def toggle_kill(self):
+        self._sw_kill ^= 1
+        self.node.set_button(0, self._sw_kill)   # button[0]: 0=정상, 1=kill
+        self._refresh_switches()
+
+    def _refresh_switches(self):
+        if self._sw_mode:
+            self.sw_mode_btn.config(text="모드: 수동", bg="#1565c0", fg="white", relief="sunken")
+        else:
+            self.sw_mode_btn.config(text="모드: 자동", bg="#2e7d32", fg="white", relief="raised")
+        if self._sw_arm:
+            self.sw_arm_btn.config(text="● ARM", bg="#d0021b", fg="white", relief="sunken")
+        else:
+            self.sw_arm_btn.config(text="DISARM", bg="#333333", fg="#cccccc", relief="raised")
+        if self._sw_kill:
+            self.sw_kill_btn.config(text="■ KILL", bg="#000000", fg="#ff4444", relief="sunken")
+        else:
+            self.sw_kill_btn.config(text="KILL", bg="#333333", fg="#cccccc", relief="raised")
+
     def ball_start(self):
+        # enabled=true → referee 가 정지했던 자리(t)에서 재개
         ros_param_set_node(REFEREE_NODE, "enabled", "true")
         self.ball_flying = True
         self._refresh_ball_btns()
@@ -363,7 +425,7 @@ class PanelGUI:
             self.ball_fly_btn.config(bg="#9c27b0", fg="white", relief="sunken")
             self.ball_stop_btn.config(bg="#333333", fg="#cccccc", relief="raised")
         elif flying is False:
-            self.ball_state_lbl.config(text="풍선 상태: 정지 (멈춤)", bg="#2e7d32")
+            self.ball_state_lbl.config(text="풍선 상태: 정지 (제자리, 재개가능)", bg="#2e7d32")
             self.ball_fly_btn.config(bg="#333333", fg="#cccccc", relief="raised")
             self.ball_stop_btn.config(bg="#2e7d32", fg="white", relief="sunken")
         else:
@@ -408,10 +470,11 @@ class ControllerGUI:
         stick_frm.pack(pady=6)
 
         # 왼쪽 스틱 (ax0=X=yaw, ax1=Y=throttle)
-        # 세로(throttle)는 실제 조종기처럼 기본 바닥, 놓아도 그 자리 유지.
-        # 가로(yaw)만 놓으면 중앙 복귀.
-        self._thr_hold = -1.0            # throttle 초기값 = 바닥
-        self.node.set_axis(1, -1.0)
+        # 세로(throttle)는 놓아도 그 자리 유지. 가로(yaw)만 놓으면 중앙 복귀.
+        #   초기값 = 중앙(0.0): PX4 Altitude 모드에서 스로틀 중앙 = 고도유지(호버).
+        #   → 자동에서 수동으로 넘겨도 스틱 안 건드리면 그 자리 호버. (올리면 상승/내리면 하강)
+        self._thr_hold = 0.0             # throttle 초기값 = 중앙(호버)
+        self.node.set_axis(1, 0.0)
         lfrm = tk.Frame(stick_frm, bg="#1e1e1e")
         lfrm.grid(row=0, column=0, padx=16)
         tk.Label(lfrm, text="L-STICK", fg="#888888", bg="#1e1e1e",

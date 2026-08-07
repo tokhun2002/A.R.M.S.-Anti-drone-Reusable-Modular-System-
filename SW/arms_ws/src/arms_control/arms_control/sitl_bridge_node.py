@@ -12,11 +12,13 @@ Channel mapping:
 CH6 flight mode: low=Manual(auto/영상유도), high=Altitude(manual/손제어).
 """
 
+import math
 import threading
 import time
 
 import rclpy
 from rclpy.node import Node
+from geometry_msgs.msg import Vector3
 
 try:
     from pymavlink import mavutil
@@ -26,8 +28,9 @@ except ImportError:
 
 # PX4 mode constants
 PX4_BASE_MODE_CUSTOM          = 1
-PX4_CUSTOM_MAIN_MODE_MANUAL   = 1   # auto/영상유도 (CH6 low)
+PX4_CUSTOM_MAIN_MODE_MANUAL   = 1   # 각도(자동수평) — 예전 자동모드
 PX4_CUSTOM_MAIN_MODE_ALTCTL   = 2   # manual/손제어 Altitude (CH6 high)
+PX4_CUSTOM_MAIN_MODE_ACRO     = 5   # 각속도(rate) 제어 — 자동 요격용 (자동수평 없음)
 
 CRSF_SYNC   = 0xC8
 CRSF_TYPE_RC = 0x16
@@ -113,10 +116,17 @@ class ArmsSITLCommNode(Node):
         self.declare_parameter("connection", "udpin:0.0.0.0:14540")
         self.declare_parameter("crsf_port", "/tmp/crsf_rx")
         self.declare_parameter("send_rate_hz", 50.0)
+        # autonomous_acro: True 면 자동(영상유도) 모드를 ACRO(각속도)로, False 면 Manual(각도/자동수평)로.
+        #   ★ 제어 노드(arms_control_node)의 control.acro_mode 와 반드시 일치시킬 것.
+        self.declare_parameter("autonomous_acro", True)
 
         self._conn_str   = self.get_parameter("connection").value
         self._crsf_port  = self.get_parameter("crsf_port").value
         self._send_rate  = self.get_parameter("send_rate_hz").value
+        # 자동(CH6 low) 모드: ACRO 또는 Manual
+        self._auto_mode  = (PX4_CUSTOM_MAIN_MODE_ACRO
+                            if self.get_parameter("autonomous_acro").value
+                            else PX4_CUSTOM_MAIN_MODE_MANUAL)
 
         self._channels  = [CRSF_MIN] * 16
         self._channels[2] = CRSF_MIN   # throttle min
@@ -134,6 +144,9 @@ class ArmsSITLCommNode(Node):
         if not _PYMAVLINK:
             self.get_logger().error("pymavlink not installed: pip3 install pymavlink")
             return
+
+        # 드론 실제 자세(roll/pitch/yaw[deg]) 발행 → 제어 노드의 자세 피드백(각속도 제어)용
+        self._att_pub = self.create_publisher(Vector3, "/arms/attitude", 10)
 
         threading.Thread(target=self._connect_loop, daemon=True).start()
         threading.Thread(target=self._crsf_read_loop, daemon=True).start()
@@ -163,29 +176,48 @@ class ArmsSITLCommNode(Node):
                 time.sleep(3.0)
 
     def _initial_setup(self):
-        """Set default Manual mode after EKF convergence; arming is done via CH5.
-        Flight mode thereafter follows CH6 (low=Manual, high=Altitude)."""
+        """Set default autonomous mode after EKF convergence; arming is done via CH5.
+        Flight mode thereafter follows CH6 (low=auto[ACRO/Manual], high=Altitude)."""
         time.sleep(3.0)
-        self.get_logger().info("Setting Manual mode (CH6 default)...")
-        self._send_set_mode(PX4_CUSTOM_MAIN_MODE_MANUAL)
+        mode_name = "ACRO(각속도)" if self._auto_mode == PX4_CUSTOM_MAIN_MODE_ACRO else "Manual(각도)"
+        self.get_logger().info(f"Setting autonomous mode: {mode_name} (CH6 default)...")
+        self._send_set_mode(self._auto_mode)
         time.sleep(0.5)
 
+        # ATTITUDE(msg id 30) 를 50Hz(20000us)로 요청 → 자세 피드백용
+        self._mav.mav.command_long_send(
+            self._mav.target_system, self._mav.target_component,
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+            30, 20000, 0, 0, 0, 0, 0)
+        self.get_logger().info("ATTITUDE 스트림 50Hz 요청 (자세 피드백)")
+
         self._connected = True
-        self.get_logger().info("SITL: Manual mode set. Waiting for arm signal (CH5).")
+        self.get_logger().info(f"SITL: {mode_name} set. Waiting for arm signal (CH5).")
 
     # ------------------------------------------------------------------
     # MAVLink RX (armed-state tracking via HEARTBEAT)
     # ------------------------------------------------------------------
     def _mavlink_rx_loop(self):
-        """Keep _armed in sync with the FC so the retry loop knows when to stop."""
+        """HEARTBEAT(armed 상태) + ATTITUDE(자세 피드백) 수신."""
         while rclpy.ok():
             if self._mav is None:
                 time.sleep(0.1)
                 continue
             try:
-                msg = self._mav.recv_match(type='HEARTBEAT', blocking=True, timeout=1.0)
-                if msg is not None:
+                msg = self._mav.recv_match(type=['HEARTBEAT', 'ATTITUDE'],
+                                           blocking=True, timeout=1.0)
+                if msg is None:
+                    continue
+                t = msg.get_type()
+                if t == 'HEARTBEAT':
                     self._armed = bool(msg.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)
+                elif t == 'ATTITUDE':
+                    # PX4 ATTITUDE: roll/pitch/yaw [rad] → deg 로 발행
+                    v = Vector3()
+                    v.x = math.degrees(msg.roll)
+                    v.y = math.degrees(msg.pitch)
+                    v.z = math.degrees(msg.yaw)
+                    self._att_pub.publish(v)
             except Exception as e:
                 self.get_logger().warn(f"MAVLink rx error: {e}", throttle_duration_sec=5.0)
                 time.sleep(0.5)
@@ -215,9 +247,9 @@ class ArmsSITLCommNode(Node):
         ch6 = channels[5]
         ch6_high = ch6 > SWITCH_THRESH
         if ch6_high != (self._prev_ch6 > SWITCH_THRESH):
-            # CH6 low→Manual(auto/영상유도), high→Altitude(manual/손제어)
+            # CH6 low→자동(ACRO/Manual, 영상유도), high→Altitude(manual/손제어)
             self._mode_pending = (PX4_CUSTOM_MAIN_MODE_ALTCTL if ch6_high
-                                  else PX4_CUSTOM_MAIN_MODE_MANUAL)
+                                  else self._auto_mode)
         self._prev_ch6 = ch6
 
     # ------------------------------------------------------------------
@@ -247,7 +279,9 @@ class ArmsSITLCommNode(Node):
 
         # Handle pending flight-mode change (CH6)
         if mode_req is not None:
-            name = "Altitude" if mode_req == PX4_CUSTOM_MAIN_MODE_ALTCTL else "Manual"
+            name = {PX4_CUSTOM_MAIN_MODE_ALTCTL: "Altitude",
+                    PX4_CUSTOM_MAIN_MODE_ACRO:   "ACRO(각속도)",
+                    PX4_CUSTOM_MAIN_MODE_MANUAL: "Manual(각도)"}.get(mode_req, "?")
             self.get_logger().info(f"CH6 → {name} mode")
             self._send_set_mode(mode_req)
 

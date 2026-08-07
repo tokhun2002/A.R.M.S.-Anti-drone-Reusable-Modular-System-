@@ -147,10 +147,16 @@ class ArmsUINode(Node):
         if frame is None or frame.size == 0:
             return
 
-        # 수동 모드에서는 원본 영상만 표시하고 오버레이는 생략한다.
-        if not self._manual_mode:
-            self._draw_overlay(frame)
-            self._draw_roi_pip(frame)
+        # 그리기에서 예외가 나도 영상 창은 절대 죽지 않게 방어 (창 사라짐 방지).
+        try:
+            # 중앙 십자선은 조준 기준선 → 모드와 무관하게 항상 표시.
+            self._draw_crosshair(frame)
+            # 나머지 오버레이(박스/상태/오차 등)는 AUTO 모드에서만.
+            if not self._manual_mode:
+                self._draw_overlay(frame)
+                self._draw_roi_pip(frame)
+        except Exception as e:
+            self.get_logger().warn(f"overlay draw error (무시하고 영상 계속): {e}")
         cv2.imshow("A.R.M.S.", frame)
         cv2.waitKey(1)
 
@@ -179,8 +185,17 @@ class ArmsUINode(Node):
     # Drawing
     # ------------------------------------------------------------------
 
+    def _draw_crosshair(self, frame):
+        """화면 정중앙 조준 십자선 — 자동/수동 모두 항상 표시."""
+        h, w = frame.shape[:2]
+        cx_f, cy_f = w // 2, h // 2
+        cv2.line(frame, (cx_f - 20, cy_f), (cx_f + 20, cy_f), (0, 255, 0), 1)
+        cv2.line(frame, (cx_f, cy_f - 20), (cx_f, cy_f + 20), (0, 255, 0), 1)
+        cv2.circle(frame, (cx_f, cy_f), 2, (0, 255, 0), -1)
+
     def _draw_overlay(self, frame):
         h, w = frame.shape[:2]
+        cx_f, cy_f = w // 2, h // 2   # 오차/명령 화살표 기준(중앙). 십자선 분리 후에도 필요.
         state = self._latest_state.state or "IDLE"
         color = STATE_COLORS.get(state, (255, 255, 255))
 
@@ -196,10 +211,7 @@ class ArmsUINode(Node):
             cv2.putText(frame, f"{det.confidence:.2f}", (x1, y1 - 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
-        # --- Crosshair at frame center ---
-        cx_f, cy_f = w // 2, h // 2
-        cv2.line(frame, (cx_f - 20, cy_f), (cx_f + 20, cy_f), (0, 255, 0), 1)
-        cv2.line(frame, (cx_f, cy_f - 20), (cx_f, cy_f + 20), (0, 255, 0), 1)
+        # --- Crosshair 는 _draw_crosshair 로 분리(항상 표시) → 여기선 생략 ---
 
         # --- State label ---
         cv2.putText(frame, state, (10, 30),

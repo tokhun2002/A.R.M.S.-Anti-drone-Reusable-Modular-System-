@@ -31,17 +31,17 @@ def generate_launch_description():
     sw_dir = os.environ.get("ARMS_SW", "")
     tools = Path(sw_dir) / "tools" if sw_dir else None
     actions = [
-        # 카메라 브리지
+        # 카메라 브리지 — 상방 카메라 → /arms/image_raw
         Node(
             package="ros_gz_bridge", executable="parameter_bridge",
-            name="arms_video_node", output="screen",
+            name="arms_video_up", output="screen",
             arguments=["/arms_drone/upward_camera/image@sensor_msgs/msg/Image[gz.msgs.Image"],
             remappings=[("/arms_drone/upward_camera/image", "/arms/image_raw")],
         ),
-        # ray 센서 브리지
+        # ray 센서 브리지 — 상방 ray → /arms/scan_raw
         Node(
             package="ros_gz_bridge", executable="parameter_bridge",
-            name="gz_scan_bridge", output="screen",
+            name="gz_scan_up", output="screen",
             arguments=["/arms_drone/upward_ray/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan"],
             remappings=[("/arms_drone/upward_ray/scan", "/arms/scan_raw")],
         ),
@@ -82,7 +82,8 @@ def generate_launch_description():
         # 풍선 심판 노드만 실행. 컨트롤 패널은 arms_command_node(위에서 실행)가 담당하므로
         # tools/arms_panel.py(중복 패널)는 띄우지 않음.
         actions += [
-            ExecuteProcess(cmd=["python3", str(tools / "balloon_referee_diagonal.py")], output="screen"),
+            ExecuteProcess(cmd=["python3", str(tools / "balloon_referee_diagonal.py")],
+                           output="screen"),
         ]
     else:
         actions.append(LogInfo(msg=(

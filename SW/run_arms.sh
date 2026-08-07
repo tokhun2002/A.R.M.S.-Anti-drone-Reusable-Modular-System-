@@ -14,11 +14,14 @@ ROS_SETUP="source /opt/ros/humble/setup.bash; source $ARMS_WS/install/setup.bash
 export GZ_SIM_RESOURCE_PATH="$ARMS_SW/simulation/models:$GZ_SIM_RESOURCE_PATH"
 
 # 이전 인스턴스 깨끗이 정리
+#   ★ arms_command(패널)·arms_detection 도 반드시 죽인다. 안 죽이면 유령 패널이 쌓여
+#     /arms/command 를 중복 발행 → joy_arm_ 깜빡 → IDLE↔SEARCH 무한 토글 버그 발생.
 pkill -9 -f px4 2>/dev/null; pkill -9 -f 'gz sim' 2>/dev/null
 pkill -9 -f ruby 2>/dev/null; pkill -9 -f parameter_bridge 2>/dev/null
-pkill -9 -f arms_control 2>/dev/null
+pkill -9 -f arms_control 2>/dev/null; pkill -9 -f arms_command 2>/dev/null
+pkill -9 -f arms_detection 2>/dev/null; pkill -9 -f fusion_detector 2>/dev/null
 pkill -9 -f balloon_referee 2>/dev/null; pkill -9 -f arms_panel 2>/dev/null
-pkill -9 -f fusion_detector 2>/dev/null; pkill -9 -f arms_ui 2>/dev/null
+pkill -9 -f arms_ui 2>/dev/null
 pkill -9 -f "socat.*crsf" 2>/dev/null
 sleep 3
 
@@ -69,9 +72,12 @@ TERM_CMD "ARMS stack" \
 sleep 5
 SHELL_PY="$PX4_DIR/Tools/mavlink_shell.py"
 if [ -f "$SHELL_PY" ]; then
-  printf 'param set COM_DISARM_PRFLT 0\nparam set NAV_DLL_ACT 0\nparam set NAV_RCL_ACT 0\n' \
+  #   MC_ACRO_R_MAX / P_MAX = ACRO 모드 풀스틱 각속도[deg/s] (control.max_rate_dps 와 일치).
+  #   MPC_MAN_TILT_MAX / MPC_TILTMAX_AIR = 최대 기울기[deg]. 크게 기울일수록 옆으로 빨리 감
+  #     → 빠른 표적 추격용. 35°(기본)→50° 로 상향 (가속 ~70%↑). 단 너무 크면 양력 손실.
+  printf 'param set COM_DISARM_PRFLT 0\nparam set NAV_DLL_ACT 0\nparam set NAV_RCL_ACT 0\nparam set MC_ACRO_R_MAX 120\nparam set MC_ACRO_P_MAX 120\nparam set MPC_MAN_TILT_MAX 50\nparam set MPC_TILTMAX_AIR 50\n' \
     | python3 "$SHELL_PY" udp:127.0.0.1:14550 >/dev/null 2>&1 &
-  echo "      자동 disarm/페일세이프 해제 (COM_DISARM_PRFLT/LAND, NAV_DLL_ACT/RCL_ACT)"
+  echo "      페일세이프 해제 + ACRO 120°/s + 최대기울기 50° (더 빠른 추격)"
 fi
 
 echo ""
