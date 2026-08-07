@@ -5,3 +5,5 @@ float32 error_x             # normalized pixel error from frame center [-0.5, 0.
 float32 error_y
 bool    target_locked
 float32 kp_now              # 현재 적용 중인 P 게인 (시간 램프 값)
+bool    armed               # 유효 ARM (effective_arm: 재토글 래치 반영, CH5 실제 arm)
+bool    manual_mode         # true=manual(손제어/Altitude), false=auto(영상유도/Manual)

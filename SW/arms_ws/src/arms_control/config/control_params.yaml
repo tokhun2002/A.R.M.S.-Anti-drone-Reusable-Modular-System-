@@ -9,6 +9,17 @@ arms_control_node:
       fire_align_tol: 0.2       # FIRE 정렬 허용오차 (거리+중앙정렬 둘 다 만족)
       sitl_auto_launch: false
       auto_launch_delay_sec: 1.0
+    # 발사 잠금장치 서보 (Jetson 하드웨어 PWM, sysfs).
+    #   기본 enabled=false → SITL/개발 PC 에서 /sys/class/pwm 를 건드리지 않는다.
+    #   실기체는 crsf_hw.yaml 이 enabled=true 로 덮어쓴다.
+    #   각도 방향은 lock_duty_ns/open_duty_ns 스왑으로 반전 (90°=1500000, 180°=2500000).
+    servo:
+      enabled: false
+      chip_path: "/sys/class/pwm/pwmchip0"   # 핀15=GP88_PWM1=3280000.pwm=pwmchip0
+      channel: 0
+      period_ns: 20000000    # 50Hz = 20ms
+      lock_duty_ns: 1500000  # 90°  = 1.5ms (LOCK 기본)
+      open_duty_ns: 2500000  # 180° = 2.5ms (OPEN 기본)
     control:
       # ★ 명중 잘 되던 검증값 (되돌림). 흔들림 튜닝은 라이브로 조금씩만.
       roll_pid:

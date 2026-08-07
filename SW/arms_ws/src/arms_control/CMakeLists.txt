@@ -21,6 +21,7 @@ add_library(arms_control_lib
   src/pid_controller.cpp
   src/state_machine.cpp
   src/crsf_output.cpp
+  src/servo_lock.cpp
 )
 
 target_include_directories(arms_control_lib PUBLIC

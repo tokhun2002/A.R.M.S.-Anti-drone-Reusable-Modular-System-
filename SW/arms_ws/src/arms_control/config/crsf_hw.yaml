@@ -8,3 +8,7 @@ arms_control_node:
     crsf:
       port: "/dev/ttyTHS1"
       baud: 400000
+    # 실기체: 발사 잠금장치 서보 활성화 (핀15 PWM1, pwmchip0 ch0).
+    #   전제: jetson-io 로 핀15 PWM1 pinmux 설정 + /sys/class/pwm 쓰기 권한(99-gpio.rules).
+    servo:
+      enabled: true

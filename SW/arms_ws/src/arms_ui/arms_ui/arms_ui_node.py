@@ -62,11 +62,16 @@ class ArmsUINode(Node):
             _snd_dir = os.path.join(get_package_share_directory("arms_ui"), "sounds")
         except Exception:
             _snd_dir = ""
-        self.declare_parameter("ui.sound_to_manual", os.path.join(_snd_dir, "to_manual.mp3"))
-        self.declare_parameter("ui.sound_to_auto", os.path.join(_snd_dir, "to_auto.mp3"))
+        self.declare_parameter("ui.sound_manual", os.path.join(_snd_dir, "manual.mp3"))
+        self.declare_parameter("ui.sound_auto", os.path.join(_snd_dir, "auto.mp3"))
+        # 상태 변경 효과음: 수동=arm/disarm, 자동=idle/search
+        self.declare_parameter("ui.sound_arm", os.path.join(_snd_dir, "arm.mp3"))
+        self.declare_parameter("ui.sound_disarm", os.path.join(_snd_dir, "disarm.mp3"))
+        self.declare_parameter("ui.sound_search", os.path.join(_snd_dir, "search.mp3"))
+        self.declare_parameter("ui.sound_idle", os.path.join(_snd_dir, "idle.mp3"))
         self._player = shutil.which("ffplay")
         if self._player is None:
-            self.get_logger().warn("ffplay 없음 — 모드 전환 효과음이 재생되지 않습니다.")
+            self.get_logger().warn("ffplay 없음 — 효과음이 재생되지 않습니다.")
 
         self.create_subscription(Image, "/arms/image_raw", self._cb_image, best_effort_qos)
         self.create_subscription(DetectionArray, "/arms/detections", self._cb_detections, 10)
@@ -84,6 +89,10 @@ class ArmsUINode(Node):
         self._latest_roi = None
         self._manual_mode = False   # buttons[2]==1 → 수동 모드(오버레이 끔)
         self._prev_manual = None    # 이전 mode 값 (None=아직 미수신, 첫 수신은 효과음 없음)
+        # mission_state 기반 상태 변경 효과음 엣지 추적
+        self._prev_manual_state = None  # MissionState.manual_mode 이전값 (모드전환 틱 억제용)
+        self._prev_armed = None         # MissionState.armed 이전값 (수동 arm/disarm)
+        self._prev_state = None         # MissionState.state 이전값 (자동 idle/search)
 
         # 실기체 런치에서만 fullscreen:=true → 전체화면. SITL 등은 기본값 False(창 모드).
         self.declare_parameter("ui.fullscreen", False)
@@ -116,6 +125,34 @@ class ArmsUINode(Node):
     def _cb_state(self, msg: MissionState):
         self._latest_state = msg
 
+        # ---- 상태 변경 효과음 ----
+        #   수동 모드: arm/disarm 엣지    자동 모드: idle↔search 엣지
+        #   (모드 전환 자체의 효과음은 _cb_command 가 담당. 모드가 막 바뀐 틱에서는
+        #    arm/state 값이 동시에 튀므로 중복 재생을 막기 위해 건너뛴다.)
+        manual = bool(msg.manual_mode)
+        armed = bool(msg.armed)
+        state = msg.state or "IDLE"
+
+        mode_changed = (self._prev_manual_state is not None and
+                        manual != self._prev_manual_state)
+        if not mode_changed:
+            if manual:
+                # 수동: arm/disarm
+                if self._prev_armed is not None and armed != self._prev_armed:
+                    param = "ui.sound_arm" if armed else "ui.sound_disarm"
+                    self._play_sound(self.get_parameter(param).value)
+            else:
+                # 자동: idle ↔ search
+                if self._prev_state is not None and state != self._prev_state:
+                    if state == "SEARCH" and self._prev_state == "IDLE":
+                        self._play_sound(self.get_parameter("ui.sound_search").value)
+                    elif state == "IDLE" and self._prev_state == "SEARCH":
+                        self._play_sound(self.get_parameter("ui.sound_idle").value)
+
+        self._prev_manual_state = manual
+        self._prev_armed = armed
+        self._prev_state = state
+
     def _cb_debug(self, msg: Vector3):
         self._latest_cmd = msg
 
@@ -126,7 +163,7 @@ class ArmsUINode(Node):
         self._manual_mode = manual
         # 전환 엣지에서만 효과음 (첫 수신 self._prev_manual is None 은 건너뜀)
         if self._prev_manual is not None and manual != self._prev_manual:
-            param = "ui.sound_to_manual" if manual else "ui.sound_to_auto"
+            param = "ui.sound_manual" if manual else "ui.sound_auto"
             self._play_sound(self.get_parameter(param).value)
         self._prev_manual = manual
 

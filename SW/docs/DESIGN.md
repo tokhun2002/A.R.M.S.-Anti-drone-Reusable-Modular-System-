@@ -180,20 +180,27 @@ float32         error_x              # current normalized pixel error (for UI)
 float32         error_y
 bool            target_locked
 float32         kp_now               # 현재 적용 중인 P 게인 (시간 램프 값)
+bool            armed                # 유효 ARM (effective_arm, CH5 실제 arm) — UI 효과음/표시
+bool            manual_mode          # true=manual, false=auto — UI 효과음/표시
 ```
 
 ## 4. 상태 머신 (arms_control 내부)
 
 ### 4.1 상태별 동작 정의
 
-| 상태       | 드론 동작                       | CRSF 출력                                   | UI 표시                   |
-| ---------- | ------------------------------- | ------------------------------------------- | ------------------------- |
-| **IDLE**   | 정지 대기                       | CH3=min, CH1/2=center, CH5=disarm           | 회색 테두리               |
-| **SEARCH** | 타겟 탐색 중 (FC 미무장)        | CH3=min, CH5=disarm                         | 노란색, "Searching..."    |
-| **LOCK**   | 타겟 포착 확인 중 (잠금 타이머) | CH5=arm → PX4 arm                           | 주황색 박스, "Locking..." |
-| **TRACK**  | 위치 보정 추적                  | PID → CH1/2 + track_throttle → CH3          | 빨간 박스, "LOCKED"       |
-| **FIRE**   | 추적 유지 + 페이로드 즉시 발사  | PID 유지 (전용 fire 채널 없음; mission_state로 신호) | 빨간 박스, "FIRED!"       |
-| **RTL**    | 귀환 및 착륙                    | 전용 land 채널 없음 (수동 Altitude 착륙 등 별도 경로) | "Returning..."            |
+| 상태       | 드론 동작                       | CRSF 출력                                   | 서보 잠금장치       | UI 표시                   |
+| ---------- | ------------------------------- | ------------------------------------------- | ------------------- | ------------------------- |
+| **IDLE**   | 정지 대기                       | CH3=min, CH1/2=center, CH5=disarm           | **OPEN**(진입 시)   | 회색 테두리               |
+| **SEARCH** | 타겟 탐색 중 (FC 미무장)        | CH3=min, CH5=disarm                         | **LOCK**(IDLE→SEARCH 엣지) | 노란색, "Searching..."    |
+| **LOCK**   | 타겟 포착 확인 중 (잠금 타이머) | CH5=arm → PX4 arm                           | LOCK 유지           | 주황색 박스, "Locking..." |
+| **TRACK**  | 위치 보정 추적                  | PID → CH1/2 + track_throttle → CH3          | **OPEN**(LOCK→TRACK 엣지) | 빨간 박스, "LOCKED"       |
+| **FIRE**   | 추적 유지 + 페이로드 즉시 발사  | PID 유지 (전용 fire 채널 없음; mission_state로 신호) | OPEN 유지           | 빨간 박스, "FIRED!"       |
+| **RTL**    | 귀환 및 착륙                    | 전용 land 채널 없음 (수동 Altitude 착륙 등 별도 경로) | OPEN 유지           | "Returning..."            |
+
+> **서보 잠금장치(발사 클램프)**: 발사 전 기체를 발사기에 고정하고 발사 순간에만 놓아준다.
+> 방아쇠(launch 버튼)가 아니라 **상태 전이 엣지**로 제어한다(SEARCH 중 방아쇠를 눌러도 안 풀림).
+> · IDLE 진입 → OPEN(무조건 열림, 기체 장착/탈거) · IDLE→SEARCH(auto) → LOCK · LOCK→TRACK(발사) → OPEN.
+> 자세한 하드웨어/구현은 [7.8](#78-발사-잠금장치-서보-servo-lock) 참고.
 
 ### 4.2 상태 전이 다이어그램
 
@@ -217,7 +224,7 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> IDLE
 
-    IDLE --> SEARCH : 노드 시작 즉시 (auto 모드)
+    IDLE --> SEARCH : auto 모드 + effective_arm(ARM 스위치 상승, 재토글 래치 해제)
 
     SEARCH --> LOCK : 연속 감지 >= lock_duration_sec<br/>(confidence > threshold)
     LOCK --> SEARCH : 타겟 소실 lost_frames_threshold 프레임
@@ -378,8 +385,9 @@ SITL:
 > - **CH6 flight mode**는 오퍼레이터 모드 스위치(joy buttons[2])와 1:1이다.
 >   auto(영상유도)=PX4 **Manual**(172), manual(손제어)=PX4 **Altitude**(1811).
 >   실기체는 PX4쪽 `RC_MAP_FLTMODE=6` + `COM_FLTMODE1/COM_FLTMODE6` 설정 필요.
-> - **CH5 arm**은 auto 모드에서 arm 스위치 값을 무시하고 상태 머신이 arm/disarm,
->   manual 모드에서만 arm 스위치(buttons[1])를 따른다.
+> - **CH5 arm**은 양쪽 모드 모두 유효 ARM(`effective_arm` = arm 스위치 && 재토글 래치 해제)을
+>   따른다. auto 모드에서는 이 유효 ARM 이 미션 게이트(IDLE↔SEARCH)도 함께 연다.
+>   모드 전환/부팅 직후에는 재토글 전까지 disarm 유지 (ARM 재토글 안전장치, [7.3](#73-auto--manual-모드) 참고).
 > - **launch 버튼(buttons[3])** 과 **land/fire** 는 CRSF 채널로 내보내지 않는다.
 >   launch는 상태 머신 LOCK→TRACK 전이 트리거로만 쓰이고, CH8은 비워 둔다.
 
@@ -400,6 +408,17 @@ CRSF 프레임 포맷: `[0xC8][24][0x16][22 bytes: 16ch × 11bit][CRC8-DVB-S2]`
 | ------ | --------------- | ------------------------------------------------------- | ------------ |
 | auto   | Manual          | PID 계산 (roll/pitch), throttle=track_throttle, yaw=992 | 상태 머신    |
 | manual | Altitude        | Mode2 스틱 패스스루 (아래 축 재배치)                    | arm 스위치   |
+
+> **ARM 재토글 안전장치**: 모드 스위치를 바꾸는 순간 ARM 스위치가 올라가 있으면 즉시 arm 되는
+> 위험을 막는다. 예로 auto+SEARCH(=ARM 올림)에서 manual 로 바꾸면 CH5 가 곧바로 arm 되어 FC 가
+> 무장된다. 그래서 **모드 전환 시(및 노드 부팅 시)** 재토글 래치를 걸어, ARM 스위치가 올라가
+> 있어도 arm 되지 않게 하고, **반드시 DISARM 으로 내렸다가 다시 올려야** arm 된다(`effective_arm =
+> joy_arm_ && !require_arm_reset_`). 이 유효 ARM 은 auto 미션 게이트(IDLE→SEARCH)와 CH5(FC arm)
+> 양쪽에 동일 적용된다. auto↔manual 대칭.
+>
+> **수동 모드 = 상태머신 IDLE 고정**: manual 모드에서는 자동 상태머신을 항상 IDLE 로 강제한다.
+> 따라서 manual→auto 로 돌아오면 **기본이 IDLE**이고, SEARCH 는 ARM 재토글(DISARM→ARM)로만 진입한다
+> (SEARCH 재토글 안전장치). 아울러 수동 비행 중 영상/방아쇠로 미션 상태가 멋대로 진행되는 것도 막는다.
 
 manual 모드 축→채널 매핑 (Mode2 조종기 → AETR 채널 순서):
 
@@ -511,14 +530,62 @@ arms_control_node
   |
   +-- [State Machine]
   |     evaluate detections → update state
-  |     auto arm: IDLE → SEARCH 즉시 (첫 틱)
+  |     auto arm: effective_arm(ARM 스위치+재토글 래치) → IDLE → SEARCH
   |     launch button (joy buttons[3]) → LOCK→TRACK
   |     distance < fire_distance_m (TRACK) → FIRE
   |
   +-- [PID Controller]  (TRACK / FIRE 상태에서 활성)
-        error_x → roll_deg  [deg]
-        error_y → pitch_deg [deg]
+  |     error_x → roll_deg  [deg]
+  |     error_y → pitch_deg [deg]
+  |
+  +-- [ServoLock]  (발사 잠금장치, sysfs 하드웨어 PWM)
+        상태 전이 엣지 → lock() / open()
 ```
+
+### 7.8 발사 잠금장치 서보 (Servo Lock)
+
+발사 전 기체를 발사기에 고정(LOCK)하고 발사 순간에만 놓아주는(OPEN) 클램프 서보다.
+별도 노드/토픽 없이 **`arms_control_node`(C++) 내부에 통합**되어 있다 — 개폐 판정이 상태머신
+상태·모드 스위치에 달려 있어 제어 노드가 소유하는 것이 자연스럽기 때문이다. 구동은 `ServoLock`
+클래스(`include/arms_control/servo_lock.hpp`, `src/servo_lock.cpp`)가 담당한다.
+
+**제어 규칙 (상태 전이 엣지로만 판정)**
+
+| 트리거 (전이)                      | 동작 |
+| ---------------------------------- | ---- |
+| IDLE 진입 (어느 상태에서든)        | OPEN — IDLE 은 무조건 열림(기체 장착/탈거) |
+| IDLE → SEARCH (auto, 상승엣지)     | LOCK — 발사기에 고정 |
+| LOCK → TRACK (발사)                | OPEN — 기체를 놓아줌 |
+
+- 방아쇠(launch 버튼)가 아니라 **LOCK→TRACK 전이**가 OPEN 트리거다(SEARCH 에서 방아쇠를 눌러도
+  안 풀림). SEARCH/LOCK/TRACK 은 auto 모드에서만 발생하므로 전이만으로 판정 가능.
+- LOCK→SEARCH(표적 소실)·TRACK→SEARCH 등은 서보를 건드리지 않는다. 시작 상태 IDLE → 기본 OPEN.
+- 판정은 `control_loop` 말미에서 in-tick 전이(arm/disarm) 반영 후 최신 `sm_->state()` 로 한다.
+
+**하드웨어 (Jetson Orin Nano)**
+
+- 물리 **핀 15 = GPIO12 / GP88_PWM1 → `3280000.pwm` → `/sys/class/pwm/pwmchip0` 채널 0**
+  (Jetson.GPIO `gpio_pin_data.py` 기준, 본 기기 sysfs 실측 확인).
+- 원본 파이썬 드라이버(`arms_command/servo/servo_motor.py`, Jetson.GPIO)와 **동일한 신호**를 C++ 에서
+  sysfs 로 직접 쓴다: 50Hz(period 20ms), 90°=1.5ms(LOCK 기본), 180°=2.5ms(OPEN 기본).
+- 시퀀스: `export` → `duty_cycle=0` → `period` → `duty_cycle` → `enable=1`. duty 는 값이 바뀔 때만 기록.
+- 노드 종료 시 unexport/disable 하지 않는다 → 마지막 잠금 위치 유지(종료·크래시에 클램프가 풀리지 않게).
+- **전제**: jetson-io 로 핀15 PWM1 pinmux 설정 + `/sys/class/pwm` 쓰기 권한(`99-gpio.rules` udev).
+  (README_SERVO_TEST.md 의 파이썬 경로와 동일 요건.) 미충족/비-Jetson/SITL 에서는 경고 1회 후 no-op.
+
+**파라미터** (`arms_control_node`, `control_params.yaml` / 실기체 `crsf_hw.yaml` 오버레이)
+
+```yaml
+servo:
+  enabled: false          # 기본 off(SITL). 실기체는 crsf_hw.yaml 이 true 로 덮어씀
+  chip_path: "/sys/class/pwm/pwmchip0"
+  channel: 0
+  period_ns: 20000000     # 50Hz
+  lock_duty_ns: 1500000   # 90°  = LOCK (기본)
+  open_duty_ns: 2500000   # 180° = OPEN
+```
+
+> 조립 방향(어느 각도가 잠금인지)이 반대면 `lock_duty_ns`/`open_duty_ns` 값을 스왑한다.
 
 ## 8. 오퍼레이터 UI (arms_ui)
 
@@ -541,6 +608,26 @@ arms_control_node
 |  roll: +0.12 |  pitch: -0.04  |  thr: 0.55         |
 +----------------------------------------------------+
 ```
+
+### 8.2 상태 전환 효과음
+
+오퍼레이터에게 모드·상태 변화를 소리로 알린다. `ffplay`(비동기, UI 렌더링 non-blocking)로
+`arms_ui/sounds/*.mp3` 를 재생하며, 파일 경로는 ROS 파라미터로 교체 가능하다.
+
+| 이벤트                         | 소스 (콜백)                              | 파일 / 파라미터                          |
+| ------------------------------ | ---------------------------------------- | ---------------------------------------- |
+| 모드 → 수동                    | `/arms/command` buttons[2] (`_cb_command`) | `manual.mp3` / `ui.sound_manual`         |
+| 모드 → 자동                    | `/arms/command` buttons[2] (`_cb_command`) | `auto.mp3` / `ui.sound_auto`             |
+| 수동: arm                      | `MissionState.armed` 엣지 (`_cb_state`)  | `arm.mp3` / `ui.sound_arm`               |
+| 수동: disarm                   | `MissionState.armed` 엣지 (`_cb_state`)  | `disarm.mp3` / `ui.sound_disarm`         |
+| 자동: IDLE→SEARCH              | `MissionState.state` 엣지 (`_cb_state`)  | `search.mp3` / `ui.sound_search`         |
+| 자동: SEARCH→IDLE              | `MissionState.state` 엣지 (`_cb_state`)  | `idle.mp3` / `ui.sound_idle`             |
+
+> - 수동 arm/disarm 은 `MissionState.armed`(= `effective_arm`, 재토글 래치 반영)를 따르므로
+>   래치로 막힌 동안엔 소리가 나지 않는다. 자동 idle/search 는 `MissionState.state` 를 따른다.
+>   (이를 위해 `MissionState` 에 `armed`, `manual_mode` 필드를 추가했다.)
+> - 모드가 막 바뀐 틱에서는 arm/state 값이 동시에 튀므로 `_cb_state` 가 상태 효과음을 억제한다
+>   (모드 전환음과 중복 방지).
 
 ## 9. 런치 파일 구조
 
@@ -634,4 +721,4 @@ arms_control_node  (state machine + PID)
 
 ---
 
-_Document version: 0.6 — 2026-07-28_
+_Document version: 0.7 — 2026-08-07_

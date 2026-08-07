@@ -28,6 +28,8 @@ arms_detection_node — A.R.M.S. 다중 검출기 (우선순위 기반)
   absdiff.bg_blur       : int   배경 추정 Gaussian 커널, 홀수 (기본 15)
   absdiff.pre_blur      : int   노이즈 제거 Gaussian 커널, 홀수 (기본 3)
   absdiff.max_area_ratio: float blob 최대 면적비 (기본 0.05)
+  absdiff.max_blobs     : int   프레임 blob 수가 이보다 많으면 어수선한 장면(지상 등)
+                                으로 보고 absdiff 결과 억제. 0=게이팅 끔 (기본 12)
   publish_debug         : bool  디버그 영상 발행 (기본 true)
   track.enable          : bool  detect-then-track on/off (기본 true, false=매프레임 검출)
   track.tracker_type    : str   "CSRT" | "KCF" (기본 CSRT)
@@ -290,6 +292,8 @@ class ArmsDetectionNode(Node):
         self.declare_parameter("absdiff.bg_blur",        15)
         self.declare_parameter("absdiff.pre_blur",        3)
         self.declare_parameter("absdiff.max_area_ratio", 0.05)
+        # blob 수가 이보다 많으면 어수선한 장면(지상 등)으로 보고 absdiff 억제. 0=끔.
+        self.declare_parameter("absdiff.max_blobs", 12)
         self.declare_parameter("publish_debug", True)
 
         # --- detect-then-track (ROI + CSRT/KCF) ---
@@ -554,6 +558,14 @@ class ArmsDetectionNode(Node):
             self.pub_absdiff.publish(mono_to_imgmsg(mask, header))
 
         cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # 장면 클러터 게이팅: blob 이 너무 많으면 하늘이 아니라 어수선한 지상 장면으로
+        # 보고 absdiff 결과를 통째로 버린다(빨간풍선 데모 등에서 오검출 억제).
+        # YOLO/HSV 는 이 게이팅과 무관하게 우선 처리되므로 영향 없음.
+        max_blobs = int(self.get_parameter("absdiff.max_blobs").value)
+        if max_blobs > 0 and len(cnts) > max_blobs:
+            return None
+
         best, best_score = None, -1.0
         for c in cnts:
             x, y, bw, bh = cv2.boundingRect(c)
