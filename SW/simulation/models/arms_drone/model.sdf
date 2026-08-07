@@ -373,7 +373,8 @@
       <sensor name="upward_camera" type="camera">
         <pose>0 0 0 0 0 0</pose>
         <always_on>true</always_on>
-        <update_rate>30</update_rate>
+        <update_rate>60</update_rate>   <!-- 30→60Hz: LOS각속도 추정 신선도↑ → PN 정확도·안정성↑ -->
+
         <camera>
           <horizontal_fov>2.0</horizontal_fov>   <!-- 광각 ~115° (반각 57°): 기동 중에도 표적 유지 -->
 
@@ -407,22 +408,22 @@
       <sensor name="upward_ray" type="gpu_lidar">
         <pose>0 0 0 0 0 0</pose>
         <always_on>true</always_on>
-        <update_rate>10</update_rate>
+        <update_rate>30</update_rate>   <!-- 10→30Hz: 빠른 공을 자주 잡게 -->
         <lidar>
           <scan>
             <horizontal>
-              <samples>32</samples>
-              <min_angle>-1.0</min_angle>   <!-- ±15° 콘: 머리 위 근처 풍선을 놓치지 않게 -->
+              <samples>48</samples>   <!-- 밀도↑: 작은 풍선이 빔 사이로 빠지지 않게 -->
+              <min_angle>-1.0</min_angle>   <!-- ±57° 넓은 콘: 기울여도 머리 위 풍선 포착 -->
               <max_angle>1.0</max_angle>
             </horizontal>
             <vertical>
-              <samples>32</samples>
+              <samples>48</samples>
               <min_angle>-1.0</min_angle>
               <max_angle>1.0</max_angle>
             </vertical>
           </scan>
           <range>
-            <min>3.0</min>
+            <min>0.3</min>   <!-- 3.0→0.3m: 근접(접촉 직전)도 거리 측정 가능 -->
             <max>50.0</max>
             <resolution>0.01</resolution>
           </range>

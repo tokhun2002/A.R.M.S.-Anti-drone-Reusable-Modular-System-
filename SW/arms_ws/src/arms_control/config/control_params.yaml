@@ -5,10 +5,10 @@ arms_control_node:
       lock_duration_sec: 0.3
       detection_timeout_sec: 1.0
       lock_box_tolerance: 0.5
-      fire_distance_m: 9.0
+      fire_distance_m: 3.0      # 고정: 움직이는 공 검증값. 정지공 딱 맞춤은 슬라이더로 1~2
       fire_align_tol: 0.2       # FIRE 정렬 허용오차 (거리+중앙정렬 둘 다 만족)
-      sitl_auto_launch: false
-      auto_launch_delay_sec: 1.0
+      sitl_auto_launch: true    # 락 되면 자동으로 즉시 추격 시작 → 공이 '접근할 때' 요격(꽁무니추격 방지). SITL 전용(실기체는 crsf_hw.yaml 덮어씀)
+      auto_launch_delay_sec: 0.5
     # 발사 잠금장치 서보 (Jetson 하드웨어 PWM, sysfs).
     #   기본 enabled=false → SITL/개발 PC 에서 /sys/class/pwm 를 건드리지 않는다.
     #   실기체는 crsf_hw.yaml 이 enabled=true 로 덮어쓴다.
@@ -21,42 +21,60 @@ arms_control_node:
       lock_duty_ns: 1500000  # 90°  = 1.5ms (LOCK 기본)
       open_duty_ns: 2500000  # 180° = 2.5ms (OPEN 기본)
     control:
-      # ★ 명중 잘 되던 검증값 (되돌림). 흔들림 튜닝은 라이브로 조금씩만.
+      # ── 깨끗한 튜닝 기준점 (부가항 OFF, 낮은 kp). 여기서부터 하나씩 올려 튜닝. ──
+      #   kp: 정지표적이 안떨고 중앙오면 조금씩↑, 떨리면 30%↓
+      #   그 다음 kd(감쇠)→att_p→(정지 안정 후)lead→att_comp 순.
       roll_pid:
-        kp: 160.0
+        kp: 130.0
         ki: 0.0
-        kd: 2.2
-        output_limit: 70.0
+        kd: 1.0
+        output_limit: 45.0
       pitch_pid:
-        kp: 160.0
+        kp: 130.0
         ki: 0.0
-        kd: 2.2
-        output_limit: 70.0
+        kd: 1.0
+        output_limit: 45.0
       # 자동 모드 arm 시점: 스위치와 분리, 상태머신 상태로 컨트롤 노드가 결정.
       #   기본=발사(TRACK)부터 무장. SEARCH 등에서 arm 하려면 목록에 추가.
       auto_arm_states: ["TRACK", "FIRE", "RTL"]
       throttle: 0.55
-      track_throttle: 0.84
-      lead_gain: 0.20         # 예측조준 세기 — 움직이는 공의 미래 위치를 겨냥 (클수록 더 앞서)
+      track_throttle: 0.87    # 고정: 3.6m/s 명중 검증값 (RTL 성공)
+      lead_gain: 0.0          # 고정: 3.6m/s 명중 검증값 (PN이 리드 담당, 예측조준 OFF)
       lead_dot_alpha: 0.2    # 표적 속도추정 LPF (클수록 예측 민첩/노이즈↑)
       lead_clamp: 0.6        # 속도추정 스파이크 제한
       roll_sign: 1.0
       pitch_sign: 1.0
-      error_lpf_alpha: 0.3
-      control_rate_hz: 30.0
+      error_lpf_alpha: 0.25
+      control_rate_hz: 50.0  # 제어 루프 주파수. 높을수록 반응 빠르고 매끄러움(PN 정확도↑). 카메라 60Hz와 짝
       deadzone: 0.04
       deriv_lpf_alpha: 0.25
       # ACRO(각속도) 제어. acro_mode=true 면 자동요격을 각속도로 (브리지 autonomous_acro 와 일치必).
       acro_mode: true    # ★ ACRO(각속도) 모드. 브리지 autonomous_acro 도 true 로 (짝).
-      max_rate_dps: 120.0   # 풀스틱 각속도[deg/s] (PX4 MC_ACRO_R_MAX/P_MAX 와 일치)
+      max_rate_dps: 220.0   # 풀스틱 각속도[deg/s] (PX4 MC_ACRO_R/P_MAX 와 일치). 고속표적용 상향(att_p는 안올려 발진회피)
       # 추격 궤적(Pursuit): 조준하며 처음부터 상승 (공쪽으로 대각선 비행)
       hover_throttle: 0.62  # 빗나갔을 때 최소 상승(재조준)
       pursuit_gate: 0.25    # 오차 이 이하면 full 상승(공쪽 돌진)
       # 자세 피드백(각속도 제어 캐스케이드) — 움직이는 공 뒤처짐 해결
-      att_p: 6.5            # 자세루프 게인: rate=att_p×(목표각−실제각). 크면 빠르게 기울임/떨림↑
-      max_tilt_deg: 35.0    # 목표 기울기 제한[deg]
+      att_p: 3.5            # 자세루프 게인: rate=att_p×(목표각−실제각). 검증된 안정값(올리면 자가발진)
+      max_tilt_deg: 55.0    # 목표 기울기 제한[deg]. 고속표적 횡가속용 상향(느린공은 어차피 작은기울기라 무관)
       att_roll_sign: 1.0    # 자세 부호 (실측: roll +, pitch -)
       att_pitch_sign: -1.0
       # 유도 시스템: ① 자세보정 LOS  ② 거리비례 예측
-      att_comp: 0.014         # 자세보정 게인(0=off). 0부터 올려 튜닝 (~0.017이 이론값). 발산하면 ↓
-      lead_dist: 0.02       # 거리비례 예측: 멀수록 더 앞서 겨냥
+      att_comp: 0.012         # 자세보정 게인 (1.6m/s 명중 검증값). 발산하면 ↓
+      lead_dist: 0.0        # 거리비례 예측 OFF (움직이는 표적 잡을때 조금씩↑)
+      # ── 유도 방식 ── 0=추미(Pursuit, 기존/검증됨), 1=비례항법(PN, 빠른 표적용)
+      #   PN: 시선각속도(LOS rate)를 없애도록 조종 → 미래 충돌점 앞질러 겨냥.
+      #   빠른 표적을 못 잡으면 pn_nav_gain↑, 떨리면 pn_nav_gain↓ 또는 pn_alpha/beta↓.
+      guidance_mode: 1        # 고정: 3.6m/s 명중 검증값 = PN(비례항법). 정지공은 0(Pursuit)
+      pn_nav_gain: 50.0       # 고정: 3.6m/s 명중 검증값 (LOS각속도→기울기, 앞질러 겨냥)
+      pn_center_gain: 15.0    # 고정: 3.6m/s 명중 검증값 (err→0 정면조준). 정지공은 ↑(45~60)
+      pn_alpha: 0.35          # alpha-beta 위치이득 (표적 상태추정)
+      pn_beta: 0.02           # alpha-beta 속도이득 (LOS각속도 추정). 낮춰서 리드를 '매끈'하게 → 빠른공서 요동↓
+      pn_los_clamp: 1.5       # PN 시선각속도 제한. 종말(근거리)서 폭주(±2↑)하는 걸 막아 안정화. 0=무제한
+      # 종말 커밋: 신뢰거리 pn_commit_dist 이내면 losdot 을 강클램프 → 쫓다 튕기지 않고 충돌코스로 직진(박기)
+      # 종말 부스트: 신뢰거리 pn_commit_dist 이내면 기울기·자세게인을 순간 상향 → 빠른 크로싱을
+      #   끝까지 추종해 박는다(뒤처짐 해결). 짧은 순간만이라 발진 안 함.
+      pn_commit_dist: 0.0       # 종말 부스트 비활성(0). 발진/붕괴 원인이라 끔. 실험용으로만 ↑
+      pn_commit_clamp: 0.5      # (미사용) 구 클램프값
+      pn_commit_att_p: 6.5      # 종말 자세게인(빠른 추종). 종말서 떨리면 ↓
+      pn_commit_max_tilt: 58.0  # 종말 최대기울기[deg]. 더 강한 횡가속(양력손실 주의). 못따라가면 ↑
