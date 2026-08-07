@@ -32,6 +32,9 @@ arms_control_node:
         ki: 0.0
         kd: 2.2
         output_limit: 70.0
+      # 자동 모드 arm 시점: 스위치와 분리, 상태머신 상태로 컨트롤 노드가 결정.
+      #   기본=발사(TRACK)부터 무장. SEARCH 등에서 arm 하려면 목록에 추가.
+      auto_arm_states: ["TRACK", "FIRE", "RTL"]
       throttle: 0.55
       track_throttle: 0.84
       lead_gain: 0.20         # 예측조준 세기 — 움직이는 공의 미래 위치를 겨냥 (클수록 더 앞서)

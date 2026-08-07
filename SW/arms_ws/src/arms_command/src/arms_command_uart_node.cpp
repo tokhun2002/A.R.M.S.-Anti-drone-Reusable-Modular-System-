@@ -425,10 +425,12 @@ private:
     };
 
     //   buttons[0]=kill, [1]=arm, [2]=mode, [3]=launch
-    //     ESP32 eland 스위치 → arm,  fire 버튼 → launch 로 매핑
+    //     실기체 배선상 kill 스위치와 상태(arm) 스위치가 뒤바뀌어 있어 두 입력을 스왑한다.
+    //     → 물리 kill 스위치는 eland 필드로, 물리 상태/arm 스위치는 kill 필드로 들어온다.
+    //     fire 버튼 → launch 로 매핑.
     msg.buttons = {
-      packet.kill,
-      packet.eland,
+      packet.eland,   // buttons[0]=kill  (물리 kill 스위치)
+      packet.kill,    // buttons[1]=arm   (물리 상태/arm 스위치)
       packet.mode,
       packet.fire
     };

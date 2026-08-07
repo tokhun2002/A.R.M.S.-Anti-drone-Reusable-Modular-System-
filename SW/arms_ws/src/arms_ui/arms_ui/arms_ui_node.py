@@ -29,7 +29,9 @@ from sensor_msgs.msg import Image, Joy
 from arms_msgs.msg import DetectionArray, MissionState
 from geometry_msgs.msg import Vector3
 
-# /arms/command Joy 의 mode 스위치 인덱스 (arms_control_node.cpp btn(2) 와 일치)
+# /arms/command Joy 버튼 인덱스 (arms_command_uart_node.cpp / arms_control_node.cpp 와 일치)
+#   buttons[0]=kill, [1]=arm, [2]=mode, [3]=launch
+KILL_BUTTON_IDX = 0
 MODE_BUTTON_IDX = 2
 
 STATE_COLORS = {
@@ -89,6 +91,8 @@ class ArmsUINode(Node):
         self._latest_roi = None
         self._manual_mode = False   # buttons[2]==1 → 수동 모드(오버레이 끔)
         self._prev_manual = None    # 이전 mode 값 (None=아직 미수신, 첫 수신은 효과음 없음)
+        self._kill = False          # buttons[0]==1 → kill 스위치 ON (모드 무관 경고 표시)
+        self._kill_blink = 0        # kill 경고 점멸용 프레임 카운터
         # mission_state 기반 상태 변경 효과음 엣지 추적
         self._prev_manual_state = None  # MissionState.manual_mode 이전값 (모드전환 틱 억제용)
         self._prev_armed = None         # MissionState.armed 이전값 (수동 arm/disarm)
@@ -159,6 +163,7 @@ class ArmsUINode(Node):
     def _cb_command(self, msg: Joy):
         if len(msg.buttons) <= MODE_BUTTON_IDX:
             return
+        self._kill = bool(msg.buttons[KILL_BUTTON_IDX])
         manual = bool(msg.buttons[MODE_BUTTON_IDX])
         self._manual_mode = manual
         # 전환 엣지에서만 효과음 (첫 수신 self._prev_manual is None 은 건너뜀)
@@ -169,9 +174,15 @@ class ArmsUINode(Node):
 
     def _play_sound(self, path):
         """ffplay 로 효과음을 비동기 재생 (UI 렌더링을 막지 않음)."""
-        if not self._player or not path or not os.path.isfile(path):
-            if path and not os.path.isfile(path):
-                self.get_logger().warn(f"효과음 파일 없음: {path}")
+        # 트리거가 실제로 걸렸는지 항상 로그로 남긴다 (재생 성공 여부와 별개).
+        #   → 로그는 뜨는데 소리가 없으면 오디오/ffplay 문제, 로그도 없으면 토픽/필드 문제.
+        self.get_logger().info(
+            f"효과음 트리거: {os.path.basename(path) if path else path}")
+        if self._player is None:
+            self.get_logger().warn("ffplay 없음 — 효과음 재생 불가")
+            return
+        if not path or not os.path.isfile(path):
+            self.get_logger().warn(f"효과음 파일 없음: {path}")
             return
 
         def _run():
@@ -203,12 +214,16 @@ class ArmsUINode(Node):
         if frame is None or frame.size == 0:
             return
 
-        # 수동 모드에서는 원본 영상만 표시하고 오버레이는 생략한다.
+        # 수동 모드에서는 원본 영상 + arm/disarm 표시, 오버레이는 생략한다.
         if not self._manual_mode:
             self._draw_overlay(frame)
             # IDLE 에선 표적 확대 뷰(ROI PiP)도 표시하지 않는다.
             if (self._latest_state.state or "IDLE") != "IDLE":
                 self._draw_roi_pip(frame)
+        else:
+            self._draw_manual_arm(frame)
+        # kill 스위치 ON 이면 자동/수동 무관하게 화면 중앙에 크게 경고 (최상단).
+        self._draw_kill_banner(frame)
         if self._fullscreen:
             frame = self._fit_to_window(frame)
         cv2.imshow("A.R.M.S.", frame)
@@ -280,6 +295,47 @@ class ArmsUINode(Node):
     # ------------------------------------------------------------------
     # Drawing
     # ------------------------------------------------------------------
+
+    def _put_center_text(self, frame, text, cy, color, scale, thickness):
+        """가로 중앙 정렬 텍스트 + 검은 외곽선(영상 위 가독성 확보)."""
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
+        x = (frame.shape[1] - tw) // 2
+        y = cy + th // 2
+        cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0),
+                    thickness + 3, cv2.LINE_AA)
+        cv2.putText(frame, text, (x, y), font, scale, color,
+                    thickness, cv2.LINE_AA)
+
+    def _draw_manual_arm(self, frame):
+        """수동 모드: arm/disarm 여부를 상단 중앙에 표시."""
+        h = frame.shape[0]
+        armed = bool(self._latest_state.armed)
+        text = "ARMED" if armed else "DISARMED"
+        color = (0, 0, 255) if armed else (0, 200, 0)   # arm=빨강(주의), disarm=초록(안전)
+        scale = max(0.8, h / 600.0)
+        self._put_center_text(frame, text, int(h * 0.08), color, scale, 2)
+
+    def _draw_kill_banner(self, frame):
+        """kill 스위치 ON: 모드 무관하게 화면 중앙에 크게 점멸 경고."""
+        if not self._kill:
+            return
+        h, w = frame.shape[:2]
+        self._kill_blink = (self._kill_blink + 1) % 20
+        # 붉은 테두리는 항상, 중앙 배너/텍스트는 점멸(대략 65% 켜짐)
+        cv2.rectangle(frame, (0, 0), (w - 1, h - 1), (0, 0, 255), 12)
+        if self._kill_blink >= 13:
+            return
+        band_h = int(h * 0.24)
+        y0 = (h - band_h) // 2
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, y0), (w, y0 + band_h), (0, 0, 150), -1)
+        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+        # 텍스트 폭이 화면의 ~80% 가 되도록 스케일 자동 계산
+        text = "KILL SWITCH ON"
+        base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 4)[0][0]
+        scale = (w * 0.8) / max(1, base)
+        self._put_center_text(frame, text, h // 2, (255, 255, 255), scale, 4)
 
     def _draw_crosshair(self, frame):
         """화면 정중앙 조준 십자선 — 자동/수동 모두 항상 표시."""

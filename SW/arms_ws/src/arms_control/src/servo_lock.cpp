@@ -79,6 +79,9 @@ void ServoLock::set_duty(long duty_ns) {
   if (duty_ns == current_duty_ns_) return;  // 값 변화 시에만 기록
   if (write_file(pwm_dir_ + "/duty_cycle", std::to_string(duty_ns))) {
     current_duty_ns_ = duty_ns;
+    const char* what = (duty_ns == params_.lock_duty_ns) ? " (LOCK)"
+                     : (duty_ns == params_.open_duty_ns) ? " (OPEN)" : "";
+    log("[ServoLock] duty=" + std::to_string(duty_ns) + "ns" + what);  // 실제 PWM 쓰기마다 로그
   } else {
     log("[ServoLock] duty_cycle 쓰기 실패.");
   }

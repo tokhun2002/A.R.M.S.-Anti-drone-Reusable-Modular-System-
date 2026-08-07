@@ -192,10 +192,14 @@ bool            manual_mode          # true=manual, false=auto — UI 효과음/
 | ---------- | ------------------------------- | ------------------------------------------- | ------------------- | ------------------------- |
 | **IDLE**   | 정지 대기                       | CH3=min, CH1/2=center, CH5=disarm           | **OPEN**(진입 시)   | 회색 테두리               |
 | **SEARCH** | 타겟 탐색 중 (FC 미무장)        | CH3=min, CH5=disarm                         | **LOCK**(IDLE→SEARCH 엣지) | 노란색, "Searching..."    |
-| **LOCK**   | 타겟 포착 확인 중 (잠금 타이머) | CH5=arm → PX4 arm                           | LOCK 유지           | 주황색 박스, "Locking..." |
-| **TRACK**  | 위치 보정 추적                  | PID → CH1/2 + track_throttle → CH3          | **OPEN**(LOCK→TRACK 엣지) | 빨간 박스, "LOCKED"       |
-| **FIRE**   | 추적 유지 + 페이로드 즉시 발사  | PID 유지 (전용 fire 채널 없음; mission_state로 신호) | OPEN 유지           | 빨간 박스, "FIRED!"       |
-| **RTL**    | 귀환 및 착륙                    | 전용 land 채널 없음 (수동 Altitude 착륙 등 별도 경로) | OPEN 유지           | "Returning..."            |
+| **LOCK**   | 타겟 포착 확인 중 (잠금 타이머) | CH5=disarm (기본; 클램프 물린 채 대기)      | LOCK 유지           | 주황색 박스, "Locking..." |
+| **TRACK**  | 위치 보정 추적                  | **CH5=arm** + PID → CH1/2 + track_throttle → CH3 | **OPEN**(LOCK→TRACK 엣지) | 빨간 박스, "LOCKED"       |
+| **FIRE**   | 추적 유지 + 페이로드 즉시 발사  | CH5=arm, PID 유지 (전용 fire 채널 없음; mission_state로 신호) | OPEN 유지 | 빨간 박스, "FIRED!"       |
+| **RTL**    | 귀환 및 착륙                    | CH5=arm (전용 land 채널 없음; 수동 Altitude 착륙 등 별도 경로) | OPEN 유지 | "Returning..."            |
+
+> **자동 모드 arm(CH5)은 상태머신 상태로 결정**(스위치와 분리). 기본은 **발사(TRACK)부터 무장**
+> (`control.auto_arm_states = [TRACK, FIRE, RTL]`). LOCK 은 클램프 물린 채 disarm 대기 →
+> TRACK(발사)에서 arm+서보 열림. SEARCH 등에서 미리 arm 하려면 목록만 수정. 수동 모드 CH5 는 arm 스위치.
 
 > **서보 잠금장치(발사 클램프)**: 발사 전 기체를 발사기에 고정하고 발사 순간에만 놓아준다.
 > 방아쇠(launch 버튼)가 아니라 **상태 전이 엣지**로 제어한다(SEARCH 중 방아쇠를 눌러도 안 풀림).
@@ -385,9 +389,10 @@ SITL:
 > - **CH6 flight mode**는 오퍼레이터 모드 스위치(joy buttons[2])와 1:1이다.
 >   auto(영상유도)=PX4 **Manual**(172), manual(손제어)=PX4 **Altitude**(1811).
 >   실기체는 PX4쪽 `RC_MAP_FLTMODE=6` + `COM_FLTMODE1/COM_FLTMODE6` 설정 필요.
-> - **CH5 arm**은 양쪽 모드 모두 유효 ARM(`effective_arm` = arm 스위치 && 재토글 래치 해제)을
->   따른다. auto 모드에서는 이 유효 ARM 이 미션 게이트(IDLE↔SEARCH)도 함께 연다.
->   모드 전환/부팅 직후에는 재토글 전까지 disarm 유지 (ARM 재토글 안전장치, [7.3](#73-auto--manual-모드) 참고).
+> - **CH5 arm**은 모드에 따라 소스가 다르다. **auto**: 스위치와 분리 — 상태머신 상태 기반
+>   (`control.auto_arm_states`, 기본 발사 TRACK 부터). **manual**: arm 스위치(buttons[1]) +
+>   재토글 안전장치(모드 전환/부팅 직후 재토글 전까지 disarm). 자세히는 [7.3](#73-auto--manual-모드).
+>   자동 모드의 buttons[1] 은 arm 이 아니라 미션 상태(IDLE↔SEARCH)만 제어한다.
 > - **launch 버튼(buttons[3])** 과 **land/fire** 는 CRSF 채널로 내보내지 않는다.
 >   launch는 상태 머신 LOCK→TRACK 전이 트리거로만 쓰이고, CH8은 비워 둔다.
 
@@ -400,25 +405,31 @@ CRSF 프레임 포맷: `[0xC8][24][0x16][22 bytes: 16ch × 11bit][CRC8-DVB-S2]`
 오퍼레이터 관점의 두 모드이며, 모드 스위치가 CH1-4 소스와 CH6 flight mode를 함께 결정한다.
 
 - **auto (영상유도)**: 젯슨이 FPV 영상으로 각도 제어 명령 생성. PX4는 **Manual** 모드.
-  arm은 상태 머신이 관리(arm 스위치 무시).
+  상태 스위치(buttons[1])는 **미션 상태(IDLE↔SEARCH)만** 제어하고, **arm(CH5)은 스위치와 분리**되어
+  상태머신 상태로 컨트롤 노드가 결정한다.
 - **manual (손제어)**: 사람이 스틱으로 직접 조종. PX4는 **Altitude** 모드(손조종 편의).
-  arm은 arm 스위치(buttons[1])를 따름.
+  arm은 arm 스위치(buttons[1])를 따름(재토글 안전장치 적용).
 
-| 모드   | PX4 flight mode | CH1-4 소스                                              | CH5 arm      |
-| ------ | --------------- | ------------------------------------------------------- | ------------ |
-| auto   | Manual          | PID 계산 (roll/pitch), throttle=track_throttle, yaw=992 | 상태 머신    |
-| manual | Altitude        | Mode2 스틱 패스스루 (아래 축 재배치)                    | arm 스위치   |
+| 모드   | PX4 flight mode | CH1-4 소스                                              | CH5 arm                       | buttons[1] 역할 |
+| ------ | --------------- | ------------------------------------------------------- | ----------------------------- | --------------- |
+| auto   | Manual          | PID 계산 (roll/pitch), throttle=track_throttle, yaw=992 | **상태머신 상태 기반** (스위치와 분리) | IDLE↔SEARCH     |
+| manual | Altitude        | Mode2 스틱 패스스루 (아래 축 재배치)                    | arm 스위치 (재토글 안전장치)  | ARM/DISARM      |
 
-> **ARM 재토글 안전장치**: 모드 스위치를 바꾸는 순간 ARM 스위치가 올라가 있으면 즉시 arm 되는
-> 위험을 막는다. 예로 auto+SEARCH(=ARM 올림)에서 manual 로 바꾸면 CH5 가 곧바로 arm 되어 FC 가
-> 무장된다. 그래서 **모드 전환 시(및 노드 부팅 시)** 재토글 래치를 걸어, ARM 스위치가 올라가
-> 있어도 arm 되지 않게 하고, **반드시 DISARM 으로 내렸다가 다시 올려야** arm 된다(`effective_arm =
-> joy_arm_ && !require_arm_reset_`). 이 유효 ARM 은 auto 미션 게이트(IDLE→SEARCH)와 CH5(FC arm)
-> 양쪽에 동일 적용된다. auto↔manual 대칭.
+> **자동 모드 = 스위치와 arm 분리**: 자동 모드에서 상태 스위치(buttons[1])는 미션 상태
+> (IDLE↔SEARCH)만 제어하고 FC arm(CH5)은 건드리지 않는다. arm 은 상태머신 상태로 컨트롤 노드가
+> 결정한다 — 기본은 **발사(TRACK)부터 무장**(`control.auto_arm_states`, 기본 `[TRACK, FIRE, RTL]`;
+> 나중에 SEARCH 등에서 arm 하려면 이 목록만 수정).
 >
-> **수동 모드 = 상태머신 IDLE 고정**: manual 모드에서는 자동 상태머신을 항상 IDLE 로 강제한다.
-> 따라서 manual→auto 로 돌아오면 **기본이 IDLE**이고, SEARCH 는 ARM 재토글(DISARM→ARM)로만 진입한다
-> (SEARCH 재토글 안전장치). 아울러 수동 비행 중 영상/방아쇠로 미션 상태가 멋대로 진행되는 것도 막는다.
+> **재토글 안전장치 (자동·수동 공통)**: 모드 전환/부팅 직후 상태 스위치가 올라가 있어도 즉시
+> 적용되지 않게 하는 래치(`effective_arm = joy_arm_ && !require_arm_reset_`). `require_arm_reset_`
+> 는 **모드 전환·부팅 시** 걸리고, 스위치를 **DISARM(아래)로 내리면 해제**된다.
+> · **자동**: idle/search 진입에 적용 — manual→auto 로 왔을 때 스위치가 SEARCH(위)여도 **기본 IDLE**,
+>   내렸다 다시 올려야 SEARCH 진입. (자동 모드 안에서 한 번 재토글한 뒤엔 자유롭게 idle↔search 토글)
+> · **수동**: CH5 arm 에 적용 — auto→manual 로 왔을 때 스위치가 위여도 **기본 DISARM**, 재토글해야 arm.
+> 두 경우 매커니즘이 동일하다(모드 전환 시 상태 스위치는 반드시 기본 위치에서 다시 올려야 작동).
+>
+> **수동 모드 = 상태머신 IDLE 고정**: manual 에서는 미션 상태가 의미 없으므로 상태머신을 IDLE 로
+> 둔다(서보 열림). 영상/방아쇠로 미션이 멋대로 진행되는 것도 막는다.
 
 manual 모드 축→채널 매핑 (Mode2 조종기 → AETR 채널 순서):
 

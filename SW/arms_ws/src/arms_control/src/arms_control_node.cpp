@@ -6,6 +6,9 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <set>
+#include <string>
+#include <vector>
 
 #include "arms_control/crsf_output.hpp"
 #include "arms_control/pid_controller.hpp"
@@ -58,6 +61,12 @@ class ArmsControlNode : public rclcpp::Node {
 
     declare_parameter("mission.sitl_auto_launch", false);
     declare_parameter("mission.auto_launch_delay_sec", 1.0);
+
+    // 자동 모드 CH5(FC arm)를 켜는 상태 목록. 자동 모드에선 arm 을 스위치와 분리해
+    //   컨트롤 노드가 상태머신 상태로 결정한다. 기본=발사(TRACK)부터 무장.
+    //   나중에 SEARCH 등에서 arm 하도록 바꾸려면 이 목록만 수정하면 된다.
+    declare_parameter("control.auto_arm_states",
+                      std::vector<std::string>{"TRACK", "FIRE", "RTL"});
 
     // 발사 잠금장치 서보 (Jetson 하드웨어 PWM, sysfs). SITL 은 enabled=false.
     declare_parameter("servo.enabled", false);
@@ -151,6 +160,11 @@ class ArmsControlNode : public rclcpp::Node {
     sitl_auto_launch_ = get_parameter("mission.sitl_auto_launch").as_bool();
     auto_launch_delay_sec_ =
         get_parameter("mission.auto_launch_delay_sec").as_double();
+
+    {
+      const auto v = get_parameter("control.auto_arm_states").as_string_array();
+      auto_arm_states_ = std::set<std::string>(v.begin(), v.end());
+    }
 
     crsf_max_angle_ = get_parameter("crsf.max_angle_deg").as_double();
     acro_mode_ = get_parameter("control.acro_mode").as_bool();
@@ -585,36 +599,37 @@ class ArmsControlNode : public rclcpp::Node {
       align_locked_ = false;
     }
 
-    // ---- 유효 ARM = ARM 스위치 && 재토글 래치 해제됨 ----
-    //   모드 전환/부팅 직후에는 스위치가 올라가 있어도 arm 되지 않는다(안전장치).
-    //   auto arm 게이트와 CH5(FC arm) 양쪽에 동일하게 적용한다.
+    // ---- 유효 스위치 = 상태 스위치 && 재토글 래치 해제 ----
+    //   모드 전환/부팅 직후엔 스위치가 올라가 있어도 즉시 적용 안 됨 → 재토글(DOWN→UP) 필요.
+    //   · 자동: idle/search 게이트에 적용 (기본 IDLE, SEARCH 재토글 안전장치)
+    //   · 수동: CH5 arm 에 적용 (기본 DISARM, arm 재토글 안전장치)
+    //   ※ 자동 CH5 arm 자체는 스위치와 분리되어 상태머신 상태(auto_arm_states_)로 결정한다.
     const bool effective_arm = joy_arm_ && !require_arm_reset_;
 
-    // ---- ARM 스위치 = 마스터 게이트 (auto 모드) ----
-    //   ARM 을 켜야만 자동 미션 시작(IDLE→SEARCH). DISARM 이면 IDLE 로 강제 복귀.
-    //   → 기본(자동+디암)엔 가만히 있다가, ARM 올리면 자율 요격 시작.
+    // ---- 상태 스위치 = idle/search 게이트 (auto 모드) ----
+    //   자동 모드에서 이 스위치는 arm 과 분리되어 미션 상태(IDLE↔SEARCH)만 제어한다.
+    //   재토글 안전장치 적용: 모드 전환/부팅 직후 스위치가 SEARCH(위)여도 기본 IDLE 이고,
+    //   DISARM 으로 내렸다 다시 올려야 SEARCH 진입 (수동 arm 과 동일 매커니즘).
     if (!joy_manual_mode_) {
       if (effective_arm && state == State::IDLE && !auto_armed_) {
         auto_armed_ = true;
         sm_->arm();
-        RCLCPP_INFO(get_logger(), "ARM → 자율 미션 시작 (IDLE → SEARCH)");
+        RCLCPP_INFO(get_logger(), "SEARCH ON (IDLE → SEARCH)");
       } else if (!effective_arm) {
         if (state != State::IDLE) {
           sm_->disarm();
-          RCLCPP_INFO(get_logger(), "DISARM → 미션 중단 (IDLE)");
+          RCLCPP_INFO(get_logger(), "SEARCH OFF → IDLE");
         }
         auto_armed_ = false;
       }
     } else {
       // ---- 수동 모드: 자동 상태머신을 IDLE 로 고정 ----
-      //   수동→자동으로 돌아올 때 항상 IDLE 에서 시작한다(기본=IDLE). SEARCH 는 ARM
-      //   스위치를 DISARM 으로 내렸다가 다시 올려야(재토글) 진입한다. auto 로 넘어오는
-      //   순간 모드전환 래치(require_arm_reset_)도 함께 걸려, 스위치가 올라가 있어도 즉시
-      //   SEARCH 되지 않는다. 아울러 수동 비행 중 영상/방아쇠로 미션이 멋대로 진행되는 것도 막는다.
+      //   수동에서는 미션 상태가 의미 없으므로 IDLE 로 둔다(서보도 열림). 영상/방아쇠로
+      //   미션이 멋대로 진행되는 것도 막는다. 자동으로 넘어오면 상태 스위치가 곧바로
+      //   idle/search 를 제어한다(자동에선 스위치가 arm 과 분리되어 재토글 불필요).
       if (state != State::IDLE) {
         sm_->disarm();
-        RCLCPP_INFO(get_logger(),
-                    "MANUAL → 자동 상태머신 IDLE 고정 (SEARCH 재진입은 ARM 재토글 필요)");
+        RCLCPP_INFO(get_logger(), "MANUAL → 자동 상태머신 IDLE 고정");
       }
       auto_armed_ = false;
     }
@@ -636,6 +651,15 @@ class ArmsControlNode : public rclcpp::Node {
         auto_launched_ = false;
       }
     }
+
+    // ---- CH5(FC arm) 결정 ----
+    //   수동: 스위치(effective_arm, 재토글 안전장치) 그대로.
+    //   자동: 스위치와 분리 — 상태머신 상태 기반(auto_arm_states_)으로 컨트롤 노드가 결정.
+    //   발행하는 mission_state.state 와 동일한 state 로 판정해 armed/state 를 일관되게 유지.
+    const bool ch5_armed =
+        joy_manual_mode_
+            ? effective_arm
+            : (auto_arm_states_.count(to_string(state)) > 0);
 
     // ---- CRSF output ----
     {
@@ -674,10 +698,9 @@ class ArmsControlNode : public rclcpp::Node {
         crsf[3] = CrsfOutput::CRSF_CENTER;  // yaw 중앙 = yaw rate 0(헤딩 유지)
       }
 
-      // CH5: arm — 유효 ARM(재토글 래치 반영)이 마스터. 켜면 FC arm, 끄면 disarm (양쪽 모드 공통).
-      //   기본 DISARM → 모터 꺼짐. ARM 올려야 날 준비 완료.
-      //   모드 전환/부팅 직후엔 재토글(DISARM→ARM) 전까지 disarm 유지 → 오발 방지.
-      crsf[4] = effective_arm ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
+      // CH5: arm — 수동은 스위치(재토글 안전장치), 자동은 상태머신 상태 기반.
+      //   자동: 기본 발사(TRACK)부터 arm (control.auto_arm_states 로 조정).
+      crsf[4] = ch5_armed ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
 
       // CH6: flight mode — auto=PX4 Manual(172), manual=PX4 Altitude(1811).
       //   모드 스위치(joy_manual_mode_)와 1:1. PX4쪽 RC_MAP_FLTMODE=6 필요.
@@ -735,7 +758,7 @@ class ArmsControlNode : public rclcpp::Node {
     msg.error_y = static_cast<float>(sm_->current_error_y());
     msg.target_locked = sm_->target_locked();
     msg.kp_now = static_cast<float>(kp_now_);
-    msg.armed = effective_arm;            // UI 효과음/표시용 (실제 CH5 arm 상태)
+    msg.armed = ch5_armed;                // UI 효과음/표시용 (실제 CH5 arm 상태)
     msg.manual_mode = joy_manual_mode_;   // UI 효과음/표시용 (모드)
     pub_state_->publish(msg);
 
@@ -807,6 +830,9 @@ class ArmsControlNode : public rclcpp::Node {
 
   // Auto arm (IDLE→SEARCH 즉시 1회)
   bool auto_armed_{false};
+
+  // 자동 모드에서 CH5(FC arm)를 켜는 상태 집합 (스위치와 분리, 컨트롤 노드가 결정)
+  std::set<std::string> auto_arm_states_;
 
   // Joy state
   std::array<float, 4> joy_axes_{};
