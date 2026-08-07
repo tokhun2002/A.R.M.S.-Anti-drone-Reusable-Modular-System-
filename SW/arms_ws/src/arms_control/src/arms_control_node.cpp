@@ -35,6 +35,7 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("mission.detection_timeout_sec", 1.0);
     declare_parameter("mission.lock_box_tolerance", 0.15);
     declare_parameter("mission.fire_distance_m", 5.0);
+    declare_parameter("mission.fire_align_tol", 0.2);  // FIRE 정렬 허용오차(가짜명중 방지)
 
     declare_parameter("control.roll_pid.kp", 15.0);
     declare_parameter("control.roll_pid.ki", 0.5);
@@ -60,6 +61,25 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("crsf.port", std::string("/tmp/crsf_tx"));
     declare_parameter("crsf.baud", 400000);
     declare_parameter("crsf.max_angle_deg", 35.0);
+    // ACRO(각속도) 제어: true 면 자동요격 출력을 '각속도[deg/s]' 명령으로 내보냄
+    //   (PX4 ACRO 모드용). false 면 기존 '각도[deg]' 명령(Stabilized/Manual).
+    //   ★ 브리지(sitl_bridge)의 autonomous_acro 와 반드시 일치시킬 것.
+    declare_parameter("control.acro_mode", true);
+    declare_parameter("control.max_rate_dps", 120.0);  // 풀스틱 각속도[deg/s], PX4 MC_ACRO_*_MAX 와 일치
+    // 추격 궤적(Pursuit): 정렬 기다리지 않고 조준하며 처음부터 상승.
+    declare_parameter("control.hover_throttle", 0.62);  // 겨냥 안 될 때 최소 상승(호버)
+    declare_parameter("control.pursuit_gate", 0.25);    // 오차 이 이하면 full 상승(공쪽으로 돌진)
+    // 예측조준(Lead): 움직이는 공의 미래 위치를 겨냥. lead_gain(리드 세기)은 위에 이미 있음.
+    declare_parameter("control.lead_dot_alpha", 0.2);   // 표적 속도추정 LPF(클수록 민첩/노이즈↑)
+    declare_parameter("control.lead_clamp", 0.6);       // 속도추정 스파이크 제한[1/s]
+    // 자세 피드백(각속도 제어 캐스케이드): 비전=목표기울기 → 자세루프가 rate 산출
+    declare_parameter("control.att_p", 6.0);            // 자세루프 게인: rate=att_p×(목표각−실제각)
+    declare_parameter("control.max_tilt_deg", 35.0);    // 목표 기울기 제한[deg]
+    declare_parameter("control.att_roll_sign", 1.0);    // 자세 부호(실측: roll +, pitch -)
+    declare_parameter("control.att_pitch_sign", -1.0);
+    // 유도(Guidance): ① 자세보정 LOS  ② 거리비례 예측
+    declare_parameter("control.att_comp", 0.0);         // 자세보정 게인(≈1/half_FOV≈0.017, 0=off)
+    declare_parameter("control.lead_dist", 0.02);       // 거리비례 예측: 리드시간 += 이값×거리[m]
 
     // ----------------------------------------------------------------
     // State machine
@@ -75,6 +95,8 @@ class ArmsControlNode : public rclcpp::Node {
         get_parameter("mission.lock_box_tolerance").as_double();
     sm_params.fire_distance_m =
         get_parameter("mission.fire_distance_m").as_double();
+    sm_params.fire_align_tol =
+        get_parameter("mission.fire_align_tol").as_double();
 
     auto log_fn = [this](const std::string& msg) {
       RCLCPP_INFO(get_logger(), "%s", msg.c_str());
@@ -122,6 +144,18 @@ class ArmsControlNode : public rclcpp::Node {
         get_parameter("mission.auto_launch_delay_sec").as_double();
 
     crsf_max_angle_ = get_parameter("crsf.max_angle_deg").as_double();
+    acro_mode_ = get_parameter("control.acro_mode").as_bool();
+    max_rate_dps_ = get_parameter("control.max_rate_dps").as_double();
+    hover_throttle_ = get_parameter("control.hover_throttle").as_double();
+    pursuit_gate_ = get_parameter("control.pursuit_gate").as_double();
+    lead_dot_alpha_ = get_parameter("control.lead_dot_alpha").as_double();
+    lead_clamp_ = get_parameter("control.lead_clamp").as_double();
+    att_p_ = get_parameter("control.att_p").as_double();
+    max_tilt_deg_ = get_parameter("control.max_tilt_deg").as_double();
+    att_roll_sign_ = get_parameter("control.att_roll_sign").as_double();
+    att_pitch_sign_ = get_parameter("control.att_pitch_sign").as_double();
+    att_comp_ = get_parameter("control.att_comp").as_double();
+    lead_dist_ = get_parameter("control.lead_dist").as_double();
     crsf_out_ = std::make_unique<CrsfOutput>(
         get_parameter("crsf.port").as_string(),
         static_cast<int>(get_parameter("crsf.baud").as_int()));
@@ -148,6 +182,30 @@ class ArmsControlNode : public rclcpp::Node {
               error_lpf_alpha_ = p.as_double();
             else if (n == "control.deadzone")
               deadzone_ = p.as_double();
+            else if (n == "control.acro_mode")
+              acro_mode_ = p.as_bool();
+            else if (n == "control.max_rate_dps")
+              max_rate_dps_ = p.as_double();
+            else if (n == "control.hover_throttle")
+              hover_throttle_ = p.as_double();
+            else if (n == "control.pursuit_gate")
+              pursuit_gate_ = p.as_double();
+            else if (n == "control.lead_dot_alpha")
+              lead_dot_alpha_ = p.as_double();
+            else if (n == "control.lead_clamp")
+              lead_clamp_ = p.as_double();
+            else if (n == "control.att_p")
+              att_p_ = p.as_double();
+            else if (n == "control.max_tilt_deg")
+              max_tilt_deg_ = p.as_double();
+            else if (n == "control.att_roll_sign")
+              att_roll_sign_ = p.as_double();
+            else if (n == "control.att_pitch_sign")
+              att_pitch_sign_ = p.as_double();
+            else if (n == "control.att_comp")
+              att_comp_ = p.as_double();
+            else if (n == "control.lead_dist")
+              lead_dist_ = p.as_double();
             else if (n == "control.deriv_lpf_alpha") {
               deriv_lpf_alpha_ = p.as_double();
               pid_roll_->set_deriv_alpha(deriv_lpf_alpha_);
@@ -269,6 +327,14 @@ class ArmsControlNode : public rclcpp::Node {
           pid_pitch_->reset();
           filt_err_x_ = 0.0;
           filt_err_y_ = 0.0;
+        });
+
+    // 드론 실제 자세(브리지가 PX4 ATTITUDE 를 발행) → 자세 피드백 각속도 제어에 사용
+    sub_attitude_ = create_subscription<geometry_msgs::msg::Vector3>(
+        "/arms/attitude", 10,
+        [this](geometry_msgs::msg::Vector3::SharedPtr msg) {
+          att_roll_deg_  = att_roll_sign_  * msg->x;
+          att_pitch_deg_ = att_pitch_sign_ * msg->y;
         });
 
     // ----------------------------------------------------------------
@@ -410,19 +476,28 @@ class ArmsControlNode : public rclcpp::Node {
 
       kp_now_ = rkp_;
 
-      // ---- 중앙 데드존 ----
-      double ex = apply_deadzone(filt_err_x_, deadzone_);
-      double ey = apply_deadzone(filt_err_y_, deadzone_);
+      // ---- ① 자세 보정 LOS (카메라-기울기 결합 제거) ----
+      //   픽셀 오차는 기체가 기울면 오염된다(기울면 카메라도 기울어 표적이 딴 데 있는 듯 보임).
+      //   실제 자세(att_*_deg_, 브리지가 발행)로 그 성분을 되돌려 '공의 진짜 방향(LOS)'을 얻음.
+      //   att_comp ≈ 1/half_FOV. 0이면 보정 off(기존 동작). 과하면 발산 → 0부터 올려 튜닝.
+      double los_x = filt_err_x_ + att_comp_ * att_roll_deg_;
+      double los_y = filt_err_y_ + att_comp_ * att_pitch_deg_;
+
+      // ---- 중앙 데드존 (보정된 LOS 기준) ----
+      double ex = apply_deadzone(los_x, deadzone_);
+      double ey = apply_deadzone(los_y, deadzone_);
       if (dt > 1e-6) {
-        // 생 미분은 탐지 노이즈로 ±1.5까지 튐 → 강한 LPF로 표적 이동 추세만 추출
-        const double DOT_A = 0.12;
-        double raw_dx = (filt_err_x_ - prev_err_x_) / dt;
-        double raw_dy = (filt_err_y_ - prev_err_y_) / dt;
+        // 표적 시선각속도(LOS rate) 추정 = 예측조준의 핵심 신호 (보정 LOS 의 미분).
+        const double DOT_A = lead_dot_alpha_;
+        double raw_dx = (los_x - prev_err_x_) / dt;
+        double raw_dy = (los_y - prev_err_y_) / dt;
         err_dot_x_ = DOT_A * raw_dx + (1.0 - DOT_A) * err_dot_x_;
         err_dot_y_ = DOT_A * raw_dy + (1.0 - DOT_A) * err_dot_y_;
+        err_dot_x_ = std::clamp(err_dot_x_, -lead_clamp_, lead_clamp_);
+        err_dot_y_ = std::clamp(err_dot_y_, -lead_clamp_, lead_clamp_);
       }
-      prev_err_x_ = filt_err_x_;
-      prev_err_y_ = filt_err_y_;
+      prev_err_x_ = los_x;
+      prev_err_y_ = los_y;
 
       bool held = sm_->is_detection_held();
       pid_roll_->set_integral_frozen(held);
@@ -431,48 +506,37 @@ class ArmsControlNode : public rclcpp::Node {
       double gain_scale = 1.0;
       if (emag_g < 0.08)      gain_scale = 0.5;
       else if (emag_g < 0.20) gain_scale = 0.75;
-      double ex_lead = ex + lead_gain_ * err_dot_x_;
-      double ey_lead = ey + lead_gain_ * err_dot_y_;
+
+      // ---- ② 시간 기반 예측 (Collision/Lead Guidance) ----
+      //   "공이 갈 곳(만나는 지점)"을 겨냥. 리드시간 = lead_gain + lead_dist×거리.
+      //   멀수록(도달시간 김) 더 앞서 겨냥 → 가로지르는 표적을 앞질러 요격.
+      //   거리는 15m 로 상한(엉뚱한 먼 거리값에 예측이 튀는 것 방지).
+      double t_lead = lead_gain_;
+      if (distance_valid()) t_lead += lead_dist_ * std::min(last_distance_, 15.0);
+      double ex_lead = ex + t_lead * err_dot_x_;
+      double ey_lead = ey + t_lead * err_dot_y_;
       roll_deg = roll_sign_ * gain_scale * pid_roll_->compute(ex_lead, dt);
       double pitch_scale = 1.0;
       if (fabs(ex) > 0.12)      pitch_scale = 0.8;
       else if (fabs(ex) > 0.06) pitch_scale = 0.9;
       pitch_deg = pitch_sign_ * gain_scale * pitch_scale * pid_pitch_->compute(ey_lead, dt);
 
-      // ---- 정렬 게이트 + 라이다 거리제어 ----
+      // ---- 추격 궤적(Pursuit): 조준하며 처음부터 상승 ----
+      //   정렬 완료를 기다리지 않는다. 추력은 기체가 기울어진 방향(=공을 겨눈 방향)으로
+      //   나가므로, "공쪽으로 기울이기(추적)" + "상승" 을 동시에 하면 드론이 공을 향해
+      //   대각선으로 날아간다(추격). 공을 잘 겨눌수록(center_q↑) 그쪽으로 더 세게 상승하고,
+      //   빗나가면 상승을 줄여(hover) 재조준을 우선한다. → 수직으로 떴다 늦게 꺾는 문제 해결.
       {
-        const double up = track_throttle_;
-        const double hover = 0.62;
-        const double fire_d = 5.0;
-        const double align_thr = 0.05;
+        const double up = track_throttle_;      // 잘 겨눴을 때 최대 상승(=공쪽 돌진)
+        const double hover = hover_throttle_;   // 빗나갔을 때 최소(재조준)
         double emag = std::hypot(filt_err_x_, filt_err_y_);
+        double center_q =
+            std::clamp(1.0 - emag / std::max(pursuit_gate_, 1e-3), 0.0, 1.0);
+        thrust = static_cast<float>(hover + (up - hover) * center_q);
 
-        if (!align_locked_ && emag < align_thr) {
+        if (!align_locked_ && emag < 0.15) {
           align_locked_ = true;
-          RCLCPP_INFO(get_logger(), "정렬 완료 (오차 %.2f) → 상승 요격 시작",
-                      emag);
-        }
-
-        if (!align_locked_) {
-          thrust = static_cast<float>(hover);
-        } else {
-          const double xy_gate = 0.22;
-          double emag_now = std::hypot(filt_err_x_, filt_err_y_);
-          if (emag_now > xy_gate) {
-            thrust = static_cast<float>(hover);
-          } else if (distance_valid()) {
-            double d = last_distance_;
-            if (d > fire_d + 3.0) {
-              thrust = static_cast<float>(up);
-            } else if (d > fire_d) {
-              double t = (d - fire_d) / 3.0;
-              thrust = static_cast<float>(hover + (up - hover) * t);
-            } else {
-              thrust = static_cast<float>(hover);
-            }
-          } else {
-            thrust = static_cast<float>(up);
-          }
+          RCLCPP_INFO(get_logger(), "추격 시작 (오차 %.2f) → 공 향해 대각선 상승", emag);
         }
       }
 
@@ -494,11 +558,21 @@ class ArmsControlNode : public rclcpp::Node {
       align_locked_ = false;
     }
 
-    // ---- IDLE → SEARCH: 즉시 전이 (auto 모드) ----
-    if (state == State::IDLE && !joy_manual_mode_ && !auto_armed_) {
-      auto_armed_ = true;
-      sm_->arm();
-      RCLCPP_INFO(get_logger(), "IDLE → SEARCH");
+    // ---- ARM 스위치 = 마스터 게이트 (auto 모드) ----
+    //   ARM(joy_arm_) 을 켜야만 자동 미션 시작(IDLE→SEARCH). DISARM 이면 IDLE 로 강제 복귀.
+    //   → 기본(자동+디암)엔 가만히 있다가, ARM 올리면 자율 요격 시작.
+    if (!joy_manual_mode_) {
+      if (joy_arm_ && state == State::IDLE && !auto_armed_) {
+        auto_armed_ = true;
+        sm_->arm();
+        RCLCPP_INFO(get_logger(), "ARM → 자율 미션 시작 (IDLE → SEARCH)");
+      } else if (!joy_arm_) {
+        if (state != State::IDLE) {
+          sm_->disarm();
+          RCLCPP_INFO(get_logger(), "DISARM → 미션 중단 (IDLE)");
+        }
+        auto_armed_ = false;
+      }
     }
 
     // ---- SITL auto-launch ----
@@ -525,7 +599,7 @@ class ArmsControlNode : public rclcpp::Node {
       crsf.fill(CrsfOutput::CRSF_MIN);
 
       if (joy_manual_mode_) {
-        // Mode2 스틱 → AETR 채널 매핑.
+        // 수동 스틱 → AETR 채널 매핑.
         //   L-stick: X=axes[0]=yaw,      Y=axes[1]=throttle
         //   R-stick: X=axes[2]=roll,     Y=axes[3]=pitch
         crsf[0] = CrsfOutput::norm_to_crsf(joy_axes_[2]);  // CH1 roll  = R-stick X
@@ -533,21 +607,32 @@ class ArmsControlNode : public rclcpp::Node {
         crsf[2] = CrsfOutput::norm_to_crsf(joy_axes_[1]);  // CH3 thr   = L-stick Y (스프링, 중앙=50%)
         crsf[3] = CrsfOutput::norm_to_crsf(joy_axes_[0]);  // CH4 yaw   = L-stick X
       } else {
-        crsf[0] = CrsfOutput::norm_to_crsf(roll_deg / crsf_max_angle_);
-        crsf[1] = CrsfOutput::norm_to_crsf(pitch_deg / crsf_max_angle_);
+        // AUTO(영상유도) 출력.
+        //   acro_mode : roll_deg/pitch_deg 를 '각속도[deg/s]' 명령으로 해석 → max_rate_dps 로
+        //               정규화 → PX4 ACRO 가 그 각속도로 회전 (자동수평 없음, 민첩).
+        //   아니면    : '각도[deg]' 명령 → max_angle 정규화 → PX4 Stabilized(자동수평).
+        if (acro_mode_) {
+          // ---- 자세 피드백 캐스케이드 (제대로 된 각속도 제어) ----
+          //   비전 PID 출력(roll_deg)=목표 기울기[deg] → ±max_tilt 제한 →
+          //   회전명령 = att_p×(목표기울기 − 실제기울기). 목표 도달 시 rate 0 → 기울기 '유지'.
+          //   → 움직이는 공 속도에 맞는 steady lean 을 잡고 유지 = 뒤처짐 해결.
+          double roll_des  = std::clamp(roll_deg,  -max_tilt_deg_, max_tilt_deg_);
+          double pitch_des = std::clamp(pitch_deg, -max_tilt_deg_, max_tilt_deg_);
+          double roll_rate  = att_p_ * (roll_des  - att_roll_deg_);
+          double pitch_rate = att_p_ * (pitch_des - att_pitch_deg_);
+          crsf[0] = CrsfOutput::norm_to_crsf(roll_rate  / max_rate_dps_);
+          crsf[1] = CrsfOutput::norm_to_crsf(pitch_rate / max_rate_dps_);
+        } else {
+          crsf[0] = CrsfOutput::norm_to_crsf(roll_deg / crsf_max_angle_);   // Stabilized: 각도
+          crsf[1] = CrsfOutput::norm_to_crsf(pitch_deg / crsf_max_angle_);
+        }
         crsf[2] = CrsfOutput::thr_to_crsf(static_cast<double>(thrust));
-        crsf[3] = CrsfOutput::CRSF_CENTER;  // yaw hold
+        crsf[3] = CrsfOutput::CRSF_CENTER;  // yaw 중앙 = yaw rate 0(헤딩 유지)
       }
 
-      // CH5: arm — auto(영상유도)=상태머신, manual(손제어)=arm 스위치.
-      //   auto 모드에서는 arm 스위치 값 무시(상태머신이 LOCK 이상에서 arm).
-      bool fc_armed = (state == State::LOCK || state == State::TRACK ||
-                       state == State::FIRE  || state == State::RTL);
-      if (joy_manual_mode_) {
-        crsf[4] = joy_arm_ ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
-      } else {
-        crsf[4] = fc_armed ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
-      }
+      // CH5: arm — ARM 스위치(joy_arm_)가 마스터. 켜면 FC arm, 끄면 disarm (양쪽 모드 공통).
+      //   기본 DISARM → 모터 꺼짐. ARM 올려야 날 준비 완료.
+      crsf[4] = joy_arm_ ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
 
       // CH6: flight mode — auto=PX4 Manual(172), manual=PX4 Altitude(1811).
       //   모드 스위치(joy_manual_mode_)와 1:1. PX4쪽 RC_MAP_FLTMODE=6 필요.
@@ -664,12 +749,28 @@ class ArmsControlNode : public rclcpp::Node {
   std::size_t crsf_rx_echoes_{0};                                // 자체 송신 에코 프레임 수를 센다.
   std::size_t crsf_rx_crc_errors_{0};                            // CRC 오류 프레임 수를 센다.
   std::size_t crsf_rx_framing_errors_{0};                        // 길이 오류 프레임 수를 센다.
+  // 자동요격 제어(ACRO 각속도 + 자세 피드백 + 유도)
+  bool   acro_mode_{true};
+  double max_rate_dps_{120.0};
+  double hover_throttle_{0.62};
+  double pursuit_gate_{0.25};
+  double lead_dot_alpha_{0.2};
+  double lead_clamp_{0.6};
+  double att_p_{6.0};
+  double max_tilt_deg_{35.0};
+  double att_roll_sign_{1.0};
+  double att_pitch_sign_{-1.0};
+  double att_comp_{0.0};
+  double lead_dist_{0.02};
+  double att_roll_deg_{0.0};    // 브리지에서 받은 드론 실제 자세
+  double att_pitch_deg_{0.0};
 
   rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
   rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr sub_distance_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr sub_scan_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr sub_joy_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_reset_;
+  rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr sub_attitude_;
   rclcpp::Publisher<arms_msgs::msg::MissionState>::SharedPtr pub_state_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_dbg_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_dist_;

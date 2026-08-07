@@ -375,7 +375,8 @@
         <always_on>true</always_on>
         <update_rate>30</update_rate>
         <camera>
-          <horizontal_fov>1.047</horizontal_fov>
+          <horizontal_fov>2.0</horizontal_fov>   <!-- 광각 ~115° (반각 57°): 기동 중에도 표적 유지 -->
+
           <image>
             <width>320</width>
             <height>240</height>
@@ -411,13 +412,13 @@
           <scan>
             <horizontal>
               <samples>32</samples>
-              <min_angle>-0.52</min_angle>   <!-- ±15° 콘: 머리 위 근처 풍선을 놓치지 않게 -->
-              <max_angle>0.52</max_angle>
+              <min_angle>-1.0</min_angle>   <!-- ±15° 콘: 머리 위 근처 풍선을 놓치지 않게 -->
+              <max_angle>1.0</max_angle>
             </horizontal>
             <vertical>
               <samples>32</samples>
-              <min_angle>-0.52</min_angle>
-              <max_angle>0.52</max_angle>
+              <min_angle>-1.0</min_angle>
+              <max_angle>1.0</max_angle>
             </vertical>
           </scan>
           <range>

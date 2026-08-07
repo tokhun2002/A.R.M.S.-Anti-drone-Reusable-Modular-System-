@@ -43,13 +43,11 @@ except Exception:
     _GZ_OK = False
 
 # 비행 패턴: 실제 적 드론처럼 상공에서 곡선 기동하며 가로지르고, 화면 밖이면 재등장
-ALT = 26.0          # 기본 비행 고도 [m] (드론 도달가능·추락방지, 진짜요격)
+ALT = 42.0          # 기본 비행 고도 [m] (드론 도달가능·추락방지, 진짜요격)
 # 광역 비행: 카메라 화각 밖 먼 지점에서 시작 → 대각선으로 시야 통과 → 반대편 먼 곳으로 이탈.
 # 화각 제약 scale 을 제거하고 SPAN 을 기존(28) 대비 ~2.5배로 키움.
 SPAN = 100.0         # 대각선 가로지르는 총 거리 [m] (먼곳→먼곳). x/y 각각 ±SPAN/2 이동
-SPEED = 1.8        # 근접(카메라 반경 안) 속도 [m/s] — 요격 시간 확보용 저속
-SPEED_FAR = 40.0    # 접근(카메라 반경 밖) 속도 [m/s] — 멀리서 빠르게 날아옴
-FOV_FRAC = 0.45     # 카메라 반경 ≈ 고도 × 이 값 [m]. 이 반경 안이면 저속으로 감속
+SPEED = 1.6        # 진행 속도 [m/s] (단일 속도, 패널 슬라이더로 실시간 조절)
 RATE_HZ = 60.0      # 위치 갱신 주기
 PAUSE_SEC = 1.5     # 한 번 지나간 뒤 재등장까지 대기 [s]
 HIDE_Z = -100.0     # 숨길 때 보내는 지하 z [m] (화면에서 안 보임)
@@ -90,11 +88,8 @@ class BalloonReferee(Node):
         self.declare_parameter("enabled", False)
         # alt = 비행 고도 [m] (패널 슬라이더로 실시간 조절)
         self.declare_parameter("alt", ALT)
-        # speed     = 근접(카메라 반경 안) 속도 [m/s] (패널 슬라이더로 실시간 조절)
-        # speed_far = 접근(반경 밖) 속도 [m/s]  / fov_frac = 반경 = 고도×이 값
+        # speed = 진행 속도 [m/s] (단일, 패널 슬라이더로 실시간 조절)
         self.declare_parameter("speed", SPEED)
-        self.declare_parameter("speed_far", SPEED_FAR)
-        self.declare_parameter("fov_frac", FOV_FRAC)
         self.hit = False
         self.t = 0.0                    # 대각선 진행도 [0→1]
         self.pause_until = 0.0          # 재등장 대기 종료 시각
@@ -138,13 +133,14 @@ class BalloonReferee(Node):
             self._prev_enabled = False
             return
 
-        # ---- 비활성→활성 상승엣지(=발사 버튼): 항상 먼 시작점부터 새 패스 ----
+        # ---- 비활성→활성 상승엣지(=비행시작/재개) ----
+        #   정지했던 그 자리(t)에서 이어서 재개한다. (t 를 리셋하지 않음)
+        #   최초 발사는 __init__ 에서 t=0 이라 자동으로 먼 시작점부터 시작.
         if not self._prev_enabled:
-            self._new_pass()
             self.hit = False
             self.pause_until = 0.0
             self._launched_once = True
-            self.get_logger().info(f"🚀 공 발사! 먼 곳({SPAN/2:.0f}m)에서 대각선 진입.")
+            self.get_logger().info(f"▶ 풍선 재개 (진행도 t={self.t:.2f})")
         self._prev_enabled = True
 
         # 명중 후 일정 시간 지나면 다시 추적 가능하게
@@ -164,14 +160,9 @@ class BalloonReferee(Node):
         #   시작 x=+SPAN/2(화면 아래), y=-SPAN/2(화면 오른쪽) = 화면 오른쪽아래 먼 곳
         #   끝   x=-SPAN/2(화면 위),   y=+SPAN/2(화면 왼쪽)   = 화면 왼쪽위 먼 곳
         #   중간(t=0.5)에 (0,0) 카메라 중심을 통과 → 시야 관통.
+        speed = self.get_parameter("speed").value   # 단일 속도 (패널 슬라이더)
+        # 상공에서 대각선으로 시야 관통
         span = SPAN
-        # ---- 위치 기반 가변 속도 ----
-        #   현재 위치의 중심(0,0)으로부터 수평거리를 구해, 카메라 반경(≈고도×fov_frac)
-        #   밖이면 speed_far(빠르게 접근), 안이면 speed(느리게)로 감속 → 요격 시간 확보.
-        f_now = 1.0 - 2.0 * self.t
-        dist_now = math.hypot((span / 2.0) * f_now, (span / 2.0) * f_now)
-        # 속도 통일: 반경 안/밖 구분 없이 speed 하나만 사용
-        speed = self.get_parameter("speed").value
         self.t += (speed / max(span, 0.1)) * (1.0 / RATE_HZ)
         f = 1.0 - 2.0 * self.t
         x = (span / 2.0) * f

@@ -26,6 +26,7 @@ struct SMParams {
   double detection_timeout_sec{1.0};
   double lock_box_tolerance{0.15};
   double fire_distance_m{5.0};
+  double fire_align_tol{0.2};   // FIRE 조건: 거리뿐 아니라 이 오차 이내로 '중앙 정렬'돼야 (가짜명중 방지)
 };
 
 class StateMachine {

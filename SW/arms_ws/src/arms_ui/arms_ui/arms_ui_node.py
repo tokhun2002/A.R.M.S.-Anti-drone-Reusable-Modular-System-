@@ -244,8 +244,17 @@ class ArmsUINode(Node):
     # Drawing
     # ------------------------------------------------------------------
 
+    def _draw_crosshair(self, frame):
+        """화면 정중앙 조준 십자선 — 자동/수동 모두 항상 표시."""
+        h, w = frame.shape[:2]
+        cx_f, cy_f = w // 2, h // 2
+        cv2.line(frame, (cx_f - 20, cy_f), (cx_f + 20, cy_f), (0, 255, 0), 1)
+        cv2.line(frame, (cx_f, cy_f - 20), (cx_f, cy_f + 20), (0, 255, 0), 1)
+        cv2.circle(frame, (cx_f, cy_f), 2, (0, 255, 0), -1)
+
     def _draw_overlay(self, frame):
         h, w = frame.shape[:2]
+        cx_f, cy_f = w // 2, h // 2   # 오차/명령 화살표 기준(중앙). 십자선 분리 후에도 필요.
         state = self._latest_state.state or "IDLE"
         color = STATE_COLORS.get(state, (255, 255, 255))
 
@@ -262,10 +271,7 @@ class ArmsUINode(Node):
                 cv2.putText(frame, f"{det.confidence:.2f}", (x1, y1 - 6),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
-        # --- Crosshair at frame center ---
-        cx_f, cy_f = w // 2, h // 2
-        cv2.line(frame, (cx_f - 20, cy_f), (cx_f + 20, cy_f), (0, 255, 0), 1)
-        cv2.line(frame, (cx_f, cy_f - 20), (cx_f, cy_f + 20), (0, 255, 0), 1)
+        # --- Crosshair 는 _draw_crosshair 로 분리(항상 표시) → 여기선 생략 ---
 
         # --- State label ---
         cv2.putText(frame, state, (10, 30),

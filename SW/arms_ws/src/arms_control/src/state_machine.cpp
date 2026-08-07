@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 
 namespace arms_control {
 
@@ -96,8 +97,14 @@ void StateMachine::on_launch_button()
 
 void StateMachine::on_distance(double distance_m)
 {
-  if (state_ == State::TRACK &&
-      distance_m < params_.fire_distance_m) {
+  if (state_ != State::TRACK) return;
+  // 무효(-1/0) 라이다 값으로는 절대 발사 안 함. (-1 < fire_distance 라 예전엔 즉시 가짜명중)
+  if (!(distance_m > 0.0)) return;
+
+  // FIRE 는 "요격거리 이내" + "공이 화면 중앙 근처(정렬)" 둘 다 만족해야 발생.
+  double emag = std::hypot(error_x_, error_y_);
+  if (distance_m < params_.fire_distance_m &&
+      emag < params_.fire_align_tol) {
     transition(State::FIRE);
   }
 }
