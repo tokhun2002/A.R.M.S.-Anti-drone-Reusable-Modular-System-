@@ -95,12 +95,13 @@ def generate_launch_description():
                 {"crsf.port": LaunchConfiguration("crsf_port")},  # 필요시 포트만 오버라이드
             ],
         ),
-        # OpenCV UI
+        # OpenCV UI (실기체: 전체화면)
         Node(
             package="arms_ui",
             executable="arms_ui_node",
             name="arms_ui_node",
             output="screen",
+            parameters=[{"ui.fullscreen": True}],
         ),
     ]
 

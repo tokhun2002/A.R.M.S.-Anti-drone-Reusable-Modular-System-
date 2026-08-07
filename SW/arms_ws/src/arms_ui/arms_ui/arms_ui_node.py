@@ -73,7 +73,10 @@ class ArmsUINode(Node):
         self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
         self.create_subscription(Vector3, "/arms/control_debug", self._cb_debug, 10)
         self.create_subscription(Image, "/arms/roi_image", self._cb_roi, best_effort_qos)
-        self.create_subscription(Joy, "/arms/command", self._cb_command, 10)
+        # 실기체 command 퍼블리셔(arms_command_hw_node)가 BEST_EFFORT 라서 구독도 맞춰야
+        # 메시지를 받는다. (RELIABLE 구독이면 BEST_EFFORT 발행을 하나도 못 받아 모드 전환
+        # 오버레이/효과음이 동작하지 않음.)
+        self.create_subscription(Joy, "/arms/command", self._cb_command, best_effort_qos)
 
         self._latest_detections = DetectionArray()
         self._latest_state = MissionState()
@@ -82,8 +85,24 @@ class ArmsUINode(Node):
         self._manual_mode = False   # buttons[2]==1 → 수동 모드(오버레이 끔)
         self._prev_manual = None    # 이전 mode 값 (None=아직 미수신, 첫 수신은 효과음 없음)
 
+        # 실기체 런치에서만 fullscreen:=true → 전체화면. SITL 등은 기본값 False(창 모드).
+        self.declare_parameter("ui.fullscreen", False)
+        self._fullscreen = self.get_parameter("ui.fullscreen").value
+        self._keep_aspect = True    # True=레터박스(비율 유지, 잘림 없음), False=강제 스트레치
+
         cv2.namedWindow("A.R.M.S.", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("A.R.M.S.", 960, 720)
+        if self._fullscreen:
+            # 작업표시줄·타이틀바·상단바까지 가리는 진짜 전체화면
+            cv2.setWindowProperty(
+                "A.R.M.S.", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN
+            )
+            self._screen_w, self._screen_h = self._detect_screen_size()
+            self.get_logger().info(
+                f"fullscreen mode, screen size = {self._screen_w}x{self._screen_h}")
+        else:
+            cv2.resizeWindow("A.R.M.S.", 960, 720)
+            self._screen_w, self._screen_h = 0, 0
+            self.get_logger().info("windowed mode (960x720)")
 
         self.get_logger().info("arms_ui_node started.")
 
@@ -150,9 +169,55 @@ class ArmsUINode(Node):
         # 수동 모드에서는 원본 영상만 표시하고 오버레이는 생략한다.
         if not self._manual_mode:
             self._draw_overlay(frame)
-            self._draw_roi_pip(frame)
+            # IDLE 에선 표적 확대 뷰(ROI PiP)도 표시하지 않는다.
+            if (self._latest_state.state or "IDLE") != "IDLE":
+                self._draw_roi_pip(frame)
+        if self._fullscreen:
+            frame = self._fit_to_window(frame)
         cv2.imshow("A.R.M.S.", frame)
         cv2.waitKey(1)
+
+    def _detect_screen_size(self):
+        """실제 모니터 해상도 감지. xrandr 우선, 실패 시 창 rect/기본값."""
+        try:
+            out = subprocess.check_output(
+                ["xrandr"], stderr=subprocess.DEVNULL).decode()
+            for line in out.splitlines():
+                if "*" in line:                    # 현재 활성 모드 (예: "1920x1080 60.00*+")
+                    res = line.split()[0]
+                    w, h = res.split("x")
+                    return int(w), int(h)
+        except Exception:
+            pass
+        try:
+            _, _, win_w, win_h = cv2.getWindowImageRect("A.R.M.S.")
+            if win_w > 0 and win_h > 0:
+                return win_w, win_h
+        except Exception:
+            pass
+        return 1920, 1080                          # 최종 fallback
+
+    def _fit_to_window(self, frame):
+        """모니터 해상도에 맞춰 프레임을 확대해 화면을 채운다.
+
+        _keep_aspect=True  → 비율 유지(레터박스, 좌우 검은 여백)
+        _keep_aspect=False → 강제 스트레치(여백 없이 꽉 채움, 비율 깨질 수 있음)
+        """
+        win_w, win_h = self._screen_w, self._screen_h
+        if win_w <= 0 or win_h <= 0:
+            return frame
+        if not self._keep_aspect:
+            return cv2.resize(frame, (win_w, win_h),
+                              interpolation=cv2.INTER_LINEAR)
+        h, w = frame.shape[:2]
+        scale = min(win_w / w, win_h / h)
+        new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
+        resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        canvas = np.zeros((win_h, win_w, 3), dtype=np.uint8)
+        x0 = (win_w - new_w) // 2
+        y0 = (win_h - new_h) // 2
+        canvas[y0:y0 + new_h, x0:x0 + new_w] = resized
+        return canvas
 
     def _draw_roi_pip(self, frame):
         """추적 ROI 확대 뷰를 우측 하단 PiP 로 합성."""
@@ -184,17 +249,18 @@ class ArmsUINode(Node):
         state = self._latest_state.state or "IDLE"
         color = STATE_COLORS.get(state, (255, 255, 255))
 
-        # --- Bounding boxes ---
-        for det in self._latest_detections.detections:
-            cx = int(det.x_center * w)
-            cy = int(det.y_center * h)
-            bw = int(det.width * w)
-            bh = int(det.height * h)
-            x1, y1 = cx - bw // 2, cy - bh // 2
-            x2, y2 = cx + bw // 2, cy + bh // 2
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(frame, f"{det.confidence:.2f}", (x1, y1 - 6),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+        # --- Bounding boxes (IDLE 에선 표적 표시 안 함) ---
+        if state != "IDLE":
+            for det in self._latest_detections.detections:
+                cx = int(det.x_center * w)
+                cy = int(det.y_center * h)
+                bw = int(det.width * w)
+                bh = int(det.height * h)
+                x1, y1 = cx - bw // 2, cy - bh // 2
+                x2, y2 = cx + bw // 2, cy + bh // 2
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, f"{det.confidence:.2f}", (x1, y1 - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
         # --- Crosshair at frame center ---
         cx_f, cy_f = w // 2, h // 2
