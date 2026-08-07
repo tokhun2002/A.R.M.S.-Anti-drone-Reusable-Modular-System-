@@ -336,11 +336,11 @@ class ArmsControlNode : public rclcpp::Node {
       }
 
       if (frame.type == 0x14 && frame.payload.size() >= 10) {
-        const int up_rssi_1 = -static_cast<int>(frame.payload[0]);         // 상향 안테나 1 RSSI를 dBm으로 바꾼다.
-        const int up_rssi_2 = -static_cast<int>(frame.payload[1]);         // 상향 안테나 2 RSSI를 dBm으로 바꾼다.
+        const int up_rssi_1 = static_cast<int>(static_cast<int8_t>(frame.payload[0]));   // 상향 안테나 1 RSSI를 int8 부호로 복원해 dBm으로 읽는다.
+        const int up_rssi_2 = static_cast<int>(static_cast<int8_t>(frame.payload[1]));   // 상향 안테나 2 RSSI를 int8 부호로 복원해 dBm으로 읽는다.
         const int up_lq = static_cast<int>(frame.payload[2]);              // 상향 링크 품질을 백분율로 읽는다.
         const int up_snr = static_cast<int>(static_cast<int8_t>(frame.payload[3]));   // 상향 SNR의 부호를 복원한다.
-        const int down_rssi = -static_cast<int>(frame.payload[7]);         // 하향 RSSI를 dBm으로 바꾼다.
+        const int down_rssi = static_cast<int>(static_cast<int8_t>(frame.payload[7]));   // 하향 RSSI를 int8 부호로 복원해 dBm으로 읽는다.
         const int down_lq = static_cast<int>(frame.payload[8]);            // 하향 링크 품질을 백분율로 읽는다.
         const int down_snr = static_cast<int>(static_cast<int8_t>(frame.payload[9]));   // 하향 SNR의 부호를 복원한다.
 
@@ -353,7 +353,7 @@ class ArmsControlNode : public rclcpp::Node {
       } else if ((frame.type == 0x1C || frame.type == 0x1D) &&
                  frame.payload.size() >= 5)
       {
-        const int rssi = -static_cast<int>(frame.payload[0]);             // 단일 링크 RSSI를 dBm으로 바꾼다.
+        const int rssi = static_cast<int>(static_cast<int8_t>(frame.payload[0]));   // 단일 링크 RSSI를 int8 부호로 복원해 dBm으로 읽는다.
         const int rssi_percent = static_cast<int>(frame.payload[1]);       // RSSI 백분율을 읽는다.
         const int link_quality = static_cast<int>(frame.payload[2]);       // 링크 품질을 백분율로 읽는다.
         const int snr = static_cast<int>(static_cast<int8_t>(frame.payload[3]));   // SNR의 부호를 복원한다.
@@ -363,6 +363,21 @@ class ArmsControlNode : public rclcpp::Node {
           "ELRS %s link: rssi=%ddBm rssi_pct=%d%% lq=%d%% snr=%ddB",
           frame.type == 0x1C ? "RX" : "TX",
           rssi, rssi_percent, link_quality, snr);                 // 분리형 링크 상태를 1초마다 보여준다.
+      } else if (frame.type == 0x08 && frame.payload.size() >= 8) {
+        const int voltage_dv =
+          (static_cast<int>(frame.payload[0]) << 8) | frame.payload[1];   // 전압을 0.1V 단위(big-endian)로 읽는다.
+        const int current_da =
+          (static_cast<int>(frame.payload[2]) << 8) | frame.payload[3];   // 전류를 0.1A 단위(big-endian)로 읽는다.
+        const int capacity_mah =
+          (static_cast<int>(frame.payload[4]) << 16) |
+          (static_cast<int>(frame.payload[5]) << 8) | frame.payload[6];    // 사용 용량을 mAh(3바이트 big-endian)로 읽는다.
+        const int remaining_pct = static_cast<int>(frame.payload[7]);      // 남은 배터리 백분율을 읽는다.
+
+        RCLCPP_INFO_THROTTLE(
+          get_logger(), *get_clock(), 1000,
+          "CRSF battery: %.1fV %.1fA used=%dmAh remain=%d%%",
+          voltage_dv / 10.0, current_da / 10.0,
+          capacity_mah, remaining_pct);                            // 배터리 텔레메트리를 1초마다 보여준다.
       }
     }
   }
