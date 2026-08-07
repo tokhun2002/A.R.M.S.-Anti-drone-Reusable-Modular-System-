@@ -205,7 +205,16 @@ private:
   void pollSerial()
   {
     readAvailableBytes();
-    processCompleteLines();
+    processLatestLine();   // 밀린 백로그는 버리고 최신 패킷만 처리 (제어 지연·이력 재생 방지)
+    // 미완성 꼬리가 비정상적으로 커지면(프레이밍 붕괴) 버린다.
+    constexpr std::size_t kMaximumRxBuffer = 4096;
+    if (rx_buffer_.size() > kMaximumRxBuffer) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "USB serial buffer overflow (%zu bytes, no newline) — clearing.",
+        rx_buffer_.size());
+      rx_buffer_.clear();
+    }
     publishFailsafeWhenTimedOut();
   }
 
@@ -239,57 +248,56 @@ private:
         serial_device_.c_str(), std::strerror(errno));
       break;
     }
-
-    // Prevent unlimited growth if the sender is connected with a wrong baud rate
-    // or never sends a newline.
-    constexpr std::size_t kMaximumRxBuffer = 4096;
-    if (rx_buffer_.size() > kMaximumRxBuffer) {
-      RCLCPP_WARN(
-        get_logger(),
-        "USB serial receive buffer exceeded %zu bytes. Clearing corrupted data.",
-        kMaximumRxBuffer);
-      rx_buffer_.clear();
-    }
+    // 버퍼 상한 처리는 processLatestLine 이후(최신 패킷 추출 후) pollSerial 에서 한다.
   }
 
-  void processCompleteLines()
+  // 밀린 백로그(오래된 패킷)는 버리고 가장 최신 완성 패킷 1개만 처리한다.
+  //   조종 입력은 "현재 스위치/스틱 위치"만 의미가 있으므로 과거 값을 재생할 필요가 없다.
+  //   → 제어 지연 최소화 + 시작 시 누적된 과거 이력 재생(효과음 폭주)·오작동 방지.
+  void processLatestLine()
   {
-    while (true) {
-      const std::size_t newline_pos = rx_buffer_.find('\n');
-      if (newline_pos == std::string::npos) {
-        return;
-      }
-
-      std::string line = rx_buffer_.substr(0, newline_pos);
-      rx_buffer_.erase(0, newline_pos + 1);
-
-      if (!line.empty() && line.back() == '\r') {
-        line.pop_back();
-      }
-
-      if (line.empty()) {
-        continue;
-      }
-
-      if (line.size() > static_cast<std::size_t>(max_line_length_)) {
-        RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 1000,
-          "Discarding overlong USB serial line (%zu bytes)", line.size());
-        continue;
-      }
-
-      ControllerPacket packet;
-      std::string parse_error;
-      if (!parsePacket(line, packet, parse_error)) {
-        RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 1000,
-          "Discarding invalid USB serial packet: %s; line='%s'",
-          parse_error.c_str(), line.c_str());
-        continue;
-      }
-
-      handleValidPacket(packet);
+    const std::size_t last_nl = rx_buffer_.rfind('\n');
+    if (last_nl == std::string::npos) {
+      return;  // 아직 완성된 줄이 없음 → 다음 폴링까지 대기
     }
+
+    // 마지막 '\n' 으로 끝나는(=가장 최신) 줄의 시작 위치를 찾는다.
+    std::size_t line_start = 0;
+    if (last_nl > 0) {
+      const std::size_t prev_nl = rx_buffer_.rfind('\n', last_nl - 1);
+      if (prev_nl != std::string::npos) {
+        line_start = prev_nl + 1;
+      }
+    }
+
+    std::string line = rx_buffer_.substr(line_start, last_nl - line_start);
+    // 최신 줄 + 그 앞의 모든 백로그를 버리고, 미완성 꼬리만 남긴다.
+    rx_buffer_.erase(0, last_nl + 1);
+
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    if (line.empty()) {
+      return;
+    }
+    if (line.size() > static_cast<std::size_t>(max_line_length_)) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "Discarding overlong USB serial line (%zu bytes)", line.size());
+      return;
+    }
+
+    ControllerPacket packet;
+    std::string parse_error;
+    if (!parsePacket(line, packet, parse_error)) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "Discarding invalid USB serial packet: %s; line='%s'",
+        parse_error.c_str(), line.c_str());
+      return;
+    }
+
+    handleValidPacket(packet);
   }
 
   static std::vector<std::string_view> splitCsv(const std::string & line)
@@ -389,10 +397,12 @@ private:
     if (have_last_seq_) {
       const uint32_t expected = last_seq_ + 1U;
       if (packet.seq != expected) {
-        RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 1000,
-          "USB serial sequence jump: expected=%u received=%u",
-          expected, packet.seq);
+        // 최신값만 쓰므로 오래된 패킷 건너뜀은 정상이다. 얼마나 밀리는지 진단용으로만 출력.
+        const uint32_t skipped = (packet.seq >= expected) ? (packet.seq - expected) : 0U;
+        RCLCPP_INFO_THROTTLE(
+          get_logger(), *get_clock(), 3000,
+          "USB serial: 최신 패킷만 사용 (오래된 패킷 ~%u개 건너뜀/초당 누적)",
+          skipped);
       }
     }
 
