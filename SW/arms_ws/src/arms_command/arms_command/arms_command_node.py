@@ -139,6 +139,13 @@ class PanelGUI:
                   bg="#d0021b", fg="white", activebackground="#ff1744",
                   command=self._on_launch).pack(pady=(5, 4), fill="x", padx=40)
 
+        # ── 유도 방식 전환 (추미 ↔ 비례항법 PN) ──
+        self._guidance_mode = 1   # 0=추미(Pursuit), 1=PN. 기본 PN(3.6m/s 검증값)
+        self.guid_btn = tk.Button(top, text="유도: PN(비례항법)", font=("Arial", 11, "bold"),
+                                  bg="#6a1b9a", fg="white", activebackground="#8e24aa",
+                                  command=self.toggle_guidance)
+        self.guid_btn.pack(pady=(0, 4), fill="x", padx=40)
+
         # ── 실기체 3-스위치 (조종기 토글 스위치와 동일) ──
         #   기본: 자동 + DISARM + KILL off.  날리려면 ARM → (수동은 스로틀↑).
         tk.Label(top, text="─ 스위치 (실기체 3-토글) ─", fg="#888888", bg="#1e1e1e",
@@ -229,11 +236,11 @@ class PanelGUI:
             return ep, ei, ed
 
         self.roll_kp, self.roll_ki, self.roll_kd = make_pid_group(
-            left, "Roll PID", [160, 0.0, 2.2],
+            left, "Roll PID", [130, 0.0, 1.0],
             ["control.roll_pid.kp", "control.roll_pid.ki", "control.roll_pid.kd"])
 
         self.pitch_kp, self.pitch_ki, self.pitch_kd = make_pid_group(
-            left, "Pitch PID", [160, 0.0, 2.2],
+            left, "Pitch PID", [130, 0.0, 1.0],
             ["control.pitch_pid.kp", "control.pitch_pid.ki", "control.pitch_pid.kd"])
 
         # 추력 슬라이더는 아날로그 느낌이 있어서 유지
@@ -243,7 +250,7 @@ class PanelGUI:
         thr_row.pack(anchor="w")
         self.thr_entry = tk.Entry(thr_row, width=7, bg="#2e2e2e", fg="white",
                                   insertbackground="white", relief="flat")
-        self.thr_entry.insert(0, "0.77")
+        self.thr_entry.insert(0, "0.87")
         self.thr_entry.grid(row=0, column=0, padx=(4, 6))
         tk.Button(thr_row, text="적용", bg="#455a64", fg="white",
                   activebackground="#607d8b", relief="flat",
@@ -292,7 +299,7 @@ class PanelGUI:
         self.lead = tk.Scale(right, from_=0.0, to=1.5, resolution=0.05, orient="horizontal",
                              length=150, bg="#1e1e1e", fg="white", label="예측 조준 lead",
                              highlightthickness=0, troughcolor="#444")
-        self.lead.set(0.20)
+        self.lead.set(0.0)
         self.lead.pack(pady=(2, 0))
         self.lead.bind("<ButtonRelease-1>",
                        lambda e: ros_param_set("control.lead_gain", float(self.lead.get())))
@@ -303,14 +310,14 @@ class PanelGUI:
         self.att_p = tk.Scale(left, from_=1, to=15, resolution=0.5, orient="horizontal",
                               length=150, bg="#1e1e1e", fg="white", label="자세게인 att_p (떨리면↓)",
                               highlightthickness=0, troughcolor="#444")
-        self.att_p.set(6.5)
+        self.att_p.set(3.5)
         self.att_p.pack(anchor="w", pady=(2, 0))
         self.att_p.bind("<ButtonRelease-1>",
                         lambda e: ros_param_set("control.att_p", float(self.att_p.get())))
         self.max_tilt = tk.Scale(left, from_=10, to=60, resolution=1, orient="horizontal",
                                  length=150, bg="#1e1e1e", fg="white", label="최대 기울기 [deg]",
                                  highlightthickness=0, troughcolor="#444")
-        self.max_tilt.set(35)
+        self.max_tilt.set(55)
         self.max_tilt.pack(anchor="w", pady=(2, 0))
         self.max_tilt.bind("<ButtonRelease-1>",
                            lambda e: ros_param_set("control.max_tilt_deg", float(self.max_tilt.get())))
@@ -318,7 +325,7 @@ class PanelGUI:
         self.att_comp = tk.Scale(left, from_=0.0, to=0.03, resolution=0.001, orient="horizontal",
                                  length=150, bg="#1e1e1e", fg="white", label="자세보정 att_comp (0→↑)",
                                  highlightthickness=0, troughcolor="#444")
-        self.att_comp.set(0.014)
+        self.att_comp.set(0.012)
         self.att_comp.pack(anchor="w", pady=(2, 0))
         self.att_comp.bind("<ButtonRelease-1>",
                            lambda e: ros_param_set("control.att_comp", float(self.att_comp.get())))
@@ -331,6 +338,41 @@ class PanelGUI:
         self.att_roll_btn.grid(row=0, column=0, padx=2)
         self.att_pitch_btn = tk.Button(asgn, text="자세Pitch: -", width=11, command=self.flip_att_pitch)
         self.att_pitch_btn.grid(row=0, column=1, padx=2)
+
+        # ── 발사거리 = 네트 포획 거리 (거의 접촉 ~3m). 접촉요격이라 작게. ──
+        self.fire_dist = tk.Scale(right, from_=1, to=30, resolution=0.5, orient="horizontal",
+                                  length=150, bg="#1e1e1e", fg="white", label="발사거리 [m] (네트포획~3)",
+                                  highlightthickness=0, troughcolor="#444")
+        self.fire_dist.set(3.0)
+        self.fire_dist.pack(pady=(10, 0))
+        self.fire_dist.bind("<ButtonRelease-1>",
+                            lambda e: ros_param_set("mission.fire_distance_m", float(self.fire_dist.get())))
+        # 포획반경(HIT_RADIUS) — 빠른 공일수록 최소접근이 커지니 ↑ (심판 직격 판정)
+        self.hit_radius = tk.Scale(right, from_=1, to=10, resolution=0.5, orient="horizontal",
+                                   length=150, bg="#1e1e1e", fg="white", label="포획반경 [m] (빠를수록↑)",
+                                   highlightthickness=0, troughcolor="#444")
+        self.hit_radius.set(3.5)
+        self.hit_radius.pack(pady=(6, 0))
+        self.hit_radius.bind("<ButtonRelease-1>",
+                             lambda e: ros_param_set_node(REFEREE_NODE, "hit_radius", float(self.hit_radius.get())))
+
+        # ── PN(비례항법) 튜닝 — 유도:PN 일 때만 효과 ──
+        tk.Label(right, text="PN 비례항법 (유도:PN 일때)", fg="#aaaaaa", bg="#1e1e1e",
+                 font=("Arial", 10, "bold")).pack(pady=(12, 2))
+        self.pn_nav = tk.Scale(right, from_=0, to=150, resolution=2.5, orient="horizontal",
+                               length=150, bg="#1e1e1e", fg="white", label="PN 항법이득 (못따라가면↑)",
+                               highlightthickness=0, troughcolor="#444")
+        self.pn_nav.set(50)
+        self.pn_nav.pack(pady=(2, 0))
+        self.pn_nav.bind("<ButtonRelease-1>",
+                         lambda e: ros_param_set("control.pn_nav_gain", float(self.pn_nav.get())))
+        self.pn_center = tk.Scale(right, from_=0, to=100, resolution=5, orient="horizontal",
+                                  length=150, bg="#1e1e1e", fg="white", label="PN 중심유지 (이탈방지)",
+                                  highlightthickness=0, troughcolor="#444")
+        self.pn_center.set(15)
+        self.pn_center.pack(pady=(2, 0))
+        self.pn_center.bind("<ButtonRelease-1>",
+                            lambda e: ros_param_set("control.pn_center_gain", float(self.pn_center.get())))
 
         self._poll()
 
@@ -376,6 +418,15 @@ class PanelGUI:
         self.att_pitch_sign *= -1.0
         ros_param_set("control.att_pitch_sign", self.att_pitch_sign)
         self.att_pitch_btn.config(text=f"자세Pitch: {'+' if self.att_pitch_sign > 0 else '-'}")
+
+    # ---- 유도 방식 전환 (추미 ↔ PN) ----
+    def toggle_guidance(self):
+        self._guidance_mode = 1 if self._guidance_mode == 0 else 0
+        ros_param_set("control.guidance_mode", self._guidance_mode)
+        if self._guidance_mode == 1:
+            self.guid_btn.config(text="유도: PN(비례항법)", bg="#6a1b9a")
+        else:
+            self.guid_btn.config(text="유도: 추미(Pursuit)", bg="#37474f")
 
     # ---- 실기체 3-스위치 ----
     def toggle_mode(self):

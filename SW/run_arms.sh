@@ -75,9 +75,9 @@ if [ -f "$SHELL_PY" ]; then
   #   MC_ACRO_R_MAX / P_MAX = ACRO 모드 풀스틱 각속도[deg/s] (control.max_rate_dps 와 일치).
   #   MPC_MAN_TILT_MAX / MPC_TILTMAX_AIR = 최대 기울기[deg]. 크게 기울일수록 옆으로 빨리 감
   #     → 빠른 표적 추격용. 35°(기본)→50° 로 상향 (가속 ~70%↑). 단 너무 크면 양력 손실.
-  printf 'param set COM_DISARM_PRFLT 0\nparam set NAV_DLL_ACT 0\nparam set NAV_RCL_ACT 0\nparam set MC_ACRO_R_MAX 120\nparam set MC_ACRO_P_MAX 120\nparam set MPC_MAN_TILT_MAX 50\nparam set MPC_TILTMAX_AIR 50\n' \
+  printf 'param set COM_DISARM_PRFLT 0\nparam set NAV_DLL_ACT 0\nparam set NAV_RCL_ACT 0\nparam set MC_ACRO_R_MAX 220\nparam set MC_ACRO_P_MAX 220\nparam set MPC_MAN_TILT_MAX 65\nparam set MPC_TILTMAX_AIR 65\n' \
     | python3 "$SHELL_PY" udp:127.0.0.1:14550 >/dev/null 2>&1 &
-  echo "      페일세이프 해제 + ACRO 120°/s + 최대기울기 50° (더 빠른 추격)"
+  echo "      페일세이프 해제 + ACRO 220°/s + 최대기울기 65° (고속표적 요격 부스트)"
 fi
 
 echo ""

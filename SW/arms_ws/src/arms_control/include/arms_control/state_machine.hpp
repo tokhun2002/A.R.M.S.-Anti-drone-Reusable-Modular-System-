@@ -44,6 +44,8 @@ public:
   void disarm();
   void on_landed();
   void force_search();   // 외부 RESET: 어떤 상태든 SEARCH 로 강제 복귀
+  void set_fire_distance(double d) { params_.fire_distance_m = d; }  // 런타임 발사거리 조정
+  void on_external_hit();  // 심판의 실제충돌(직격) 통지 → FIRE 전이
 
   // ---------- accessors ----------
   State       state()               const { return state_; }

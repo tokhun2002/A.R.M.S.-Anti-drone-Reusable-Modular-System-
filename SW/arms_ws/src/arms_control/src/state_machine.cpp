@@ -109,6 +109,14 @@ void StateMachine::on_distance(double distance_m)
   }
 }
 
+void StateMachine::on_external_hit()
+{
+  // 심판이 드론-풍선 실제 충돌을 감지 → 라이다와 무관하게 명중 처리(FIRE).
+  if (state_ == State::TRACK || state_ == State::LOCK) {
+    transition(State::FIRE);
+  }
+}
+
 void StateMachine::on_fire_complete()
 {
   if (state_ == State::FIRE) {

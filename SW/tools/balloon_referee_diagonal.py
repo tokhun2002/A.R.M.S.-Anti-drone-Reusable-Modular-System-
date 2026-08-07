@@ -24,6 +24,7 @@ import subprocess
 import rclpy
 from rclpy.node import Node
 from arms_msgs.msg import MissionState
+from std_msgs.msg import Empty, Float64
 
 WORLD = "arms_sitl"
 MODEL = "red_ball"
@@ -36,10 +37,12 @@ try:
     from gz.transport13 import Node as _GzNode
     from gz.msgs10.pose_pb2 import Pose as _GzPose
     from gz.msgs10.boolean_pb2 import Boolean as _GzBool
+    from gz.msgs10.pose_v_pb2 import Pose_V as _GzPoseV
     _gz_node = _GzNode()
     _GZ_OK = True
 except Exception:
     _gz_node = None
+    _GzPoseV = None
     _GZ_OK = False
 
 # 비행 패턴: 실제 적 드론처럼 상공에서 곡선 기동하며 가로지르고, 화면 밖이면 재등장
@@ -51,6 +54,9 @@ SPEED = 1.6        # 진행 속도 [m/s] (단일 속도, 패널 슬라이더로 
 RATE_HZ = 60.0      # 위치 갱신 주기
 PAUSE_SEC = 1.5     # 한 번 지나간 뒤 재등장까지 대기 [s]
 HIDE_Z = -100.0     # 숨길 때 보내는 지하 z [m] (화면에서 안 보임)
+# 직격(kinetic) 판정: 드론-풍선 실제 3D 거리가 이 값 미만이면 진짜 충돌=명중.
+#   물리 "0m"는 모델 크기(풍선~0.5m + 드론~0.3m) 때문에 불가 → 표면이 닿는 중심거리 ≈ 1.2m.
+HIT_RADIUS = 3.5   # 직격 판정 반경[m] = 요격기 포획반경. 3.6m/s 명중 검증값(RTL 성공). 패널 슬라이더로 조정
 
 
 def set_pose(x, y, z):
@@ -90,9 +96,21 @@ class BalloonReferee(Node):
         self.declare_parameter("alt", ALT)
         # speed = 진행 속도 [m/s] (단일, 패널 슬라이더로 실시간 조절)
         self.declare_parameter("speed", SPEED)
+        # hit_radius = 직격/포획 판정 반경[m] (패널 슬라이더). 빠른 공일수록 최소접근이 커지니 ↑
+        self.declare_parameter("hit_radius", HIT_RADIUS)
         self.hit = False
         self.t = 0.0                    # 대각선 진행도 [0→1]
         self.pause_until = 0.0          # 재등장 대기 종료 시각
+        self._ball_pos = (0.0, 0.0, HIDE_Z)   # 풍선 현재 위치(직격 판정용)
+        self._drone_pos = None                # 드론 실제 위치(gz 구독)
+        self._drone_seen = False
+        # 드론 실제 위치 구독 → 진짜 충돌(직격) 판정. (gz dynamic pose)
+        if _GZ_OK and _GzPoseV is not None:
+            try:
+                _gz_node.subscribe(_GzPoseV, f"/world/{WORLD}/dynamic_pose/info",
+                                   self._on_poses)
+            except Exception as e:
+                self.get_logger().warn(f"드론 위치 구독 실패(직격판정 비활성): {e}")
         # _prev_enabled=True 로 시작 → 첫 tick(비활성)에서 공을 1회 숨겨 초기 스폰 위치를 치움.
         self._prev_enabled = True
         # 한 번이라도 발사됐는지. 발사 전(초기 대기)엔 숨기고, 발사 후 정지는 제자리 멈춤.
@@ -100,6 +118,15 @@ class BalloonReferee(Node):
         self._new_pass()
         self.create_subscription(MissionState, "/arms/mission_state",
                                  self.cb_state, 10)
+        # 실제 충돌(직격) 발생을 제어노드에 알림 → 드론 RTL 트리거
+        self._hit_pub = self.create_publisher(Empty, "/arms/hit", 10)
+        # 드론-풍선 실제 3D 거리(ground truth) → 제어노드 FIRE 판정용 (라이다 대체)
+        self._range_pub = self.create_publisher(Float64, "/arms/target_range", 10)
+        self._last_dist_log = 0.0     # 접근거리 로그 스로틀
+        self._min_dist = 999.0        # 이번 패스 최소 접근거리
+        self._last_move_t = 0.0       # 직전 이동 시각(실제 dt 계산용)
+        self._knock_dir = (0.0, 0.0, 1.0)  # 명중 시 튕겨나갈 방향
+        self._knock_until = 0.0            # 튕김 애니메이션 종료 시각
         self.timer = self.create_timer(1.0 / RATE_HZ, self.tick)
         self.get_logger().info(
             f"balloon_referee ready. 기본 대기(숨김) 상태. [공 발사] 누르면 "
@@ -109,15 +136,44 @@ class BalloonReferee(Node):
         """대각선: 진행도 t 리셋 (오른쪽아래->왼쪽위)."""
         self.t = 0.0
 
+    def _on_poses(self, msg):
+        """gz dynamic pose 구독 콜백 → 드론 실제 위치 추적 (직격 판정용)."""
+        if not self._drone_seen and not getattr(self, "_names_logged", False):
+            self._names_logged = True
+            self.get_logger().info(
+                f"gz dynamic pose 모델들: {[p.name for p in msg.pose]}")
+        for p in msg.pose:
+            n = p.name
+            if ("drone" in n or "x500" in n) and n != MODEL:
+                self._drone_pos = (p.position.x, p.position.y, p.position.z)
+                if not self._drone_seen:
+                    self._drone_seen = True
+                    self.get_logger().info(f"직격 판정 활성화 (드론='{n}' 위치 추적 중)")
+                return
+
+    def _declare_hit(self, reason):
+        """명중(직격) 처리. self.hit 로 중복 방지."""
+        if self.hit:
+            return
+        self.hit = True
+        self._hit_pub.publish(Empty())    # 제어노드에 충돌 알림 → RTL
+        # 맞은 방향(드론→풍선)으로 튕겨 날아가게. (실제 충돌이 만든 반응)
+        if self._drone_pos is not None:
+            dx = self._ball_pos[0] - self._drone_pos[0]
+            dy = self._ball_pos[1] - self._drone_pos[1]
+            dz = self._ball_pos[2] - self._drone_pos[2]
+            n = math.sqrt(dx * dx + dy * dy + dz * dz) or 1.0
+            self._knock_dir = (dx / n, dy / n, max(dz / n, 0.0) + 0.6)  # 맞은 방향 + 위로
+        else:
+            self._knock_dir = (0.5, 0.5, 0.7)
+        now = self.get_clock().now().nanoseconds * 1e-9
+        self._knock_until = now + 1.5     # 1.5초간 날아감
+        self.get_logger().info(f"🎯 {reason}! 풍선이 맞아 튕겨 날아감.")
+
     def cb_state(self, msg: MissionState):
-        if msg.state == "FIRE" and not self.hit:
-            self.hit = True
-            set_pose(0.0, 0.0, HIDE_Z)   # 풍선 제거(명중 연출)
-            self.get_logger().info("🎯 명중! 잠시 후 재등장.")
-            now = self.get_clock().now().nanoseconds * 1e-9
-            self.pause_until = now + 3.0      # 명중 후 3초 뒤 재등장
-            self._rearm_after = now + 1.0
-            self._new_pass()
+        # FIRE(제어노드 라이다 6m + 정렬 판정) = 명중. 공은 그 자리에 정지(안 사라짐).
+        if msg.state == "FIRE":
+            self._declare_hit("명중")
 
     def tick(self):
         enabled = self.get_parameter("enabled").value
@@ -143,12 +199,20 @@ class BalloonReferee(Node):
             self.get_logger().info(f"▶ 풍선 재개 (진행도 t={self.t:.2f})")
         self._prev_enabled = True
 
-        # 명중 후 일정 시간 지나면 다시 추적 가능하게
+        # 명중(직격) 후: 맞은 방향으로 튕겨 날아감(1.5초) → 그 뒤 화면에서 숨김.
+        #   [정지]→[비행 시작] 누르면 위쪽 상승엣지에서 hit=False 로 풀려 재개.
         if self.hit:
-            if now >= getattr(self, "_rearm_after", 0.0):
-                self.hit = False
+            if now < self._knock_until:
+                kd = self._knock_dir
+                step = 22.0 * (1.0 / RATE_HZ)   # 튕김 속도 22 m/s
+                nx = self._ball_pos[0] + kd[0] * step
+                ny = self._ball_pos[1] + kd[1] * step
+                nz = self._ball_pos[2] + kd[2] * step
+                set_pose(nx, ny, nz)
+                self._ball_pos = (nx, ny, nz)
             else:
-                return
+                set_pose(0.0, 0.0, HIDE_Z)      # 날아간 뒤 숨김
+            return
 
         # 재등장 대기 중이면 풍선 숨김
         if now < self.pause_until:
@@ -161,14 +225,41 @@ class BalloonReferee(Node):
         #   끝   x=-SPAN/2(화면 위),   y=+SPAN/2(화면 왼쪽)   = 화면 왼쪽위 먼 곳
         #   중간(t=0.5)에 (0,0) 카메라 중심을 통과 → 시야 관통.
         speed = self.get_parameter("speed").value   # 단일 속도 (패널 슬라이더)
-        # 상공에서 대각선으로 시야 관통
+        # ★ 실제 경과시간(dt)으로 진행 → 타이머 지터/렉에도 '일정한' 속도 유지.
+        #   (기존 1/RATE_HZ 고정은 틱이 늦게 오면 그만큼 느려/빨라 보였음 = 렉처럼 들쭉날쭉)
+        dt = now - self._last_move_t
+        self._last_move_t = now
+        dt = max(0.0, min(dt, 3.0 / RATE_HZ))   # 정지→재개 등 큰 점프 방지
         span = SPAN
-        self.t += (speed / max(span, 0.1)) * (1.0 / RATE_HZ)
+        self.t += (speed / max(span, 0.1)) * dt
         f = 1.0 - 2.0 * self.t
         x = (span / 2.0) * f
         y = -(span / 2.0) * f
         z = alt
         set_pose(x, y, z)
+        self._ball_pos = (x, y, z)
+
+        # ── 직격(kinetic) 판정: 드론이 풍선에 실제로 닿으면(중심거리<HIT_RADIUS) 명중 ──
+        if self._drone_pos is not None and not self.hit:
+            dx = x - self._drone_pos[0]
+            dy = y - self._drone_pos[1]
+            dz = z - self._drone_pos[2]
+            dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+            self._min_dist = min(self._min_dist, dist)
+            self._range_pub.publish(Float64(data=dist))   # 실제 거리 → 제어노드 FIRE 판정
+            hit_radius = self.get_parameter("hit_radius").value
+            # 접근거리 진단 로그 (8m 이내, 0.4s 스로틀) — 진짜 몇 m까지 가는지 확인용
+            if dist < 8.0 and (now - self._last_dist_log) > 0.4:
+                self._last_dist_log = now
+                self.get_logger().info(
+                    f"직격 접근거리 {dist:.2f}m (최소 {self._min_dist:.2f}m)")
+            if dist < hit_radius:
+                self._declare_hit(f"직격 명중 (거리 {dist:.2f}m)")
+                return
+        elif self._drone_pos is None and (now - self._last_dist_log) > 2.0:
+            self._last_dist_log = now
+            self.get_logger().warn("드론 위치 미수신 — 직격판정 불가 (gz 구독 확인 필요)")
+
         if self.t >= 1.0:
             set_pose(0.0, 0.0, HIDE_Z)       # 반대편 먼 곳 통과 후 숨김
             self.pause_until = now + PAUSE_SEC
