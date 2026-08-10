@@ -49,7 +49,12 @@ echo "[3/5] 드론 모델 심볼릭 링크 (레포 → PX4 모델 폴더)"
 #   PX4 가 'gz_arms_drone' 스폰 시 모델을 PX4 트리에서 찾으므로,
 #   레포의 모델 폴더를 PX4 모델 경로에 링크해 둔다. (ln -sfn = 있으면 갱신)
 mkdir -p "$PX4_MODELS_DIR"
-for m in arms_drone x500 x500_base; do
+# arms_drone 는 x500 구조를 인라인하고 자체 메시를 쓰므로 x500/x500_base 불필요.
+# 이전 셋업에서 걸어둔 stale 링크가 있으면 정리.
+for m in x500 x500_base; do
+  [ -L "$PX4_MODELS_DIR/$m" ] && rm -f "$PX4_MODELS_DIR/$m" && echo "      정리: stale 링크 $m 제거"
+done
+for m in arms_drone; do
   if [ -d "$SW_DIR/simulation/models/$m" ]; then
     ln -sfn "$SW_DIR/simulation/models/$m" "$PX4_MODELS_DIR/$m"
     echo "      링크: $PX4_MODELS_DIR/$m -> 레포/$m"

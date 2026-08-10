@@ -144,7 +144,7 @@ class BalloonReferee(Node):
                 f"gz dynamic pose 모델들: {[p.name for p in msg.pose]}")
         for p in msg.pose:
             n = p.name
-            if ("drone" in n or "x500" in n) and n != MODEL:
+            if "drone" in n and n != MODEL:
                 self._drone_pos = (p.position.x, p.position.y, p.position.z)
                 if not self._drone_seen:
                     self._drone_seen = True
