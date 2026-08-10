@@ -2,7 +2,6 @@
 arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
 이거 하나로 다음을 전부 띄운다 (PX4 SITL 제외, 그건 무거워서 따로):
   - gz 카메라 브리지        (/arms/image_raw)
-  - gz ray 센서 브리지      (/arms/scan_raw)
   - arms_control_node       (상태머신 + PID + CRSF 출력)
   - arms_sitl_bridge_node   (CRSF→MAVLink RC override → PX4 Stabilized)
   - arms_ui_node            (OpenCV 영상 오버레이)
@@ -38,13 +37,6 @@ def generate_launch_description():
             arguments=["/arms_drone/upward_camera/image@sensor_msgs/msg/Image[gz.msgs.Image"],
             remappings=[("/arms_drone/upward_camera/image", "/arms/image_raw")],
         ),
-        # ray 센서 브리지 — 상방 ray → /arms/scan_raw
-        Node(
-            package="ros_gz_bridge", executable="parameter_bridge",
-            name="gz_scan_up", output="screen",
-            arguments=["/arms_drone/upward_ray/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan"],
-            remappings=[("/arms_drone/upward_ray/scan", "/arms/scan_raw")],
-        ),
         # 융합 검출 노드
         Node(
             package="arms_detection", executable="arms_detection_node",
@@ -79,8 +71,7 @@ def generate_launch_description():
     ]
 
     if tools and tools.is_dir():
-        # 풍선 심판 노드만 실행. 컨트롤 패널은 arms_command_node(위에서 실행)가 담당하므로
-        # tools/arms_panel.py(중복 패널)는 띄우지 않음.
+        # 풍선 심판 노드만 실행. 컨트롤 패널은 arms_command_node(위에서 실행)가 담당한다.
         actions += [
             ExecuteProcess(cmd=["python3", str(tools / "balloon_referee_diagonal.py")],
                            output="screen"),

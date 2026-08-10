@@ -109,7 +109,7 @@ ros2 param set /balloon_referee alt 44.0
 - MAVLink 포트 설정 (udp://:14540)
 - PX4 SITL + Gazebo Harmonic (LIBGL_ALWAYS_SOFTWARE=1)
 - 카메라 브리지 (ros_gz_harmonic_ws 소싱)
-- YOLO 풍선 모델(best.pt, 37MB) Git LFS로 관리
+- YOLO 풍선 모델(best.pt/best.engine) 리포에 직접 커밋 (LFS 미사용)
 
 ### Phase 2 — 제어 발산 디버깅
 

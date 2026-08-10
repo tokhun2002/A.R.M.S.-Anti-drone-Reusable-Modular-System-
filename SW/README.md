@@ -4,9 +4,17 @@
 
 ## 빠른 시작
 
-**전제**: Ubuntu 22.04 + ROS2 Humble + Gazebo Harmonic + MAVSDK 설치됨,
-PX4-Autopilot 이 `~/PX4-Autopilot` 에 clone 돼 있어야 함
-(`git clone https://github.com/PX4/PX4-Autopilot.git --recursive ~/PX4-Autopilot`).
+### 환경
+
+| 항목       | 내용                                      |
+| ---------- | ----------------------------------------- |
+| OS         | Ubuntu 22.04                              |
+| ROS        | ROS2 Humble                               |
+| 시뮬레이터 | Gazebo Harmonic                           |
+| SDK        | MAVSDK 설치됨                             |
+| PX4        | `~/PX4-Autopilot` 에 clone 되어 있어야 함 |
+
+### 설치
 
 ```bash
 # 1) 최초 한 번 — 모델 링크 + airframe 등록 + PX4 빌드 + ROS 빌드
@@ -50,8 +58,7 @@ IDLE → (auto-arm) → SEARCH(지상 대기) → 풍선 인식 → LOCK
 | 문서                                | 설명                                                                                                |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------- |
 | [DESIGN.md](docs/DESIGN.md)         | 소프트웨어 아키텍처 설계 문서. 노드 구조, 상태 머신, PID 제어, MAVLink 인터페이스 등 전체 설계 기술 |
-| [SITL_SETUP.md](docs/SITL_SETUP.md) | PX4 + Gazebo Harmonic 기반 SITL 환경 구성 및 실행 가이드                                            |
-| [RUN.md](docs/RUN.md)               | 실기체 실행 가이드                                                                                  |
+| [SETUP.md](docs/SETUP.md)           | 설치 및 실행 매뉴얼 (실기체 + SITL 환경 구성/실행 통합)                                             |
 | [HOW_TO_GIT.md](docs/HOW_TO_GIT.md) | Git/GitHub 팀 사용 가이드. 기본 개념, 자주 쓰는 명령어, 작업 시나리오                               |
 | [TODO.md](docs/TODO.md)             | 개발 진행 현황 및 테스트 체크리스트                                                                 |
 
@@ -69,7 +76,7 @@ SW/
 │       ├── arms_ui/            # 오퍼레이터 UI
 │       └── arms_msgs/          # 커스텀 메시지
 ├── simulation/         # Gazebo 월드, 모델(arms_drone/x500/x500_base), airframes(4021)
-├── tools/              # arms_panel / balloon_referee / fusion_detector (런치가 자동 실행)
+├── tools/              # balloon_referee_diagonal(런치 자동 실행) / log_detections / kf_analyze
 ├── setup_sim.sh        # 최초 셋업 (한 번)
 ├── run_arms.sh         # 실행 (매번)
 ├── YOLO_balloon/       # YOLOv11 학습

@@ -134,10 +134,9 @@ graph TD
 | `arms_detection_node`      | `/arms/image_raw`                                                                        | `/arms/detections`<br/>`/arms/roi_image`<br/>`/arms/debug_image`<br/>`/arms/debug_absdiff` |
 | `arms_command_node`        | `/arms/mission_state`                                                                    | `/arms/command`                                                 |
 | `arms_command_hw_node` | —                                                                                        | `/arms/command`                                                 |
-| `arms_control_node`        | `/arms/detections`<br/>`/arms/command`<br/>`/arms/scan_raw`<br/>`/arms/reset_cmd`        | `/arms/mission_state`<br/>`/arms/control_debug`<br/>CRSF serial |
+| `arms_control_node`        | `/arms/detections`<br/>`/arms/command`<br/>`/arms/target_range`<br/>`/arms/hit`<br/>`/arms/reset_cmd` | `/arms/mission_state`<br/>`/arms/control_debug`<br/>CRSF serial |
 | `sitl_bridge_node`         | CRSF serial (`/tmp/crsf_rx`)                                                             | MAVLink RC_CHANNELS_OVERRIDE → PX4                              |
 | `arms_ui_node`             | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/control_debug` | —                                                           |
-| `gz_scan_bridge`           | `/arms_drone/upward_ray/scan` (gz)                                                       | `/arms/scan_raw`                                                |
 
 ### 3.2 노드별 역할
 
@@ -150,7 +149,6 @@ graph TD
 | `arms_control_node`        | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환. CRSF 프레임을 시리얼로 직접 출력                          | 호스트        |
 | `sitl_bridge_node`         | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. CH5=arm(레벨), CH6=flight mode(Manual/Altitude) | 호스트 (SITL) |
 | `arms_ui_node`             | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                      | 호스트        |
-| `gz_scan_bridge`           | `ros_gz_bridge`  | SITL 전용. Gazebo 거리 센서 토픽을 ROS2로 브릿지                                                                                            | 호스트        |
 
 ### 3.3 커스텀 메시지 정의
 
@@ -236,7 +234,7 @@ stateDiagram-v2
     LOCK --> TRACK : joy buttons[3] launch<br/>(또는 sitl_auto_launch 타이머)
     TRACK --> SEARCH : 타겟 소실
 
-    TRACK --> FIRE : 거리 < fire_distance_m<br/>(ray 센서 / 초음파)
+    TRACK --> FIRE : 거리 < fire_distance_m + 표적 정렬<br/>또는 심판 명중(/arms/hit)
     FIRE --> RTL : 페이로드 트리거 즉시 (mission_state 신호)
 
     RTL --> IDLE : 착륙 완료
@@ -528,8 +526,9 @@ arms_control_node
   |
   +-- [Subscribers]
   |     /arms/detections   (DetectionArray)
-  |     /arms/scan_raw     (LaserScan → 거리 캐시)
-  |     /arms/command               (Joy → 조종 입력 + 버튼)
+  |     /arms/target_range (Float64 → 거리 캐시 → FIRE 판정, SITL 심판 ground-truth)
+  |     /arms/hit          (Empty → 외부 명중 → FIRE)
+  |     /arms/command      (Joy → 조종 입력 + 버튼)
   |     /arms/reset_cmd    (Empty → 강제 SEARCH 복귀)
   |
   +-- [Publishers]
@@ -651,7 +650,6 @@ servo:
   socat PTY,link=/tmp/crsf_tx PTY,link=/tmp/crsf_rx
 
 nodes:
-  - gz_scan_bridge          (ros_gz_bridge)  Gazebo 거리 센서 → /arms/scan_raw
   - arms_detection_node     (arms_detection) 호스트 실행 → YOLO 자동 비활성, HSV/absdiff만
   - arms_control_node       (arms_control)   상태머신 + PID + CRSF → /tmp/crsf_tx
   - sitl_bridge_node        (arms_control)   /tmp/crsf_rx → MAVLink UDP → PX4
