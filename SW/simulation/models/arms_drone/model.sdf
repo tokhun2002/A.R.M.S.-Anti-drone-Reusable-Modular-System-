@@ -9,11 +9,9 @@
     - base_link       : 동체(커스텀 STL) + 센서(IMU/mag/baro/GPS) + collision
     - rotor 0~3       : 프로펠러 + 모터벨 + MulticopterMotorModel 플러그인
     - upward_camera   : 위쪽 카메라 센서 (320x240 RGB, 30Hz)
-    - upward_ray      : 위쪽 ray 센서 (8x8, 0.1~50m, 10Hz)
 
   Gazebo 토픽:
     /arms_drone/upward_camera/image   (gz.msgs.Image)
-    /arms_drone/upward_ray/scan       (gz.msgs.LaserScan)
 -->
 <sdf version="1.9">
   <model name="arms_drone">
@@ -25,41 +23,49 @@
          base_link — 동체 + 센서
          ================================================================ -->
     <link name="base_link">
+      <!-- 250급 요격드론 물리량: AUW ≈ 0.48kg(동체 0.45 + 로터 4×0.008).
+           관성은 250 프레임 0.5kg 기준 시작값 — 민첩(작을수록 스냅). SITL 재검증 대상. -->
       <inertial>
-        <mass>1.3</mass>
+        <mass>0.45</mass>
         <inertia>
-          <ixx>0.02166666666666667</ixx>
+          <ixx>0.0022</ixx>
           <ixy>0</ixy>
           <ixz>0</ixz>
-          <iyy>0.02166666666666667</iyy>
+          <iyy>0.0022</iyy>
           <iyz>0</iyz>
-          <izz>0.04000000000000001</izz>
+          <izz>0.0038</izz>
         </inertia>
       </inertial>
       <gravity>true</gravity>
       <velocity_decay/>
 
-      <!-- ARMS 커스텀 동체 (SolidWorks STL) -->
+      <!-- ARMS 커스텀 동체 (arms_model_v2.stl, 동체+암+모터포드, 스핀 프로펠러는 별도 링크).
+           STL은 mm 실치수(278×342×278mm) → scale 0.001. Y-up(Fusion)→ -90°(X)로 Z-up,
+           yaw +45°(0.7854)로 X-쿼드 대각 정렬 → 모터포드가 정확히 (±0.0976,±0.0976)에 옴. -->
       <visual name="base_link_visual">
-        <pose>0 0 0.1 -1.5708 0 0.7854</pose>
+        <pose>0 0 0 -1.5708 0 0.7854</pose>
         <geometry>
           <mesh>
-            <scale>0.003 0.003 0.003</scale>
-            <uri>model://arms_drone/meshes/ver_ksh_assembly.stl</uri>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://arms_drone/meshes/arms_model_v2.stl</uri>
           </mesh>
         </geometry>
+        <!-- 무광 블랙 -->
         <material>
-          <ambient>0.1 0.35 0.1 1</ambient>
-          <diffuse>0.15 0.55 0.15 1</diffuse>
-          <specular>0.2 0.3 0.2 1</specular>
+          <ambient>0.02 0.02 0.02 1</ambient>
+          <diffuse>0.05 0.05 0.05 1</diffuse>
+          <specular>0.12 0.12 0.12 1</specular>
         </material>
       </visual>
 
-      <!-- Collisions -->
+      <!-- Collision — 로켓형 요격드론 실루엣 반영 (2박스).
+           하부: 꼬리(-0.191)~중단(-0.01), 폭0.11 → 꼬리 착지 + 안정 베이스.
+           상부: 노즈/동체(-0.01~+0.15), 폭0.08 → 표적 요격(위쪽 충돌) 판정.
+           하부 박스 바닥 = 비주얼 최하단 = 지면 → 클리핑 없음. -->
       <collision name="base_link_collision_0">
-        <pose>0 0 0.007 0 0 0</pose>
+        <pose>0 0 -0.1005 0 0 0</pose>
         <geometry>
-          <box><size>0.35355339059327373 0.35355339059327373 0.05</size></box>
+          <box><size>0.11 0.11 0.181</size></box>
         </geometry>
         <surface>
           <contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact>
@@ -67,24 +73,14 @@
         </surface>
       </collision>
       <collision name="base_link_collision_1">
-        <pose>0 -0.098 -0.123 -0.35 0 0</pose>
-        <geometry><box><size>0.015 0.015 0.21</size></box></geometry>
-        <surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode/></friction></surface>
-      </collision>
-      <collision name="base_link_collision_2">
-        <pose>0 0.098 -0.123 0.35 0 0</pose>
-        <geometry><box><size>0.015 0.015 0.21</size></box></geometry>
-        <surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode/></friction></surface>
-      </collision>
-      <collision name="base_link_collision_3">
-        <pose>0 -0.132 -0.2195 0 0 0</pose>
-        <geometry><box><size>0.25 0.015 0.015</size></box></geometry>
-        <surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode/></friction></surface>
-      </collision>
-      <collision name="base_link_collision_4">
-        <pose>0 0.132 -0.2195 0 0 0</pose>
-        <geometry><box><size>0.25 0.015 0.015</size></box></geometry>
-        <surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode/></friction></surface>
+        <pose>0 0 0.07 0 0 0</pose>
+        <geometry>
+          <box><size>0.08 0.08 0.16</size></box>
+        </geometry>
+        <surface>
+          <contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact>
+          <friction><ode/></friction>
+        </surface>
       </collision>
 
       <!-- Sensors -->
@@ -142,32 +138,29 @@
       <gravity>true</gravity>
       <self_collide>false</self_collide>
       <velocity_decay/>
-      <pose>0.278 -0.278 0.06 0 0 0</pose>
+      <pose>0.0876 -0.0876 -0.087 0 0 0</pose>
       <inertial>
-        <mass>0.016076923076923075</mass>
+        <mass>0.008</mass>
         <inertia>
-          <ixx>3.8464910483993325e-07</ixx>
-          <iyy>2.6115851691700804e-05</iyy>
-          <izz>2.649858234714004e-05</izz>
+          <ixx>2.0e-07</ixx>
+          <iyy>1.3e-05</iyy>
+          <izz>1.3e-05</izz>
         </inertia>
       </inertial>
       <visual name="rotor_0_visual">
-        <pose>-0.022 -0.14638461538461536 -0.016 0 0 0</pose>
+        <pose>-0.00944 0.0628 0.00686 3.14159 0 0</pose>   <!-- 프로펠러 상하반전(roll 180°)+센터링. 회전 반영해 오프셋 재계산(안하면 다시 밀림). 추력은 플러그인이 조인트축으로 내므로 영향無 -->
         <geometry>
           <mesh>
-            <scale>0.8461538461538461 0.8461538461538461 0.8461538461538461</scale>
+            <scale>0.363 0.363 0.363</scale>
             <uri>model://arms_drone/meshes/1345_prop_ccw.stl</uri>
           </mesh>
         </geometry>
         <material><script><name>Gazebo/DarkGrey</name><uri>file://media/materials/scripts/gazebo.material</uri></script></material>
       </visual>
-      <visual name="rotor_0_visual_motor_bell">
-        <pose>0 0 -0.032 0 0 0</pose>
-        <geometry><mesh><scale>1 1 1</scale><uri>model://arms_drone/meshes/5010Bell.dae</uri></mesh></geometry>
-      </visual>
+      <!-- 모터벨 제거: arms_model_v2.stl 동체가 모터포드를 이미 포함 -->
       <collision name="rotor_0_collision">
         <pose>0 0 0 0 0 0</pose>
-        <geometry><box><size>0.2792307692307692 0.016923076923076923 0.0008461538461538462</size></box></geometry>
+        <geometry><box><size>0.11 0.012 0.001</size></box></geometry>
         <surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode/></friction></surface>
       </collision>
     </link>
@@ -181,32 +174,28 @@
       <gravity>true</gravity>
       <self_collide>false</self_collide>
       <velocity_decay/>
-      <pose>-0.278 0.278 0.06 0 0 0</pose>
+      <pose>-0.0876 0.0876 -0.087 0 0 0</pose>
       <inertial>
-        <mass>0.016076923076923075</mass>
+        <mass>0.008</mass>
         <inertia>
-          <ixx>3.8464910483993325e-07</ixx>
-          <iyy>2.6115851691700804e-05</iyy>
-          <izz>2.649858234714004e-05</izz>
+          <ixx>2.0e-07</ixx>
+          <iyy>1.3e-05</iyy>
+          <izz>1.3e-05</izz>
         </inertia>
       </inertial>
       <visual name="rotor_1_visual">
-        <pose>-0.022 -0.14638461538461536 -0.016 0 0 0</pose>
+        <pose>-0.00944 0.0628 0.00686 3.14159 0 0</pose>   <!-- 프로펠러 상하반전(roll 180°)+센터링. 회전 반영해 오프셋 재계산(안하면 다시 밀림). 추력은 플러그인이 조인트축으로 내므로 영향無 -->
         <geometry>
           <mesh>
-            <scale>0.8461538461538461 0.8461538461538461 0.8461538461538461</scale>
+            <scale>0.363 0.363 0.363</scale>
             <uri>model://arms_drone/meshes/1345_prop_ccw.stl</uri>
           </mesh>
         </geometry>
         <material><script><name>Gazebo/DarkGrey</name><uri>file://media/materials/scripts/gazebo.material</uri></script></material>
       </visual>
-      <visual name="rotor_1_visual_motor_bell">
-        <pose>0 0 -0.032 0 0 0</pose>
-        <geometry><mesh><scale>1 1 1</scale><uri>model://arms_drone/meshes/5010Bell.dae</uri></mesh></geometry>
-      </visual>
       <collision name="rotor_1_collision">
         <pose>0 0 0 0 0 0</pose>
-        <geometry><box><size>0.2792307692307692 0.016923076923076923 0.0008461538461538462</size></box></geometry>
+        <geometry><box><size>0.11 0.012 0.001</size></box></geometry>
         <surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode/></friction></surface>
       </collision>
     </link>
@@ -220,32 +209,28 @@
       <gravity>true</gravity>
       <self_collide>false</self_collide>
       <velocity_decay/>
-      <pose>0.278 0.278 0.06 0 0 0</pose>
+      <pose>0.0876 0.0876 -0.087 0 0 0</pose>
       <inertial>
-        <mass>0.016076923076923075</mass>
+        <mass>0.008</mass>
         <inertia>
-          <ixx>3.8464910483993325e-07</ixx>
-          <iyy>2.6115851691700804e-05</iyy>
-          <izz>2.649858234714004e-05</izz>
+          <ixx>2.0e-07</ixx>
+          <iyy>1.3e-05</iyy>
+          <izz>1.3e-05</izz>
         </inertia>
       </inertial>
       <visual name="rotor_2_visual">
-        <pose>-0.022 -0.14638461538461536 -0.016 0 0 0</pose>
+        <pose>-0.00944 0.0628 0.00686 3.14159 0 0</pose>   <!-- 프로펠러 상하반전(roll 180°)+센터링. 회전 반영해 오프셋 재계산(안하면 다시 밀림). 추력은 플러그인이 조인트축으로 내므로 영향無 -->
         <geometry>
           <mesh>
-            <scale>0.8461538461538461 0.8461538461538461 0.8461538461538461</scale>
+            <scale>0.363 0.363 0.363</scale>
             <uri>model://arms_drone/meshes/1345_prop_cw.stl</uri>
           </mesh>
         </geometry>
         <material><script><name>Gazebo/DarkGrey</name><uri>file://media/materials/scripts/gazebo.material</uri></script></material>
       </visual>
-      <visual name="rotor_2_visual_motor_bell">
-        <pose>0 0 -0.032 0 0 0</pose>
-        <geometry><mesh><scale>1 1 1</scale><uri>model://arms_drone/meshes/5010Bell.dae</uri></mesh></geometry>
-      </visual>
       <collision name="rotor_2_collision">
         <pose>0 0 0 0 0 0</pose>
-        <geometry><box><size>0.2792307692307692 0.016923076923076923 0.0008461538461538462</size></box></geometry>
+        <geometry><box><size>0.11 0.012 0.001</size></box></geometry>
         <surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode/></friction></surface>
       </collision>
     </link>
@@ -259,32 +244,28 @@
       <gravity>true</gravity>
       <self_collide>false</self_collide>
       <velocity_decay/>
-      <pose>-0.278 -0.278 0.06 0 0 0</pose>
+      <pose>-0.0876 -0.0876 -0.087 0 0 0</pose>
       <inertial>
-        <mass>0.016076923076923075</mass>
+        <mass>0.008</mass>
         <inertia>
-          <ixx>3.8464910483993325e-07</ixx>
-          <iyy>2.6115851691700804e-05</iyy>
-          <izz>2.649858234714004e-05</izz>
+          <ixx>2.0e-07</ixx>
+          <iyy>1.3e-05</iyy>
+          <izz>1.3e-05</izz>
         </inertia>
       </inertial>
       <visual name="rotor_3_visual">
-        <pose>-0.022 -0.14638461538461536 -0.016 0 0 0</pose>
+        <pose>-0.00944 0.0628 0.00686 3.14159 0 0</pose>   <!-- 프로펠러 상하반전(roll 180°)+센터링. 회전 반영해 오프셋 재계산(안하면 다시 밀림). 추력은 플러그인이 조인트축으로 내므로 영향無 -->
         <geometry>
           <mesh>
-            <scale>0.8461538461538461 0.8461538461538461 0.8461538461538461</scale>
+            <scale>0.363 0.363 0.363</scale>
             <uri>model://arms_drone/meshes/1345_prop_cw.stl</uri>
           </mesh>
         </geometry>
         <material><script><name>Gazebo/DarkGrey</name><uri>file://media/materials/scripts/gazebo.material</uri></script></material>
       </visual>
-      <visual name="rotor_3_visual_motor_bell">
-        <pose>0 0 -0.032 0 0 0</pose>
-        <geometry><mesh><scale>1 1 1</scale><uri>model://arms_drone/meshes/5010Bell.dae</uri></mesh></geometry>
-      </visual>
       <collision name="rotor_3_collision">
         <pose>0 0 0 0 0 0</pose>
-        <geometry><box><size>0.2792307692307692 0.016923076923076923 0.0008461538461538462</size></box></geometry>
+        <geometry><box><size>0.11 0.012 0.001</size></box></geometry>
         <surface><contact><ode><min_depth>0.001</min_depth><max_vel>0</max_vel></ode></contact><friction><ode/></friction></surface>
       </collision>
     </link>
@@ -303,7 +284,7 @@
       <timeConstantUp>0.0125</timeConstantUp>
       <timeConstantDown>0.025</timeConstantDown>
       <maxRotVelocity>1000.0</maxRotVelocity>
-      <motorConstant>8.54858e-06</motorConstant>
+      <motorConstant>7.0e-06</motorConstant>
       <momentConstant>0.016</momentConstant>
       <commandSubTopic>command/motor_speed</commandSubTopic>
       <motorNumber>0</motorNumber>
@@ -319,7 +300,7 @@
       <timeConstantUp>0.0125</timeConstantUp>
       <timeConstantDown>0.025</timeConstantDown>
       <maxRotVelocity>1000.0</maxRotVelocity>
-      <motorConstant>8.54858e-06</motorConstant>
+      <motorConstant>7.0e-06</motorConstant>
       <momentConstant>0.016</momentConstant>
       <commandSubTopic>command/motor_speed</commandSubTopic>
       <motorNumber>1</motorNumber>
@@ -335,7 +316,7 @@
       <timeConstantUp>0.0125</timeConstantUp>
       <timeConstantDown>0.025</timeConstantDown>
       <maxRotVelocity>1000.0</maxRotVelocity>
-      <motorConstant>8.54858e-06</motorConstant>
+      <motorConstant>7.0e-06</motorConstant>
       <momentConstant>0.016</momentConstant>
       <commandSubTopic>command/motor_speed</commandSubTopic>
       <motorNumber>2</motorNumber>
@@ -351,7 +332,7 @@
       <timeConstantUp>0.0125</timeConstantUp>
       <timeConstantDown>0.025</timeConstantDown>
       <maxRotVelocity>1000.0</maxRotVelocity>
-      <motorConstant>8.54858e-06</motorConstant>
+      <motorConstant>7.0e-06</motorConstant>
       <momentConstant>0.016</momentConstant>
       <commandSubTopic>command/motor_speed</commandSubTopic>
       <motorNumber>3</motorNumber>
@@ -394,46 +375,6 @@
     <joint name="upward_camera_joint" type="fixed">
       <parent>base_link</parent>
       <child>upward_camera_link</child>
-    </joint>
-
-    <!-- ================================================================
-         Upward-facing ray sensor (distance to objects above)
-         ================================================================ -->
-    <link name="upward_ray_link">
-      <pose relative_to="base_link">0 0 1.0 0 -1.5708 0</pose>
-      <inertial>
-        <mass>0.005</mass>
-        <inertia><ixx>1e-7</ixx><iyy>1e-7</iyy><izz>1e-7</izz></inertia>
-      </inertial>
-      <sensor name="upward_ray" type="gpu_lidar">
-        <pose>0 0 0 0 0 0</pose>
-        <always_on>true</always_on>
-        <update_rate>30</update_rate>   <!-- 10→30Hz: 빠른 공을 자주 잡게 -->
-        <lidar>
-          <scan>
-            <horizontal>
-              <samples>48</samples>   <!-- 밀도↑: 작은 풍선이 빔 사이로 빠지지 않게 -->
-              <min_angle>-1.0</min_angle>   <!-- ±57° 넓은 콘: 기울여도 머리 위 풍선 포착 -->
-              <max_angle>1.0</max_angle>
-            </horizontal>
-            <vertical>
-              <samples>48</samples>
-              <min_angle>-1.0</min_angle>
-              <max_angle>1.0</max_angle>
-            </vertical>
-          </scan>
-          <range>
-            <min>0.3</min>   <!-- 3.0→0.3m: 근접(접촉 직전)도 거리 측정 가능 -->
-            <max>50.0</max>
-            <resolution>0.01</resolution>
-          </range>
-        </lidar>
-        <topic>/arms_drone/upward_ray/scan</topic>
-      </sensor>
-    </link>
-    <joint name="upward_ray_joint" type="fixed">
-      <parent>base_link</parent>
-      <child>upward_ray_link</child>
     </joint>
 
   </model>
