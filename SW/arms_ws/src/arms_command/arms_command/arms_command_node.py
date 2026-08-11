@@ -328,23 +328,6 @@ class PanelGUI:
         self.max_tilt.pack(anchor="w", pady=(2, 0))
         self.max_tilt.bind("<ButtonRelease-1>",
                            lambda e: ros_param_set("control.max_tilt_deg", float(self.max_tilt.get())))
-        # 자세보정 게인 (유도 ①): 0부터 올려 튜닝. 발산하면 ↓
-        self.att_comp = tk.Scale(left, from_=0.0, to=0.03, resolution=0.001, orient="horizontal",
-                                 length=150, bg="#1e1e1e", fg="white", label="자세보정 att_comp (0→↑)",
-                                 highlightthickness=0, troughcolor="#444")
-        self.att_comp.set(0.012)
-        self.att_comp.pack(anchor="w", pady=(2, 0))
-        self.att_comp.bind("<ButtonRelease-1>",
-                           lambda e: ros_param_set("control.att_comp", float(self.att_comp.get())))
-        # 자세 부호 뒤집기 — arm 하자마자 홱 자빠지면 여기를 -1 로
-        asgn = tk.Frame(left, bg="#1e1e1e")
-        asgn.pack(anchor="w", pady=4)
-        self.att_roll_sign = 1.0
-        self.att_pitch_sign = -1.0
-        self.att_roll_btn = tk.Button(asgn, text="자세Roll: +", width=11, command=self.flip_att_roll)
-        self.att_roll_btn.grid(row=0, column=0, padx=2)
-        self.att_pitch_btn = tk.Button(asgn, text="자세Pitch: -", width=11, command=self.flip_att_pitch)
-        self.att_pitch_btn.grid(row=0, column=1, padx=2)
 
         # ── 발사 τ = 충돌까지 시간 임계(비전 looming). 작을수록 접촉 직전에 발사. ──
         self.tau_fire = tk.Scale(right, from_=0.1, to=1.0, resolution=0.05, orient="horizontal",
@@ -415,16 +398,6 @@ class PanelGUI:
         self.pitch_sign *= -1.0
         ros_param_set("control.pitch_sign", self.pitch_sign)
         self.pitch_btn.config(text=f"Pitch sign: {'+' if self.pitch_sign > 0 else '-'}")
-
-    def flip_att_roll(self):
-        self.att_roll_sign *= -1.0
-        ros_param_set("control.att_roll_sign", self.att_roll_sign)
-        self.att_roll_btn.config(text=f"자세Roll: {'+' if self.att_roll_sign > 0 else '-'}")
-
-    def flip_att_pitch(self):
-        self.att_pitch_sign *= -1.0
-        ros_param_set("control.att_pitch_sign", self.att_pitch_sign)
-        self.att_pitch_btn.config(text=f"자세Pitch: {'+' if self.att_pitch_sign > 0 else '-'}")
 
     # ---- 표적 종류 전환 (풍선 ↔ 드론) → referee 'target' 파라미터 ----
     def toggle_target(self):
