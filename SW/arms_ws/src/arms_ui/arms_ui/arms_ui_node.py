@@ -71,6 +71,8 @@ class ArmsUINode(Node):
         self.declare_parameter("ui.sound_disarm", os.path.join(_snd_dir, "disarm.mp3"))
         self.declare_parameter("ui.sound_search", os.path.join(_snd_dir, "search.mp3"))
         self.declare_parameter("ui.sound_idle", os.path.join(_snd_dir, "idle.mp3"))
+        # 킬 스위치 ON(engage) 경고음
+        self.declare_parameter("ui.sound_kill", os.path.join(_snd_dir, "kill.mp3"))
         self._player = shutil.which("ffplay")
         if self._player is None:
             self.get_logger().warn("ffplay 없음 — 효과음이 재생되지 않습니다.")
@@ -93,6 +95,7 @@ class ArmsUINode(Node):
         self._prev_manual = None    # 이전 mode 값 (None=아직 미수신, 첫 수신은 효과음 없음)
         self._kill = False          # buttons[0]==1 → kill 스위치 ON (모드 무관 경고 표시)
         self._kill_blink = 0        # kill 경고 점멸용 프레임 카운터
+        self._prev_kill = None      # kill 이전값 (off→on 상승 엣지에만 경고음, 첫 수신 skip)
         # mission_state 기반 상태 변경 효과음 엣지 추적
         self._prev_manual_state = None  # MissionState.manual_mode 이전값 (모드전환 틱 억제용)
         self._prev_armed = None         # MissionState.armed 이전값 (수동 arm/disarm)
@@ -163,7 +166,12 @@ class ArmsUINode(Node):
     def _cb_command(self, msg: Joy):
         if len(msg.buttons) <= MODE_BUTTON_IDX:
             return
-        self._kill = bool(msg.buttons[KILL_BUTTON_IDX])
+        kill = bool(msg.buttons[KILL_BUTTON_IDX])
+        self._kill = kill
+        # 킬 스위치 ON(off→on 상승 엣지)에만 경고음. 첫 수신(prev None)·끌 때는 재생 안 함.
+        if self._prev_kill is not None and kill and not self._prev_kill:
+            self._play_sound(self.get_parameter("ui.sound_kill").value)
+        self._prev_kill = kill
         manual = bool(msg.buttons[MODE_BUTTON_IDX])
         self._manual_mode = manual
         # 첫 수신(현재 모드 안내) 또는 전환 엣지에서 효과음.
@@ -331,7 +339,7 @@ class ArmsUINode(Node):
         overlay = frame.copy()
         cv2.rectangle(overlay, (0, y0), (w, y0 + band_h), (0, 110, 200), -1)  # 주황(BGR)
         cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
-        text = "STICKS NOT IDLE - CANNOT ARM"
+        text = "ARM DENIED - STICKS NOT IDLE"
         base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 3)[0][0]
         scale = (w * 0.7) / max(1, base)
         self._put_center_text(frame, text, y0 + band_h // 2, (255, 255, 255), scale, 3)
@@ -352,7 +360,7 @@ class ArmsUINode(Node):
         cv2.rectangle(overlay, (0, y0), (w, y0 + band_h), (0, 0, 150), -1)
         cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
         # 텍스트 폭이 화면의 ~80% 가 되도록 스케일 자동 계산
-        text = "KILL SWITCH ON"
+        text = "KILL SWITCH ENGAGED"
         base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 4)[0][0]
         scale = (w * 0.8) / max(1, base)
         self._put_center_text(frame, text, h // 2, (255, 255, 255), scale, 4)
