@@ -222,6 +222,8 @@ class ArmsUINode(Node):
                 self._draw_roi_pip(frame)
         else:
             self._draw_manual_arm(frame)
+        # 중앙 조준 십자선은 상태·모드 무관하게 항상 표시 (IDLE 포함).
+        self._draw_crosshair(frame)
         # kill 스위치 ON 이면 자동/수동 무관하게 화면 중앙에 크게 경고 (최상단).
         self._draw_kill_banner(frame)
         if self._fullscreen:
