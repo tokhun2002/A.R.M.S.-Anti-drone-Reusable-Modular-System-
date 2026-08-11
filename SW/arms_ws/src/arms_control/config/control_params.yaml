@@ -37,6 +37,10 @@ arms_control_node:
       # 자동 모드 arm 시점: 스위치와 분리, 상태머신 상태로 컨트롤 노드가 결정.
       #   기본=발사(TRACK)부터 무장. SEARCH 등에서 arm 하려면 목록에 추가.
       auto_arm_states: ["TRACK", "FIRE", "RTL"]
+      # 수동 arm pre-arm 안전: arm 순간 스틱이 idle 이어야만 실제 arm (급상승/오발 방지).
+      prearm_check: true
+      prearm_throttle_max: -0.85   # throttle(axes[1]) 이 값 이하(최저)여야 arm 허용
+      prearm_stick_tol: 0.15       # roll/pitch/yaw 중앙 허용오차
       # ★ 물리량 변경(250급·TWR≈6·호버≈0.42)으로 아래 스로틀은 재설정된 시작값.
       #   구 "3.6m/s 검증값"(track 0.87)은 구 물리량 전용이라 폐기 → SITL 재검증 필요.
       throttle: 0.42          # 베이스 = 새 호버
