@@ -36,7 +36,7 @@ socat PTY,raw,echo=0,link=/tmp/crsf_tx PTY,raw,echo=0,link=/tmp/crsf_rx &
 echo "CRSF 가상 시리얼: /tmp/crsf_tx (arms_control) ↔ /tmp/crsf_rx (arms_comm)"
 sleep 1
 
-# 수정한 월드(red_ball kinematic 등)를 PX4 월드 폴더로 복사 → 항상 최신 반영
+# 수정한 월드(target_ball kinematic 등)를 PX4 월드 폴더로 복사 → 항상 최신 반영
 PX4_WORLDS="$PX4_DIR/Tools/simulation/gz/worlds"
 if [ -d "$PX4_WORLDS" ] && [ -f "$ARMS_SW/simulation/worlds/arms_sitl.sdf" ]; then
   cp "$ARMS_SW/simulation/worlds/arms_sitl.sdf" "$PX4_WORLDS/arms_sitl.sdf"
@@ -75,7 +75,7 @@ if [ -f "$SHELL_PY" ]; then
   #   MC_ACRO_R_MAX / P_MAX = ACRO 모드 풀스틱 각속도[deg/s] (control.max_rate_dps 와 일치).
   #   MPC_MAN_TILT_MAX / MPC_TILTMAX_AIR = 최대 기울기[deg]. 크게 기울일수록 옆으로 빨리 감
   #     → 빠른 표적 추격용. 35°(기본)→50° 로 상향 (가속 ~70%↑). 단 너무 크면 양력 손실.
-  printf 'param set COM_DISARM_PRFLT 0\nparam set NAV_DLL_ACT 0\nparam set NAV_RCL_ACT 0\nparam set MC_ACRO_R_MAX 220\nparam set MC_ACRO_P_MAX 220\nparam set MPC_MAN_TILT_MAX 65\nparam set MPC_TILTMAX_AIR 65\n' \
+  printf 'param set COM_DISARM_PRFLT 0\nparam set NAV_DLL_ACT 0\nparam set NAV_RCL_ACT 0\nparam set MC_ACRO_R_MAX 400\nparam set MC_ACRO_P_MAX 400\nparam set MPC_MAN_TILT_MAX 65\nparam set MPC_TILTMAX_AIR 65\n' \
     | python3 "$SHELL_PY" udp:127.0.0.1:14550 >/dev/null 2>&1 &
   echo "      페일세이프 해제 + ACRO 220°/s + 최대기울기 65° (고속표적 요격 부스트)"
 fi

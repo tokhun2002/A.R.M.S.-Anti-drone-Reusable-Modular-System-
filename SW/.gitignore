@@ -16,3 +16,5 @@ __pycache__/
 *.buttonbak
 *.speedbak
 *.waylandbak
+*.leadbak
+*.massbak

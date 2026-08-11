@@ -19,13 +19,6 @@ install(PROGRAMS
   RENAME arms_command_node
 )
 
-install(PROGRAMS
-  arms_command/servo/servo_switch_test_node.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME servo_switch_test_node
-)
-
-
 # ESP32 UART 수신 노드
 add_executable(arms_command_hw_node
   src/arms_command_uart_node.cpp

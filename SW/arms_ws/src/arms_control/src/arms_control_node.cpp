@@ -70,6 +70,12 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.auto_arm_states",
                       std::vector<std::string>{"TRACK", "FIRE", "RTL"});
 
+    // 수동 arm pre-arm 안전 확인: arm 순간 스틱이 idle(throttle 최저 + roll/pitch/yaw 중앙)
+    //   이어야만 실제 arm 되게 한다(급상승/오발 방지). 한 번 arm 되면 비행 중엔 무관.
+    declare_parameter("control.prearm_check", true);
+    declare_parameter("control.prearm_throttle_max", -0.85);  // throttle(axes[1]) 이 이하(최저)
+    declare_parameter("control.prearm_stick_tol", 0.15);      // roll/pitch/yaw 중앙 허용오차
+
     // 발사 잠금장치 서보 (Jetson 하드웨어 PWM, sysfs). SITL 은 enabled=false.
     declare_parameter("servo.enabled", false);
     declare_parameter("servo.chip_path", std::string("/sys/class/pwm/pwmchip0"));
@@ -184,6 +190,9 @@ class ArmsControlNode : public rclcpp::Node {
       const auto v = get_parameter("control.auto_arm_states").as_string_array();
       auto_arm_states_ = std::set<std::string>(v.begin(), v.end());
     }
+    prearm_check_ = get_parameter("control.prearm_check").as_bool();
+    prearm_throttle_max_ = get_parameter("control.prearm_throttle_max").as_double();
+    prearm_stick_tol_ = get_parameter("control.prearm_stick_tol").as_double();
 
     crsf_max_angle_ = get_parameter("crsf.max_angle_deg").as_double();
     acro_mode_ = get_parameter("control.acro_mode").as_bool();
@@ -656,9 +665,13 @@ class ArmsControlNode : public rclcpp::Node {
         // ===== 추미 (Pursuit): PID + 시간기반 리드 (기존/검증됨) =====
         terminal_active_ = false;   // 종말 부스트는 PN 전용
         double emag_g = std::hypot(ex, ey);
+        double tgt_spd = std::hypot(err_dot_x_, err_dot_y_);   // 표적 각속도(리드 신호)
         double gain_scale = 1.0;
-        if (emag_g < 0.08)      gain_scale = 0.5;
-        else if (emag_g < 0.20) gain_scale = 0.75;
+        // 중앙 근처 게인 감쇠는 '느린/정지' 표적에서만(지터 방지). 빠른 공은 full 게인 유지 → 뒤처짐 방지.
+        if (tgt_spd < 0.2) {
+          if (emag_g < 0.08)      gain_scale = 0.5;
+          else if (emag_g < 0.20) gain_scale = 0.75;
+        }
         double t_lead = lead_gain_;   // 거리비례 리드(lead_dist)는 3D 거리 제거로 삭제
         double ex_lead = ex + t_lead * err_dot_x_;
         double ey_lead = ey + t_lead * err_dot_y_;
@@ -765,13 +778,44 @@ class ArmsControlNode : public rclcpp::Node {
       }
     }
 
+    // ---- 수동 arm pre-arm 안전 확인 (스틱 idle) ----
+    //   arm 하는 순간 스틱이 idle(throttle 최저 + roll/pitch/yaw 중앙)이어야만 실제 arm.
+    //   arm 순간에만 확인하고, 한 번 arm(manual_armed_)되면 비행 중 스틱을 움직여도 유지된다.
+    //   arm 스위치를 내리면(!effective_arm) 해제. 자동 모드에선 미사용.
+    if (joy_manual_mode_) {
+      const bool sticks_idle =
+          (joy_axes_[1] <= prearm_throttle_max_) &&         // throttle 최저
+          (std::abs(joy_axes_[0]) <= prearm_stick_tol_) &&  // yaw 중앙
+          (std::abs(joy_axes_[2]) <= prearm_stick_tol_) &&  // roll 중앙
+          (std::abs(joy_axes_[3]) <= prearm_stick_tol_);    // pitch 중앙
+      if (!effective_arm) {
+        manual_armed_ = false;
+        prearm_blocked_ = false;
+      } else if (!manual_armed_) {   // arm 시도 중 (아직 무장 전)
+        if (!prearm_check_ || sticks_idle) {
+          manual_armed_ = true;
+          prearm_blocked_ = false;
+          RCLCPP_INFO(get_logger(), "MANUAL ARM (스틱 idle 확인)");
+        } else {
+          prearm_blocked_ = true;   // arm 스위치 올렸지만 스틱 안 idle → 차단 (UI 경고)
+          RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+              "ARM 차단: 스틱을 idle 로 두세요 (throttle 최저 + roll/pitch/yaw 중앙)");
+        }
+      } else {
+        prearm_blocked_ = false;   // 이미 무장됨
+      }
+    } else {
+      manual_armed_ = false;
+      prearm_blocked_ = false;
+    }
+
     // ---- CH5(FC arm) 결정 ----
-    //   수동: 스위치(effective_arm, 재토글 안전장치) 그대로.
+    //   수동: manual_armed_ (재토글 안전장치 + pre-arm 스틱 idle 확인).
     //   자동: 스위치와 분리 — 상태머신 상태 기반(auto_arm_states_)으로 컨트롤 노드가 결정.
     //   발행하는 mission_state.state 와 동일한 state 로 판정해 armed/state 를 일관되게 유지.
     const bool ch5_armed =
         joy_manual_mode_
-            ? effective_arm
+            ? manual_armed_
             : (auto_arm_states_.count(to_string(state)) > 0);
 
     // ---- CRSF output ----
@@ -873,6 +917,7 @@ class ArmsControlNode : public rclcpp::Node {
     msg.kp_now = static_cast<float>(kp_now_);
     msg.armed = ch5_armed;                // UI 효과음/표시용 (실제 CH5 arm 상태)
     msg.manual_mode = joy_manual_mode_;   // UI 효과음/표시용 (모드)
+    msg.prearm_blocked = prearm_blocked_; // UI 경고용 (스틱 미idle 로 arm 차단)
     pub_state_->publish(msg);
 
     // ---- 발사 잠금장치 서보 ----
@@ -953,6 +998,13 @@ class ArmsControlNode : public rclcpp::Node {
 
   // 자동 모드에서 CH5(FC arm)를 켜는 상태 집합 (스위치와 분리, 컨트롤 노드가 결정)
   std::set<std::string> auto_arm_states_;
+
+  // 수동 arm 래치 + pre-arm 스틱 idle 확인
+  bool   manual_armed_{false};
+  bool   prearm_blocked_{false};   // arm 스위치 올림 + 스틱 미idle → 차단 (UI 경고)
+  bool   prearm_check_{true};
+  double prearm_throttle_max_{-0.85};
+  double prearm_stick_tol_{0.15};
 
   // Joy state
   std::array<float, 4> joy_axes_{};

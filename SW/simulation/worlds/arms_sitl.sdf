@@ -3,7 +3,7 @@
   A.R.M.S. SITL world (Gazebo Harmonic)
   - 드론(arms_drone)은 PX4가 airframe 4021로 직접 스폰 → 여기 include 안 함
   - 센서 시스템 플러그인(IMU/baro/airspeed/mag/navsat) 포함 → arm 가능
-  - red_ball : 날아다니는 풍선 (referee가 set_pose로 비행 + 명중 연출)
+  - target_ball : 날아다니는 표적 (모델명 유지, 비주얼=x500 드론 외형). referee가 set_pose로 비행 + 명중 연출
 -->
 <sdf version="1.9">
   <world name="arms_sitl">
@@ -73,9 +73,13 @@
     </model>
 
     <!-- 날아다니는 풍선 (referee가 움직임). 시작 고도 12m -->
-    <model name="red_ball">
+    <!-- 표적 2종: referee가 UI 선택(target 파라미터)에 따라 하나만 비행시키고 나머진 HIDE_Z(지하)로 숨김.
+         둘 다 z=-100(숨김)으로 스폰. 명중은 거리기반이라 어느 쪽이든 무손상. -->
+
+    <!-- 표적 A: 풍선 (빨간 구) — 기본 -->
+    <model name="target_ball">
       <static>false</static>
-      <pose>0 0 12 0 0 0</pose>
+      <pose>0 0 -100 0 0 0</pose>
       <link name="link">
         <gravity>false</gravity>
         <kinematic>true</kinematic>
@@ -93,6 +97,65 @@
             <diffuse>1 0 0 1</diffuse>
             <specular>0.5 0.5 0.5 1</specular>
           </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 표적 B: 적 드론 (PX4 x500 외형, model://x500_base 메시 참조).
+         이름에 'drone'/'x500' 안 넣음 → referee 자기드론(arms_drone) 식별과 안 겹침. -->
+    <model name="target_uav">
+      <static>false</static>
+      <pose>0 0 -100 0 0 0</pose>
+      <link name="link">
+        <gravity>false</gravity>
+        <kinematic>true</kinematic>
+        <inertial>
+          <mass>0.05</mass>
+          <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz></inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry><sphere><radius>1.0</radius></sphere></geometry>
+        </collision>
+        <visual name="drone_frame">
+          <pose>0 0 0.025 0 0 3.141592654</pose>
+          <geometry><mesh><scale>1 1 1</scale><uri>model://x500_base/meshes/NXP-HGD-CF.dae</uri></mesh></geometry>
+        </visual>
+        <visual name="drone_motor_0">
+          <pose>0.174 0.174 0.032 0 0 -0.45</pose>
+          <geometry><mesh><scale>1 1 1</scale><uri>model://x500_base/meshes/5010Base.dae</uri></mesh></geometry>
+        </visual>
+        <visual name="drone_motor_1">
+          <pose>-0.174 0.174 0.032 0 0 -0.45</pose>
+          <geometry><mesh><scale>1 1 1</scale><uri>model://x500_base/meshes/5010Base.dae</uri></mesh></geometry>
+        </visual>
+        <visual name="drone_motor_2">
+          <pose>0.174 -0.174 0.032 0 0 -0.45</pose>
+          <geometry><mesh><scale>1 1 1</scale><uri>model://x500_base/meshes/5010Base.dae</uri></mesh></geometry>
+        </visual>
+        <visual name="drone_motor_3">
+          <pose>-0.174 -0.174 0.032 0 0 -0.45</pose>
+          <geometry><mesh><scale>1 1 1</scale><uri>model://x500_base/meshes/5010Base.dae</uri></mesh></geometry>
+        </visual>
+        <!-- 프로펠러 (정적): 로터링크pose + prop센터링offset 합성. ccw=0,1 / cw=2,3 -->
+        <visual name="drone_prop_0">
+          <pose>0.152 -0.32038 0.044 0 0 0</pose>
+          <geometry><mesh><scale>0.846 0.846 0.846</scale><uri>model://x500_base/meshes/1345_prop_ccw.stl</uri></mesh></geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+        <visual name="drone_prop_1">
+          <pose>-0.196 0.02762 0.044 0 0 0</pose>
+          <geometry><mesh><scale>0.846 0.846 0.846</scale><uri>model://x500_base/meshes/1345_prop_ccw.stl</uri></mesh></geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+        <visual name="drone_prop_2">
+          <pose>0.152 0.02762 0.044 0 0 0</pose>
+          <geometry><mesh><scale>0.846 0.846 0.846</scale><uri>model://x500_base/meshes/1345_prop_cw.stl</uri></mesh></geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+        <visual name="drone_prop_3">
+          <pose>-0.196 -0.32038 0.044 0 0 0</pose>
+          <geometry><mesh><scale>0.846 0.846 0.846</scale><uri>model://x500_base/meshes/1345_prop_cw.stl</uri></mesh></geometry>
+          <material><ambient>0.1 0.1 0.1 1</ambient><diffuse>0.15 0.15 0.15 1</diffuse></material>
         </visual>
       </link>
     </model>

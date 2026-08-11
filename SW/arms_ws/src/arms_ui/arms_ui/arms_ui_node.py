@@ -166,8 +166,9 @@ class ArmsUINode(Node):
         self._kill = bool(msg.buttons[KILL_BUTTON_IDX])
         manual = bool(msg.buttons[MODE_BUTTON_IDX])
         self._manual_mode = manual
-        # 전환 엣지에서만 효과음 (첫 수신 self._prev_manual is None 은 건너뜀)
-        if self._prev_manual is not None and manual != self._prev_manual:
+        # 첫 수신(현재 모드 안내) 또는 전환 엣지에서 효과음.
+        #   → 전체 시스템 런치 시 지금 어느 모드인지 소리로 알려준다.
+        if self._prev_manual is None or manual != self._prev_manual:
             param = "ui.sound_manual" if manual else "ui.sound_auto"
             self._play_sound(self.get_parameter(param).value)
         self._prev_manual = manual
@@ -222,6 +223,10 @@ class ArmsUINode(Node):
                 self._draw_roi_pip(frame)
         else:
             self._draw_manual_arm(frame)
+            # arm 스위치 올렸는데 스틱이 idle 아니면 arm 차단 경고.
+            self._draw_prearm_banner(frame)
+        # 중앙 조준 십자선은 상태·모드 무관하게 항상 표시 (IDLE 포함).
+        self._draw_crosshair(frame)
         # kill 스위치 ON 이면 자동/수동 무관하게 화면 중앙에 크게 경고 (최상단).
         self._draw_kill_banner(frame)
         if self._fullscreen:
@@ -315,6 +320,21 @@ class ArmsUINode(Node):
         color = (0, 0, 255) if armed else (0, 200, 0)   # arm=빨강(주의), disarm=초록(안전)
         scale = max(0.8, h / 600.0)
         self._put_center_text(frame, text, int(h * 0.08), color, scale, 2)
+
+    def _draw_prearm_banner(self, frame):
+        """수동: arm 스위치 올렸지만 스틱이 idle 아니어서 arm 차단됨 → 주황 경고 배너."""
+        if not bool(getattr(self._latest_state, "prearm_blocked", False)):
+            return
+        h, w = frame.shape[:2]
+        band_h = int(h * 0.15)
+        y0 = int(h * 0.60)
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, y0), (w, y0 + band_h), (0, 110, 200), -1)  # 주황(BGR)
+        cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+        text = "STICKS NOT IDLE - CANNOT ARM"
+        base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 3)[0][0]
+        scale = (w * 0.7) / max(1, base)
+        self._put_center_text(frame, text, y0 + band_h // 2, (255, 255, 255), scale, 3)
 
     def _draw_kill_banner(self, frame):
         """kill 스위치 ON: 모드 무관하게 화면 중앙에 크게 점멸 경고."""

@@ -16,7 +16,7 @@ arms_command_node.py — A.R.M.S. SITL 컨트롤 패널 (tkinter GUI)
   - [CONTROLLER INPUT]  : 스틱 드래그 → /arms/command axes 발행
                           스위치 클릭 → /arms/command buttons 발행
 
-확정 환경: 월드=arms_sitl, 드론=arms_drone, 표적=red_ball
+확정 환경: 월드=arms_sitl, 드론=arms_drone, 표적=target_ball
 실행: ros2 run arms_command arms_command_node
 """
 
@@ -37,7 +37,7 @@ REFEREE_NODE = "/balloon_referee"
 
 WORLD = "arms_sitl"
 DRONE = "arms_drone_0"
-BALL  = "red_ball"
+BALL  = "target_ball"
 
 STATE_COLOR = {
     "IDLE":   "#888888",
@@ -258,9 +258,16 @@ class PanelGUI:
                       "control.track_throttle", float(self.thr_entry.get()))
                   ).grid(row=0, column=1)
 
-        # ── 오른쪽: 풍선 ────────────────────────────────────────────────────
-        tk.Label(right, text="풍선 (red_ball)", fg="#aaaaaa", bg="#1e1e1e",
+        # ── 오른쪽: 표적 ────────────────────────────────────────────────────
+        tk.Label(right, text="표적 (target_ball)", fg="#aaaaaa", bg="#1e1e1e",
                  font=("Arial", 11, "bold")).pack(pady=(4, 6))
+
+        # 표적 종류 토글 (풍선 ⇄ 드론) → referee 'target' 파라미터. 선택된 것만 비행.
+        self.target_is_drone = False   # 기본: 풍선
+        self.target_btn = tk.Button(right, text="표적: 풍선", width=20,
+                                    font=("Arial", 10, "bold"), bg="#8d6e63", fg="white",
+                                    command=self.toggle_target)
+        self.target_btn.pack(pady=(0, 6))
 
         bbtn = tk.Frame(right, bg="#1e1e1e")
         bbtn.pack(pady=2)
@@ -418,6 +425,16 @@ class PanelGUI:
         self.att_pitch_sign *= -1.0
         ros_param_set("control.att_pitch_sign", self.att_pitch_sign)
         self.att_pitch_btn.config(text=f"자세Pitch: {'+' if self.att_pitch_sign > 0 else '-'}")
+
+    # ---- 표적 종류 전환 (풍선 ↔ 드론) → referee 'target' 파라미터 ----
+    def toggle_target(self):
+        self.target_is_drone = not self.target_is_drone
+        if self.target_is_drone:
+            self.target_btn.config(text="표적: 드론", bg="#37474f")
+            ros_param_set_node(REFEREE_NODE, "target", "drone")
+        else:
+            self.target_btn.config(text="표적: 풍선", bg="#8d6e63")
+            ros_param_set_node(REFEREE_NODE, "target", "balloon")
 
     # ---- 유도 방식 전환 (추미 ↔ PN) ----
     def toggle_guidance(self):
