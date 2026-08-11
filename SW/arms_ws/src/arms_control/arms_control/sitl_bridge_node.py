@@ -9,16 +9,14 @@ Channel mapping:
   CH1: roll     CH2: pitch     CH3: throttle  CH4: yaw
   CH5: arm sw   CH6: mode sw   CH7: kill sw   CH8: (unused)
 
-CH6 flight mode: low=Manual(auto/영상유도), high=Altitude(manual/손제어).
+CH6 flight mode: low=ACRO(auto/영상유도, autonomous_acro=True), high=Altitude(manual/손제어).
 """
 
-import math
 import threading
 import time
 
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Vector3
 
 try:
     from pymavlink import mavutil
@@ -145,9 +143,6 @@ class ArmsSITLCommNode(Node):
             self.get_logger().error("pymavlink not installed: pip3 install pymavlink")
             return
 
-        # 드론 실제 자세(roll/pitch/yaw[deg]) 발행 → 제어 노드의 자세 피드백(각속도 제어)용
-        self._att_pub = self.create_publisher(Vector3, "/arms/attitude", 10)
-
         threading.Thread(target=self._connect_loop, daemon=True).start()
         threading.Thread(target=self._crsf_read_loop, daemon=True).start()
         threading.Thread(target=self._mavlink_rx_loop, daemon=True).start()
@@ -184,13 +179,6 @@ class ArmsSITLCommNode(Node):
         self._send_set_mode(self._auto_mode)
         time.sleep(0.5)
 
-        # ATTITUDE(msg id 30) 를 50Hz(20000us)로 요청 → 자세 피드백용
-        self._mav.mav.command_long_send(
-            self._mav.target_system, self._mav.target_component,
-            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
-            30, 20000, 0, 0, 0, 0, 0)
-        self.get_logger().info("ATTITUDE 스트림 50Hz 요청 (자세 피드백)")
-
         self._connected = True
         self.get_logger().info(f"SITL: {mode_name} set. Waiting for arm signal (CH5).")
 
@@ -198,26 +186,19 @@ class ArmsSITLCommNode(Node):
     # MAVLink RX (armed-state tracking via HEARTBEAT)
     # ------------------------------------------------------------------
     def _mavlink_rx_loop(self):
-        """HEARTBEAT(armed 상태) + ATTITUDE(자세 피드백) 수신."""
+        """HEARTBEAT(armed 상태) 수신."""
         while rclpy.ok():
             if self._mav is None:
                 time.sleep(0.1)
                 continue
             try:
-                msg = self._mav.recv_match(type=['HEARTBEAT', 'ATTITUDE'],
+                msg = self._mav.recv_match(type=['HEARTBEAT'],
                                            blocking=True, timeout=1.0)
                 if msg is None:
                     continue
                 t = msg.get_type()
                 if t == 'HEARTBEAT':
                     self._armed = bool(msg.base_mode & MAV_MODE_FLAG_SAFETY_ARMED)
-                elif t == 'ATTITUDE':
-                    # PX4 ATTITUDE: roll/pitch/yaw [rad] → deg 로 발행
-                    v = Vector3()
-                    v.x = math.degrees(msg.roll)
-                    v.y = math.degrees(msg.pitch)
-                    v.z = math.degrees(msg.yaw)
-                    self._att_pub.publish(v)
             except Exception as e:
                 self.get_logger().warn(f"MAVLink rx error: {e}", throttle_duration_sec=5.0)
                 time.sleep(0.5)
