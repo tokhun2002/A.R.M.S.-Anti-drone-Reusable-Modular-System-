@@ -101,10 +101,7 @@ class ArmsControlNode : public rclcpp::Node {
     // 자세 피드백(각속도 제어 캐스케이드): 비전=목표기울기 → 자세루프가 rate 산출
     declare_parameter("control.att_p", 6.0);            // 자세루프 게인: rate=att_p×(목표각−실제각)
     declare_parameter("control.max_tilt_deg", 35.0);    // 목표 기울기 제한[deg]
-    declare_parameter("control.att_roll_sign", 1.0);    // 자세 부호(실측: roll +, pitch -)
-    declare_parameter("control.att_pitch_sign", -1.0);
-    // 유도(Guidance): ① 자세보정 LOS  ② 거리비례 예측
-    declare_parameter("control.att_comp", 0.0);         // 자세보정 게인(≈1/half_FOV≈0.017, 0=off)
+    // 유도(Guidance): 거리비례 예측
     declare_parameter("control.lead_dist", 0.02);       // 거리비례 예측: 리드시간 += 이값×거리[m]
     // 유도 방식: 0=추미(Pursuit, 현위치추종/기존), 1=비례항법(PN, 시선각속도 제거/빠른표적)
     declare_parameter("control.guidance_mode", 0);
@@ -112,13 +109,7 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.pn_center_gain", 40.0);  // 표적 중심유지(화면 이탈 방지)
     declare_parameter("control.pn_alpha", 0.5);         // alpha-beta 위치이득 (표적 상태추정)
     declare_parameter("control.pn_beta", 0.15);         // alpha-beta 속도이득 (LOS각속도 추정)
-    declare_parameter("control.pn_los_clamp", 1.5);     // PN 시선각속도 제한(종말 폭주방지, 0=무제한)
-    // 종말 커밋(Terminal Commit): 신뢰거리가 이 값 이내면 losdot 을 강클램프 →
-    //   가로지르는 표적을 쫓다 튕기지 않고 '충돌 코스로 직진'해서 실제로 박는다.
-    declare_parameter("control.pn_commit_dist", 5.0);      // 이 거리[m] 이내면 종말 부스트
-    declare_parameter("control.pn_commit_clamp", 0.5);     // (미사용) 구 종말커밋 클램프
-    declare_parameter("control.pn_commit_att_p", 6.5);     // 종말 자세게인(빠른 크로싱 추종). 짧은순간만 → 발진 X
-    declare_parameter("control.pn_commit_max_tilt", 58.0); // 종말 최대기울기(더 강한 횡가속)
+    declare_parameter("control.pn_los_clamp", 1.5);     // PN 시선각속도 제한(0=무제한)
 
     // ----------------------------------------------------------------
     // State machine
@@ -203,9 +194,6 @@ class ArmsControlNode : public rclcpp::Node {
     lead_clamp_ = get_parameter("control.lead_clamp").as_double();
     att_p_ = get_parameter("control.att_p").as_double();
     max_tilt_deg_ = get_parameter("control.max_tilt_deg").as_double();
-    att_roll_sign_ = get_parameter("control.att_roll_sign").as_double();
-    att_pitch_sign_ = get_parameter("control.att_pitch_sign").as_double();
-    att_comp_ = get_parameter("control.att_comp").as_double();
     lead_dist_ = get_parameter("control.lead_dist").as_double();
     guidance_mode_ = static_cast<int>(get_parameter("control.guidance_mode").as_int());
     pn_nav_gain_ = get_parameter("control.pn_nav_gain").as_double();
@@ -213,10 +201,6 @@ class ArmsControlNode : public rclcpp::Node {
     pn_alpha_ = get_parameter("control.pn_alpha").as_double();
     pn_beta_ = get_parameter("control.pn_beta").as_double();
     pn_los_clamp_ = get_parameter("control.pn_los_clamp").as_double();
-    pn_commit_dist_ = get_parameter("control.pn_commit_dist").as_double();
-    pn_commit_clamp_ = get_parameter("control.pn_commit_clamp").as_double();
-    pn_commit_att_p_ = get_parameter("control.pn_commit_att_p").as_double();
-    pn_commit_max_tilt_ = get_parameter("control.pn_commit_max_tilt").as_double();
     crsf_out_ = std::make_unique<CrsfOutput>(
         get_parameter("crsf.port").as_string(),
         static_cast<int>(get_parameter("crsf.baud").as_int()));
@@ -270,12 +254,6 @@ class ArmsControlNode : public rclcpp::Node {
               att_p_ = p.as_double();
             else if (n == "control.max_tilt_deg")
               max_tilt_deg_ = p.as_double();
-            else if (n == "control.att_roll_sign")
-              att_roll_sign_ = p.as_double();
-            else if (n == "control.att_pitch_sign")
-              att_pitch_sign_ = p.as_double();
-            else if (n == "control.att_comp")
-              att_comp_ = p.as_double();
             else if (n == "control.lead_dist")
               lead_dist_ = p.as_double();
             else if (n == "control.guidance_mode")
@@ -290,14 +268,6 @@ class ArmsControlNode : public rclcpp::Node {
               pn_beta_ = p.as_double();
             else if (n == "control.pn_los_clamp")
               pn_los_clamp_ = p.as_double();
-            else if (n == "control.pn_commit_dist")
-              pn_commit_dist_ = p.as_double();
-            else if (n == "control.pn_commit_clamp")
-              pn_commit_clamp_ = p.as_double();
-            else if (n == "control.pn_commit_att_p")
-              pn_commit_att_p_ = p.as_double();
-            else if (n == "control.pn_commit_max_tilt")
-              pn_commit_max_tilt_ = p.as_double();
             else if (n == "mission.tau_fire_sec")
               sm_->set_tau_fire(p.as_double());
             else if (n == "mission.loom_s_min")
@@ -404,18 +374,6 @@ class ArmsControlNode : public rclcpp::Node {
           prev_btn_[2] = mode; prev_btn_[3] = launch;
         });
 
-    sub_reset_ = create_subscription<std_msgs::msg::Empty>(
-        "/arms/reset_cmd", 10, [this](std_msgs::msg::Empty::SharedPtr) {
-          RCLCPP_WARN(get_logger(), "RESET command received -> force SEARCH.");
-          sm_->force_search();
-          rtl_sent_ = false;
-          fire_sent_ = false;
-          pid_roll_->reset();
-          pid_pitch_->reset();
-          filt_err_x_ = 0.0;
-          filt_err_y_ = 0.0;
-        });
-
     // 심판의 실제충돌(직격) 통지 → FIRE→RTL (라이다 판정과 무관, 진짜 명중)
     sub_hit_ = create_subscription<std_msgs::msg::Empty>(
         "/arms/hit", 10, [this](std_msgs::msg::Empty::SharedPtr) {
@@ -423,13 +381,6 @@ class ArmsControlNode : public rclcpp::Node {
           sm_->on_external_hit();
         });
 
-    // 드론 실제 자세(브리지가 PX4 ATTITUDE 를 발행) → 자세 피드백 각속도 제어에 사용
-    sub_attitude_ = create_subscription<geometry_msgs::msg::Vector3>(
-        "/arms/attitude", 10,
-        [this](geometry_msgs::msg::Vector3::SharedPtr msg) {
-          att_roll_deg_  = att_roll_sign_  * msg->x;
-          att_pitch_deg_ = att_pitch_sign_ * msg->y;
-        });
 
     // ----------------------------------------------------------------
     // Control loop timer
@@ -480,7 +431,8 @@ class ArmsControlNode : public rclcpp::Node {
     lm.x = std::isfinite(tau) ? std::min(tau, 9.99) : 9.99;  // 무한대(미접근)는 9.99로 표시
     lm.y = loom_s_ema_;
     lm.z = loom_rate_ema_;
-    pub_loom_->publish(lm);
+    if (pub_loom_->get_subscription_count() > 0)  // 튜닝용: 구독자 있을 때만 발행
+      pub_loom_->publish(lm);
   }
 
   static double apply_deadzone(double e, double dz) {
@@ -594,12 +546,11 @@ class ArmsControlNode : public rclcpp::Node {
 
       kp_now_ = rkp_;
 
-      // ---- ① 자세 보정 LOS (카메라-기울기 결합 제거) ----
-      //   픽셀 오차는 기체가 기울면 오염된다(기울면 카메라도 기울어 표적이 딴 데 있는 듯 보임).
-      //   실제 자세(att_*_deg_, 브리지가 발행)로 그 성분을 되돌려 '공의 진짜 방향(LOS)'을 얻음.
-      //   att_comp ≈ 1/half_FOV. 0이면 보정 off(기존 동작). 과하면 발산 → 0부터 올려 튜닝.
-      double los_x = filt_err_x_ + att_comp_ * att_roll_deg_;
-      double los_y = filt_err_y_ + att_comp_ * att_pitch_deg_;
+      // ---- LOS = 픽셀 오차 ----
+      //   (예전엔 실제 자세로 카메라-기울기 성분을 보정했으나, acro 제어 전환으로 attitude
+      //    의존을 제거함. FC 가 ACRO 로 각속도를 직접 처리하므로 젯슨 자세 루프 불필요.)
+      double los_x = filt_err_x_;
+      double los_y = filt_err_y_;
 
       // ---- 중앙 데드존 (보정된 LOS 기준) ----
       double ex = apply_deadzone(los_x, deadzone_);
@@ -653,17 +604,12 @@ class ArmsControlNode : public rclcpp::Node {
           ldx = std::clamp(ldx, -pn_los_clamp_, pn_los_clamp_);
           ldy = std::clamp(ldy, -pn_los_clamp_, pn_los_clamp_);
         }
-        // 종말 부스트는 신뢰거리 기반이었으나 3D 거리 제거로 비활성화.
-        //   (필요하면 looming τ/bbox 크기 기반으로 재구현)
-        terminal_active_ = false;
-        double eff_max_tilt = terminal_active_ ? pn_commit_max_tilt_ : max_tilt_deg_;
         double rc = pn_nav_gain_ * ldx + pn_center_gain_ * los_x;
         double pc = pn_nav_gain_ * ldy + pn_center_gain_ * los_y;
-        roll_deg  = roll_sign_  * std::clamp(rc, -eff_max_tilt, eff_max_tilt);
-        pitch_deg = pitch_sign_ * std::clamp(pc, -eff_max_tilt, eff_max_tilt);
+        roll_deg  = roll_sign_  * std::clamp(rc, -max_tilt_deg_, max_tilt_deg_);
+        pitch_deg = pitch_sign_ * std::clamp(pc, -max_tilt_deg_, max_tilt_deg_);
       } else {
         // ===== 추미 (Pursuit): PID + 시간기반 리드 (기존/검증됨) =====
-        terminal_active_ = false;   // 종말 부스트는 PN 전용
         double emag_g = std::hypot(ex, ey);
         double tgt_spd = std::hypot(err_dot_x_, err_dot_y_);   // 표적 각속도(리드 신호)
         double gain_scale = 1.0;
@@ -720,7 +666,6 @@ class ArmsControlNode : public rclcpp::Node {
       kp_now_ = rkp_;
       thrust = 0.f;
       align_locked_ = false;
-      terminal_active_ = false;
       pn_init_ = false;   // alpha-beta 추정기 재초기화 (다음 TRACK 진입 시)
       losf_x_ = losf_y_ = losf_x_dot_ = losf_y_dot_ = 0.0;
     }
@@ -844,18 +789,14 @@ class ArmsControlNode : public rclcpp::Node {
         //               정규화 → PX4 ACRO 가 그 각속도로 회전 (자동수평 없음, 민첩).
         //   아니면    : '각도[deg]' 명령 → max_angle 정규화 → PX4 Stabilized(자동수평).
         if (acro_mode_) {
-          // ---- 자세 피드백 캐스케이드 (제대로 된 각속도 제어) ----
-          //   비전 PID 출력(roll_deg)=목표 기울기[deg] → ±max_tilt 제한 →
-          //   회전명령 = att_p×(목표기울기 − 실제기울기). 목표 도달 시 rate 0 → 기울기 '유지'.
-          //   → 움직이는 공 속도에 맞는 steady lean 을 잡고 유지 = 뒤처짐 해결.
-          // 종말 부스트: 근거리(commit_dist 이내)에선 기울기·자세게인을 순간 상향해
-          //   빠른 크로싱을 끝까지 추종(박기). 짧은 순간이라 발진 없음.
-          double eff_tilt  = terminal_active_ ? pn_commit_max_tilt_ : max_tilt_deg_;
-          double eff_att_p = terminal_active_ ? pn_commit_att_p_     : att_p_;
-          double roll_des  = std::clamp(roll_deg,  -eff_tilt, eff_tilt);
-          double pitch_des = std::clamp(pitch_deg, -eff_tilt, eff_tilt);
-          double roll_rate  = eff_att_p * (roll_des  - att_roll_deg_);
-          double pitch_rate = eff_att_p * (pitch_des - att_pitch_deg_);
+          // ---- 각속도 명령 (자세 피드백 없음) ----
+          //   비전 유도 출력(roll_deg)을 ±max_tilt 로 제한 후 att_p 게인으로 각속도[deg/s]
+          //   명령을 만든다. 실제 자세 피드백은 쓰지 않는다 — 자동=PX4 ACRO 이므로 FC 가
+          //   그 각속도로 직접 회전(자동수평 없음).
+          double roll_des  = std::clamp(roll_deg,  -max_tilt_deg_, max_tilt_deg_);
+          double pitch_des = std::clamp(pitch_deg, -max_tilt_deg_, max_tilt_deg_);
+          double roll_rate  = att_p_ * roll_des;
+          double pitch_rate = att_p_ * pitch_des;
           crsf[0] = CrsfOutput::norm_to_crsf(roll_rate  / max_rate_dps_);
           crsf[1] = CrsfOutput::norm_to_crsf(pitch_rate / max_rate_dps_);
         } else {
@@ -886,12 +827,14 @@ class ArmsControlNode : public rclcpp::Node {
       }
     }
 
-    // ---- Debug publish ----
-    geometry_msgs::msg::Vector3 dbg;
-    dbg.x = roll_deg;
-    dbg.y = pitch_deg;
-    dbg.z = thrust;
-    pub_dbg_->publish(dbg);
+    // ---- Debug publish (UI 화살표용) — 구독자 있을 때만 ----
+    if (pub_dbg_->get_subscription_count() > 0) {
+      geometry_msgs::msg::Vector3 dbg;
+      dbg.x = roll_deg;
+      dbg.y = pitch_deg;
+      dbg.z = thrust;
+      pub_dbg_->publish(dbg);
+    }
 
     // ---- FIRE one-shot ----
     if (state == State::FIRE && !fire_sent_) {
@@ -1040,11 +983,8 @@ class ArmsControlNode : public rclcpp::Node {
   double pursuit_gate_{0.25};
   double lead_dot_alpha_{0.2};
   double lead_clamp_{0.6};
-  double att_p_{6.0};
+  double att_p_{6.0};          // 유도출력(목표기울기)→각속도 변환 게인 (자세 피드백 없음)
   double max_tilt_deg_{35.0};
-  double att_roll_sign_{1.0};
-  double att_pitch_sign_{-1.0};
-  double att_comp_{0.0};
   double lead_dist_{0.02};
   // 유도(Guidance): 추미(0) / 비례항법 PN(1)
   int    guidance_mode_{0};
@@ -1053,23 +993,14 @@ class ArmsControlNode : public rclcpp::Node {
   double pn_alpha_{0.5};
   double pn_beta_{0.15};
   double pn_los_clamp_{1.5};
-  double pn_commit_dist_{5.0};
-  double pn_commit_clamp_{0.5};
-  double pn_commit_att_p_{6.5};
-  double pn_commit_max_tilt_{58.0};
-  bool   terminal_active_{false};   // 종말 부스트 활성(PN 근거리) → 캐스케이드가 참조
   // alpha-beta 표적 상태추정 (매끈한 LOS + LOS각속도)
   double losf_x_{0.0}, losf_y_{0.0};
   double losf_x_dot_{0.0}, losf_y_dot_{0.0};
   bool   pn_init_{false};
-  double att_roll_deg_{0.0};    // 브리지에서 받은 드론 실제 자세
-  double att_pitch_deg_{0.0};
 
   rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr sub_joy_;
-  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_reset_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_hit_;
-  rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr sub_attitude_;
   rclcpp::Publisher<arms_msgs::msg::MissionState>::SharedPtr pub_state_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_dbg_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;
