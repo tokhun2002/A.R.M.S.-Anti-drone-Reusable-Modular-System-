@@ -50,7 +50,7 @@ ALT = 42.0          # 기본 비행 고도 [m] (드론 도달가능·추락방�
 # 광역 비행: 카메라 화각 밖 먼 지점에서 시작 → 대각선으로 시야 통과 → 반대편 먼 곳으로 이탈.
 # 화각 제약 scale 을 제거하고 SPAN 을 기존(28) 대비 ~2.5배로 키움.
 SPAN = 100.0         # 대각선 가로지르는 총 거리 [m] (먼곳→먼곳). x/y 각각 ±SPAN/2 이동
-SPEED = 1.6        # 진행 속도 [m/s] (단일 속도, 패널 슬라이더로 실시간 조절)
+SPEED = 3.6        # 진행 속도 [m/s] (3.6m/s 명중 검증값, 패널 슬라이더로 실시간 조절)
 RATE_HZ = 60.0      # 위치 갱신 주기
 PAUSE_SEC = 1.5     # 한 번 지나간 뒤 재등장까지 대기 [s]
 HIDE_Z = -100.0     # 숨길 때 보내는 지하 z [m] (화면에서 안 보임)
@@ -144,7 +144,7 @@ class BalloonReferee(Node):
                 f"gz dynamic pose 모델들: {[p.name for p in msg.pose]}")
         for p in msg.pose:
             n = p.name
-            if "drone" in n and n != MODEL:
+            if ("drone" in n or "x500" in n) and n != MODEL:
                 self._drone_pos = (p.position.x, p.position.y, p.position.z)
                 if not self._drone_seen:
                     self._drone_seen = True
@@ -210,8 +210,7 @@ class BalloonReferee(Node):
                 nz = self._ball_pos[2] + kd[2] * step
                 set_pose(nx, ny, nz)
                 self._ball_pos = (nx, ny, nz)
-            else:
-                set_pose(0.0, 0.0, HIDE_Z)      # 날아간 뒤 숨김
+            # 튕김이 끝나면 그 자리에 그대로 둔다 (set_pose 안 보냄 → gz가 위치 유지 → 안 사라짐)
             return
 
         # 재등장 대기 중이면 풍선 숨김

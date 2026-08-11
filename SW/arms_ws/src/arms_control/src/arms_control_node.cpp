@@ -649,9 +649,13 @@ class ArmsControlNode : public rclcpp::Node {
         // ===== 추미 (Pursuit): PID + 시간기반 리드 (기존/검증됨) =====
         terminal_active_ = false;   // 종말 부스트는 PN 전용
         double emag_g = std::hypot(ex, ey);
+        double tgt_spd = std::hypot(err_dot_x_, err_dot_y_);   // 표적 각속도(리드 신호)
         double gain_scale = 1.0;
-        if (emag_g < 0.08)      gain_scale = 0.5;
-        else if (emag_g < 0.20) gain_scale = 0.75;
+        // 중앙 근처 게인 감쇠는 '느린/정지' 표적에서만(지터 방지). 빠른 공은 full 게인 유지 → 뒤처짐 방지.
+        if (tgt_spd < 0.2) {
+          if (emag_g < 0.08)      gain_scale = 0.5;
+          else if (emag_g < 0.20) gain_scale = 0.75;
+        }
         double t_lead = lead_gain_;
         if (distance_valid()) t_lead += lead_dist_ * std::min(last_distance_, 15.0);
         double ex_lead = ex + t_lead * err_dot_x_;
