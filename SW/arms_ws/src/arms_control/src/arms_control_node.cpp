@@ -19,10 +19,7 @@
 #include "geometry_msgs/msg/vector3.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/joy.hpp"
-#include "sensor_msgs/msg/laser_scan.hpp"
-#include "sensor_msgs/msg/range.hpp"
 #include "std_msgs/msg/empty.hpp"
-#include "std_msgs/msg/float64.hpp"
 
 using namespace std::chrono_literals;
 
@@ -38,8 +35,13 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("mission.lock_duration_sec", 2.0);
     declare_parameter("mission.detection_timeout_sec", 1.0);
     declare_parameter("mission.lock_box_tolerance", 0.15);
-    declare_parameter("mission.fire_distance_m", 5.0);
     declare_parameter("mission.fire_align_tol", 0.2);  // FIRE 정렬 허용오차(가짜명중 방지)
+    // 비전 looming(τ) 기반 FIRE — 거리센서 없이 bbox 팽창률로 충돌 임박을 판정.
+    //   (3D 거리는 실기체에서 못 쓰므로 sim 에서도 제거. FIRE 는 τ 로만.)
+    declare_parameter("mission.tau_fire_sec", 0.3);      // 충돌까지 시간(τ) 임계 [s]
+    declare_parameter("mission.loom_s_min", 0.1);        // FIRE 최소 bbox 크기(정규화)
+    declare_parameter("mission.loom_size_alpha", 0.3);   // bbox 크기 EMA (지터 억제)
+    declare_parameter("mission.loom_rate_alpha", 0.3);   // 크기변화율(ṡ) EMA
 
     declare_parameter("control.roll_pid.kp", 15.0);
     declare_parameter("control.roll_pid.ki", 0.5);
@@ -124,10 +126,14 @@ class ArmsControlNode : public rclcpp::Node {
         get_parameter("mission.detection_timeout_sec").as_double();
     sm_params.lock_box_tolerance =
         get_parameter("mission.lock_box_tolerance").as_double();
-    sm_params.fire_distance_m =
-        get_parameter("mission.fire_distance_m").as_double();
     sm_params.fire_align_tol =
         get_parameter("mission.fire_align_tol").as_double();
+    sm_params.tau_fire_sec =
+        get_parameter("mission.tau_fire_sec").as_double();
+    sm_params.loom_s_min =
+        get_parameter("mission.loom_s_min").as_double();
+    loom_size_alpha_ = get_parameter("mission.loom_size_alpha").as_double();
+    loom_rate_alpha_ = get_parameter("mission.loom_rate_alpha").as_double();
 
     auto log_fn = [this](const std::string& msg) {
       RCLCPP_INFO(get_logger(), "%s", msg.c_str());
@@ -283,8 +289,14 @@ class ArmsControlNode : public rclcpp::Node {
               pn_commit_att_p_ = p.as_double();
             else if (n == "control.pn_commit_max_tilt")
               pn_commit_max_tilt_ = p.as_double();
-            else if (n == "mission.fire_distance_m")
-              sm_->set_fire_distance(p.as_double());
+            else if (n == "mission.tau_fire_sec")
+              sm_->set_tau_fire(p.as_double());
+            else if (n == "mission.loom_s_min")
+              sm_->set_loom_s_min(p.as_double());
+            else if (n == "mission.loom_size_alpha")
+              loom_size_alpha_ = p.as_double();
+            else if (n == "mission.loom_rate_alpha")
+              loom_rate_alpha_ = p.as_double();
             else if (n == "control.deriv_lpf_alpha") {
               deriv_lpf_alpha_ = p.as_double();
               pid_roll_->set_deriv_alpha(deriv_lpf_alpha_);
@@ -331,7 +343,8 @@ class ArmsControlNode : public rclcpp::Node {
     // ----------------------------------------------------------------
     pub_state_ = create_publisher<arms_msgs::msg::MissionState>("/arms/mission_state", 10);
     pub_dbg_  = create_publisher<geometry_msgs::msg::Vector3>("/arms/control_debug", 10);
-    pub_dist_ = create_publisher<std_msgs::msg::Float64>("/arms/debug_distance", 10);
+    // looming 튜닝용: x=τ[s](미접근/무한대는 9.99로 캡), y=bbox크기(EMA), z=크기변화율 ṡ
+    pub_loom_ = create_publisher<geometry_msgs::msg::Vector3>("/arms/debug_looming", 10);
 
     // ----------------------------------------------------------------
     // ROS subscribers
@@ -342,37 +355,7 @@ class ArmsControlNode : public rclcpp::Node {
         "/arms/detections", best_effort_qos,
         [this](arms_msgs::msg::DetectionArray::SharedPtr msg) {
           sm_->on_detection(msg->detections);
-        });
-
-    sub_distance_ = create_subscription<sensor_msgs::msg::Range>(
-        "/arms/distance", best_effort_qos,
-        [this](sensor_msgs::msg::Range::SharedPtr msg) {
-          cache_distance(msg->range);
-          sm_->on_distance(msg->range);
-        });
-
-    // 심판이 주는 실제 표적거리(ground truth). 시뮬 라이다가 기울면서 표적을 놓쳐
-    // d=-1.0/엉뚱한 값이 되는 문제를 우회 → 신뢰 거리로 FIRE 판정.
-    sub_range_ = create_subscription<std_msgs::msg::Float64>(
-        "/arms/target_range", 10,
-        [this](std_msgs::msg::Float64::SharedPtr msg) {
-          cache_distance(msg->data);
-          sm_->on_distance(msg->data);
-        });
-
-    sub_scan_ = create_subscription<sensor_msgs::msg::LaserScan>(
-        "/arms/scan_raw", best_effort_qos,
-        [this](sensor_msgs::msg::LaserScan::SharedPtr msg) {
-          float best = std::numeric_limits<float>::infinity();
-          for (float r : msg->ranges) {
-            if (r >= msg->range_min && r <= msg->range_max && r < best) {
-              best = r;
-            }
-          }
-          // ★ SITL: 라이다는 기울면 표적을 놓쳐 엉뚱한 값(51m 등)을 줘서 심판 실제거리와
-          //   충돌(거리 널뛰기)한다. 그래서 거리 판정은 심판 target_range 만 쓰고 라이다는
-          //   피드하지 않는다. (실기체에선 이 라이다/레이더가 거리원이 됨)
-          (void)best;
+          update_looming(msg);
         });
 
     // BEST_EFFORT 로 구독: uart 노드(SensorDataQoS=best_effort)와 GUI(reliable)
@@ -455,16 +438,40 @@ class ArmsControlNode : public rclcpp::Node {
   // ----------------------------------------------------------------
   // Helpers
   // ----------------------------------------------------------------
-  void cache_distance(double d) {
-    if (std::isfinite(d) && d > 0.0) {
-      last_distance_ = d;
-      last_distance_time_ = now();
+  // 비전 looming: bbox 크기의 팽창률로 충돌까지 시간 τ 를 추정해 FIRE 판정에 넘긴다.
+  //   τ = s/ṡ = d/v_closing. 초점거리·표적 실제크기가 소거되므로 카메라 스펙·표적
+  //   크기 모두에 무관하다(작은 x500도, 큰 풍선도 같은 로직으로 접촉 직전 발사).
+  void update_looming(const arms_msgs::msg::DetectionArray::SharedPtr & msg) {
+    if (msg->detections.empty()) { loom_init_ = false; return; }  // 표적 소실 → 추정 리셋
+    // 검출 노드는 표적 1개만 발행. sphere/compact 표적이라 지름∝크기, 한 축 clip 대비 max.
+    const auto & b = msg->detections.front();
+    double s = std::max(b.width, b.height);
+    rclcpp::Time t = now();
+    if (!loom_init_) {                       // 첫 프레임: 초기화만 (rate 계산 불가)
+      loom_s_ema_ = s;
+      loom_rate_ema_ = 0.0;
+      loom_last_time_ = t;
+      loom_init_ = true;
+      return;
     }
-  }
+    double dt = (t - loom_last_time_).seconds();
+    loom_last_time_ = t;
+    if (dt <= 1e-3) return;                   // 같은 프레임/역행 시각 방어
+    double s_prev = loom_s_ema_;
+    loom_s_ema_ = loom_size_alpha_ * s + (1.0 - loom_size_alpha_) * loom_s_ema_;
+    double rate = (loom_s_ema_ - s_prev) / dt;  // ṡ (정규화크기/초)
+    loom_rate_ema_ = loom_rate_alpha_ * rate + (1.0 - loom_rate_alpha_) * loom_rate_ema_;
+    // 닫히는 중(ṡ>0)일 때만 τ 유효. 아니면 무한대로 두어 FIRE 안 되게.
+    double tau = (loom_rate_ema_ > 1e-4)
+                   ? (loom_s_ema_ / loom_rate_ema_)
+                   : std::numeric_limits<double>::infinity();
+    sm_->on_looming(tau, loom_s_ema_);
 
-  bool distance_valid() {
-    if (last_distance_ <= 0.0) return false;
-    return (now() - last_distance_time_).seconds() < 0.5;
+    geometry_msgs::msg::Vector3 lm;
+    lm.x = std::isfinite(tau) ? std::min(tau, 9.99) : 9.99;  // 무한대(미접근)는 9.99로 표시
+    lm.y = loom_s_ema_;
+    lm.z = loom_rate_ema_;
+    pub_loom_->publish(lm);
   }
 
   static double apply_deadzone(double e, double dz) {
@@ -637,9 +644,9 @@ class ArmsControlNode : public rclcpp::Node {
           ldx = std::clamp(ldx, -pn_los_clamp_, pn_los_clamp_);
           ldy = std::clamp(ldy, -pn_los_clamp_, pn_los_clamp_);
         }
-        // ★ 종말 부스트: 신뢰거리가 commit_dist 이내면 기울기 한계를 높여(더 강한 횡가속)
-        //   빠른 크로싱을 끝까지 추종해 박는다. (짧은 순간만이라 발진 안 함)
-        terminal_active_ = distance_valid() && last_distance_ < pn_commit_dist_;
+        // 종말 부스트는 신뢰거리 기반이었으나 3D 거리 제거로 비활성화.
+        //   (필요하면 looming τ/bbox 크기 기반으로 재구현)
+        terminal_active_ = false;
         double eff_max_tilt = terminal_active_ ? pn_commit_max_tilt_ : max_tilt_deg_;
         double rc = pn_nav_gain_ * ldx + pn_center_gain_ * los_x;
         double pc = pn_nav_gain_ * ldy + pn_center_gain_ * los_y;
@@ -652,8 +659,7 @@ class ArmsControlNode : public rclcpp::Node {
         double gain_scale = 1.0;
         if (emag_g < 0.08)      gain_scale = 0.5;
         else if (emag_g < 0.20) gain_scale = 0.75;
-        double t_lead = lead_gain_;
-        if (distance_valid()) t_lead += lead_dist_ * std::min(last_distance_, 15.0);
+        double t_lead = lead_gain_;   // 거리비례 리드(lead_dist)는 3D 거리 제거로 삭제
         double ex_lead = ex + t_lead * err_dot_x_;
         double ey_lead = ey + t_lead * err_dot_y_;
         roll_deg = roll_sign_ * gain_scale * pid_roll_->compute(ex_lead, dt);
@@ -684,12 +690,12 @@ class ArmsControlNode : public rclcpp::Node {
 
       if (++dbg_count_ % 6 == 0) {
         RCLCPP_INFO(get_logger(),
-                    "TRACK[%s] err=(%.2f,%.2f) losdot=(%.2f,%.2f) d=%.1fm roll=%.1f pitch=%.1f",
+                    "TRACK[%s] err=(%.2f,%.2f) losdot=(%.2f,%.2f) bbox=%.2f roll=%.1f pitch=%.1f",
                     guidance_mode_ == 1 ? "PN" : "PUR",
                     filt_err_x_, filt_err_y_,
                     guidance_mode_ == 1 ? losf_x_dot_ : err_dot_x_,
                     guidance_mode_ == 1 ? losf_y_dot_ : err_dot_y_,
-                    distance_valid() ? last_distance_ : -1.0, roll_deg,
+                    loom_s_ema_, roll_deg,
                     pitch_deg);
       }
     } else {
@@ -836,10 +842,6 @@ class ArmsControlNode : public rclcpp::Node {
     dbg.z = thrust;
     pub_dbg_->publish(dbg);
 
-    std_msgs::msg::Float64 dist_msg;
-    dist_msg.data = distance_valid() ? last_distance_ : -1.0;
-    pub_dist_->publish(dist_msg);
-
     // ---- FIRE one-shot ----
     if (state == State::FIRE && !fire_sent_) {
       fire_sent_ = true;
@@ -924,8 +926,15 @@ class ArmsControlNode : public rclcpp::Node {
   double kp_now_{0.0};
   double deadzone_{0.04};
   double deriv_lpf_alpha_{0.25};
-  double last_distance_{0.0};
-  rclcpp::Time last_distance_time_;
+
+  // 비전 looming(τ) 상태 — bbox 크기 EMA 와 팽창률 EMA 로 충돌까지 시간 추정
+  double loom_size_alpha_{0.3};
+  double loom_rate_alpha_{0.3};
+  double loom_s_ema_{0.0};
+  double loom_rate_ema_{0.0};
+  bool   loom_init_{false};
+  rclcpp::Time loom_last_time_;
+
   int dbg_count_{0};
   double control_rate_hz_{30.0};
 
@@ -998,16 +1007,13 @@ class ArmsControlNode : public rclcpp::Node {
   double att_pitch_deg_{0.0};
 
   rclcpp::Subscription<arms_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
-  rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr sub_distance_;
-  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr sub_range_;
-  rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr sub_scan_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr sub_joy_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_reset_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr sub_hit_;
   rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr sub_attitude_;
   rclcpp::Publisher<arms_msgs::msg::MissionState>::SharedPtr pub_state_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_dbg_;
-  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_dist_;
+  rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 
   double rkp_{0}, rki_{0}, rkd_{0}, rlim_{0};

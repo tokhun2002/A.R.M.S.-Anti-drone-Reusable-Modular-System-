@@ -95,16 +95,16 @@ void StateMachine::on_launch_button()
   }
 }
 
-void StateMachine::on_distance(double distance_m)
+void StateMachine::on_looming(double tau_sec, double bbox_size)
 {
   if (state_ != State::TRACK) return;
-  // 무효(-1/0) 라이다 값으로는 절대 발사 안 함. (-1 < fire_distance 라 예전엔 즉시 가짜명중)
-  if (!(distance_m > 0.0)) return;
-
-  // FIRE 는 "요격거리 이내" + "공이 화면 중앙 근처(정렬)" 둘 다 만족해야 발생.
+  // ① 최소 크기 게이트: 표적이 화면에서 충분히 커야(=가까워야) 발사. 원거리/노이즈 배제.
+  if (bbox_size < params_.loom_s_min) return;
+  // ② τ 유효성: 표적이 커지는(닫히는) 중일 때만 τ>0. 정지/멀어짐이면 무한대 → 발사 안 함.
+  if (!(tau_sec > 0.0)) return;
+  // ③ FIRE = 곧 충돌(τ 작음) + 정면 정렬. τ 는 스케일 불변이라 표적크기·카메라 무관.
   double emag = std::hypot(error_x_, error_y_);
-  if (distance_m < params_.fire_distance_m &&
-      emag < params_.fire_align_tol) {
+  if (tau_sec < params_.tau_fire_sec && emag < params_.fire_align_tol) {
     transition(State::FIRE);
   }
 }

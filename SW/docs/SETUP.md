@@ -209,8 +209,8 @@ ros2 topic echo /arms/mission_state
 # detection 확인
 ros2 topic echo /arms/detections
 
-# 표적 거리 확인 (SITL 심판 ground-truth)
-ros2 topic echo /arms/target_range
+# 발사 판정용 looming 확인 (x=τ, y=bbox크기, z=팽창률)
+ros2 topic echo /arms/debug_looming
 
 # 카메라 영상 확인
 ros2 run rqt_image_view rqt_image_view /arms/image_raw

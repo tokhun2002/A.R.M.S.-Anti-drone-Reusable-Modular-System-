@@ -24,7 +24,7 @@ import subprocess
 import rclpy
 from rclpy.node import Node
 from arms_msgs.msg import MissionState
-from std_msgs.msg import Empty, Float64
+from std_msgs.msg import Empty
 
 WORLD = "arms_sitl"
 MODEL = "red_ball"
@@ -54,9 +54,11 @@ SPEED = 1.6        # 진행 속도 [m/s] (단일 속도, 패널 슬라이더로 
 RATE_HZ = 60.0      # 위치 갱신 주기
 PAUSE_SEC = 1.5     # 한 번 지나간 뒤 재등장까지 대기 [s]
 HIDE_Z = -100.0     # 숨길 때 보내는 지하 z [m] (화면에서 안 보임)
-# 직격(kinetic) 판정: 드론-풍선 실제 3D 거리가 이 값 미만이면 진짜 충돌=명중.
-#   물리 "0m"는 모델 크기(풍선~0.5m + 드론~0.3m) 때문에 불가 → 표면이 닿는 중심거리 ≈ 1.2m.
-HIT_RADIUS = 3.5   # 직격 판정 반경[m] = 요격기 포획반경. 3.6m/s 명중 검증값(RTL 성공). 패널 슬라이더로 조정
+# 직격(kinetic) 판정: 드론-풍선 실제 3D 중심거리가 두 반경의 합보다 작으면
+#   표면이 실제로 닿음 = 진짜 충돌. (그물 포획이 아니라 직접 타격이라 표면 접촉으로 판정)
+BALLOON_RADIUS = 1.0    # red_ball sphere 반경 [m] (world arms_sitl.sdf)
+DRONE_RADIUS   = 0.3    # arms_drone 유효 반경 [m] (동체+로터 대략)
+HIT_RADIUS = BALLOON_RADIUS + DRONE_RADIUS   # ≈1.3m: 실제 표면 접촉. 패널 슬라이더로 미세조정
 
 
 def set_pose(x, y, z):
@@ -120,8 +122,6 @@ class BalloonReferee(Node):
                                  self.cb_state, 10)
         # 실제 충돌(직격) 발생을 제어노드에 알림 → 드론 RTL 트리거
         self._hit_pub = self.create_publisher(Empty, "/arms/hit", 10)
-        # 드론-풍선 실제 3D 거리(ground truth) → 제어노드 FIRE 판정용 (라이다 대체)
-        self._range_pub = self.create_publisher(Float64, "/arms/target_range", 10)
         self._last_dist_log = 0.0     # 접근거리 로그 스로틀
         self._min_dist = 999.0        # 이번 패스 최소 접근거리
         self._last_move_t = 0.0       # 직전 이동 시각(실제 dt 계산용)
@@ -246,7 +246,7 @@ class BalloonReferee(Node):
             dz = z - self._drone_pos[2]
             dist = math.sqrt(dx * dx + dy * dy + dz * dz)
             self._min_dist = min(self._min_dist, dist)
-            self._range_pub.publish(Float64(data=dist))   # 실제 거리 → 제어노드 FIRE 판정
+            # 3D 거리는 control 로 내보내지 않는다(실기체 미지원). 접촉 판정·로그에만 내부 사용.
             hit_radius = self.get_parameter("hit_radius").value
             # 접근거리 진단 로그 (8m 이내, 0.4s 스로틀) — 진짜 몇 m까지 가는지 확인용
             if dist < 8.0 and (now - self._last_dist_log) > 0.4:

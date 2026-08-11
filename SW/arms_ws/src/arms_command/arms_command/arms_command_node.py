@@ -339,14 +339,14 @@ class PanelGUI:
         self.att_pitch_btn = tk.Button(asgn, text="자세Pitch: -", width=11, command=self.flip_att_pitch)
         self.att_pitch_btn.grid(row=0, column=1, padx=2)
 
-        # ── 발사거리 = 네트 포획 거리 (거의 접촉 ~3m). 접촉요격이라 작게. ──
-        self.fire_dist = tk.Scale(right, from_=1, to=30, resolution=0.5, orient="horizontal",
-                                  length=150, bg="#1e1e1e", fg="white", label="발사거리 [m] (네트포획~3)",
-                                  highlightthickness=0, troughcolor="#444")
-        self.fire_dist.set(3.0)
-        self.fire_dist.pack(pady=(10, 0))
-        self.fire_dist.bind("<ButtonRelease-1>",
-                            lambda e: ros_param_set("mission.fire_distance_m", float(self.fire_dist.get())))
+        # ── 발사 τ = 충돌까지 시간 임계(비전 looming). 작을수록 접촉 직전에 발사. ──
+        self.tau_fire = tk.Scale(right, from_=0.1, to=1.0, resolution=0.05, orient="horizontal",
+                                 length=150, bg="#1e1e1e", fg="white", label="발사 τ [s] (충돌까지)",
+                                 highlightthickness=0, troughcolor="#444")
+        self.tau_fire.set(0.3)
+        self.tau_fire.pack(pady=(10, 0))
+        self.tau_fire.bind("<ButtonRelease-1>",
+                           lambda e: ros_param_set("mission.tau_fire_sec", float(self.tau_fire.get())))
         # 포획반경(HIT_RADIUS) — 빠른 공일수록 최소접근이 커지니 ↑ (심판 직격 판정)
         self.hit_radius = tk.Scale(right, from_=1, to=10, resolution=0.5, orient="horizontal",
                                    length=150, bg="#1e1e1e", fg="white", label="포획반경 [m] (빠를수록↑)",

@@ -25,8 +25,9 @@ struct SMParams {
   double lock_duration_sec{2.0};
   double detection_timeout_sec{1.0};
   double lock_box_tolerance{0.15};
-  double fire_distance_m{5.0};
-  double fire_align_tol{0.2};   // FIRE 조건: 거리뿐 아니라 이 오차 이내로 '중앙 정렬'돼야 (가짜명중 방지)
+  double fire_align_tol{0.2};   // FIRE 조건: 이 오차 이내로 '중앙 정렬'돼야 (가짜명중 방지)
+  double tau_fire_sec{0.3};     // 비전 looming: 충돌까지 시간(τ) 이 값 미만이면 발사
+  double loom_s_min{0.1};       // FIRE 최소 bbox 크기(정규화). 원거리/노이즈 오탐 차단
 };
 
 class StateMachine {
@@ -38,13 +39,16 @@ public:
   // ---------- external events ----------
   void on_detection(const std::vector<arms_msgs::msg::BoundingBox> & detections);
   void on_launch_button();
-  void on_distance(double distance_m);
+  // 비전 looming(τ) 기반 FIRE 판정. τ=충돌까지 시간, bbox_size=현재 표적 크기(정규화).
+  // τ 는 스케일 불변 → 표적 실제크기·카메라 스펙 무관(작은 x500도 큰 풍선도 동일).
+  void on_looming(double tau_sec, double bbox_size);
   void on_fire_complete();
   void arm();
   void disarm();
   void on_landed();
   void force_search();   // 외부 RESET: 어떤 상태든 SEARCH 로 강제 복귀
-  void set_fire_distance(double d) { params_.fire_distance_m = d; }  // 런타임 발사거리 조정
+  void set_tau_fire(double t)      { params_.tau_fire_sec = t; }     // 런타임 τ 임계 조정
+  void set_loom_s_min(double s)    { params_.loom_s_min = s; }       // 런타임 최소크기 게이트
   void on_external_hit();  // 심판의 실제충돌(직격) 통지 → FIRE 전이
 
   // ---------- accessors ----------

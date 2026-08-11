@@ -5,8 +5,15 @@ arms_control_node:
       lock_duration_sec: 0.3
       detection_timeout_sec: 1.0
       lock_box_tolerance: 0.5
-      fire_distance_m: 3.0      # 고정: 움직이는 공 검증값. 정지공 딱 맞춤은 슬라이더로 1~2
-      fire_align_tol: 0.2       # FIRE 정렬 허용오차 (거리+중앙정렬 둘 다 만족)
+      fire_align_tol: 0.2       # FIRE 정렬 허용오차 (중앙정렬 만족해야 발사)
+      # ── 비전 looming(τ) 기반 FIRE ── 거리센서 없이 bbox 팽창률로 충돌 임박 판정.
+      #   (3D 거리는 실기체에서 못 쓰므로 sim 포함 전면 제거. 발사는 τ 로만.)
+      #   τ = bbox크기 / 크기변화율 = 충돌까지 시간. 스케일 불변 → 표적크기·카메라 무관.
+      #   작은 x500도 큰 풍선도 동일 로직으로 접촉 직전 발사.
+      tau_fire_sec: 0.3         # τ 이 값 미만 + 정렬 + 최소크기 → FIRE. 늦으면 ↓, 빨리 터지면 ↑
+      loom_s_min: 0.1           # FIRE 최소 bbox 크기(정규화). 작은 x500 기준 낮게. 원거리/노이즈 차단
+      loom_size_alpha: 0.3      # bbox 크기 EMA (클수록 민첩/노이즈↑)
+      loom_rate_alpha: 0.3      # 크기변화율(ṡ) EMA (τ 안정화)
       sitl_auto_launch: true    # 락 되면 자동으로 즉시 추격 시작 → 공이 '접근할 때' 요격(꽁무니추격 방지). SITL 전용(실기체는 crsf_hw.yaml 덮어씀)
       auto_launch_delay_sec: 0.5
     # 발사 잠금장치 서보 (Jetson 하드웨어 PWM, sysfs).

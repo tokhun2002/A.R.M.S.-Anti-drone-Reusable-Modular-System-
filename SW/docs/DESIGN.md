@@ -134,7 +134,7 @@ graph TD
 | `arms_detection_node`      | `/arms/image_raw`                                                                        | `/arms/detections`<br/>`/arms/roi_image`<br/>`/arms/debug_image`<br/>`/arms/debug_absdiff` |
 | `arms_command_node`        | `/arms/mission_state`                                                                    | `/arms/command`                                                 |
 | `arms_command_hw_node` | —                                                                                        | `/arms/command`                                                 |
-| `arms_control_node`        | `/arms/detections`<br/>`/arms/command`<br/>`/arms/target_range`<br/>`/arms/hit`<br/>`/arms/reset_cmd` | `/arms/mission_state`<br/>`/arms/control_debug`<br/>CRSF serial |
+| `arms_control_node`        | `/arms/detections`<br/>`/arms/command`<br/>`/arms/hit`<br/>`/arms/reset_cmd` | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>CRSF serial |
 | `sitl_bridge_node`         | CRSF serial (`/tmp/crsf_rx`)                                                             | MAVLink RC_CHANNELS_OVERRIDE → PX4                              |
 | `arms_ui_node`             | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/control_debug` | —                                                           |
 
@@ -234,7 +234,7 @@ stateDiagram-v2
     LOCK --> TRACK : joy buttons[3] launch<br/>(또는 sitl_auto_launch 타이머)
     TRACK --> SEARCH : 타겟 소실
 
-    TRACK --> FIRE : 거리 < fire_distance_m + 표적 정렬<br/>또는 심판 명중(/arms/hit)
+    TRACK --> FIRE : 비전 looming τ &lt; tau_fire_sec + 정렬<br/>또는 심판 명중(/arms/hit, SITL)
     FIRE --> RTL : 페이로드 트리거 즉시 (mission_state 신호)
 
     RTL --> IDLE : 착륙 완료
@@ -250,7 +250,9 @@ mission:
   detection_confidence_threshold: 0.65
   lock_duration_sec: 2.0
   lost_frames_threshold: 10
-  fire_distance_m: 5.0
+  fire_align_tol: 0.2        # FIRE 정렬 허용오차
+  tau_fire_sec: 0.3         # 비전 looming: 충돌까지 시간(τ) 임계 [s] → FIRE
+  loom_s_min: 0.1           # FIRE 최소 bbox 크기(정규화)
   sitl_auto_launch: false
   auto_launch_delay_sec: 1.0
 
@@ -525,15 +527,15 @@ CRSF serial (/tmp/crsf_rx)
 arms_control_node
   |
   +-- [Subscribers]
-  |     /arms/detections   (DetectionArray)
-  |     /arms/target_range (Float64 → 거리 캐시 → FIRE 판정, SITL 심판 ground-truth)
-  |     /arms/hit          (Empty → 외부 명중 → FIRE)
+  |     /arms/detections   (DetectionArray → 검출 + 비전 looming τ)
+  |     /arms/hit          (Empty → 외부 명중 → FIRE. SITL 심판 접촉 / 실기체 IMU 충격)
   |     /arms/command      (Joy → 조종 입력 + 버튼)
   |     /arms/reset_cmd    (Empty → 강제 SEARCH 복귀)
   |
   +-- [Publishers]
   |     /arms/mission_state   (MissionState, 30Hz)
   |     /arms/control_debug   (Vector3, 30Hz — UI 화살표용)
+  |     /arms/debug_looming   (Vector3 — x=τ, y=bbox크기, z=팽창률; τ 튜닝용)
   |
   +-- [Serial Output]
   |     CRSF frames → crsf.port (30Hz)
@@ -542,7 +544,8 @@ arms_control_node
   |     evaluate detections → update state
   |     auto arm: effective_arm(ARM 스위치+재토글 래치) → IDLE → SEARCH
   |     launch button (joy buttons[3]) → LOCK→TRACK
-  |     distance < fire_distance_m (TRACK) → FIRE
+  |     비전 looming: τ=bbox크기/팽창률 < tau_fire_sec + 정렬 (TRACK) → FIRE
+  |       (거리센서·표적크기 무관. 3D 거리는 실기체 미지원이라 전면 제거)
   |
   +-- [PID Controller]  (TRACK / FIRE 상태에서 활성)
   |     error_x → roll_deg  [deg]
