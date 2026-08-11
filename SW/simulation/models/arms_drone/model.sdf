@@ -23,17 +23,18 @@
          base_link — 동체 + 센서
          ================================================================ -->
     <link name="base_link">
-      <!-- 요격드론 물리량: AUW ≈ 1.2kg(동체 1.15 + 로터 4×0.008 + 카메라).
-           관성은 경량 프레임 시작값 유지 — 무게↑로 climb 느려지니 track_throttle·hover 상향 필요. SITL 재검증 대상. -->
+      <!-- 요격드론 물리량: AUW = 1.05kg (실기체 실측 질량과 일치. 동체 1.008 + 로터 4×0.008 + 카메라 0.01).
+           관성은 이전값을 질량비(1.008/1.15≈0.877)로 스케일한 근사 — 실기체 실측 관성으로 교체하면
+           rate PID 튜닝 전이가 더 정확해진다. -->
       <inertial>
-        <mass>1.15</mass>
+        <mass>1.008</mass>
         <inertia>
-          <ixx>0.0022</ixx>
+          <ixx>0.0019</ixx>
           <ixy>0</ixy>
           <ixz>0</ixz>
-          <iyy>0.0022</iyy>
+          <iyy>0.0019</iyy>
           <iyz>0</iyz>
-          <izz>0.0038</izz>
+          <izz>0.0033</izz>
         </inertia>
       </inertial>
       <gravity>true</gravity>

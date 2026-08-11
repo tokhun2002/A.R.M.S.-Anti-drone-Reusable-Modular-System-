@@ -50,10 +50,10 @@ arms_control_node:
       prearm_throttle_max: -0.85   # throttle(axes[1]) 이 값 이하(최저)여야 arm 허용
       prearm_stick_tol: 0.15       # roll/pitch/yaw 중앙 허용오차
 
-      # ★ 물리량 변경(250급·TWR≈6·호버≈0.42)으로 아래 스로틀은 재설정된 시작값.
+      # ★ 물리량(AUW 1.05kg 실측·TWR≈2.72·호버≈0.61) 기준 스로틀. MPC_THR_HOVER 와 일치.
       #   구 "3.6m/s 검증값"(track 0.87)은 구 물리량 전용이라 폐기 → SITL 재검증 필요.
-      throttle: 0.42          # 베이스 = 새 호버
-      track_throttle: 0.85    # 1.2kg TRACK 상승 스로틀(호버 0.65 위로 충분히 → climb 확보). 못쫓으면↑
+      throttle: 0.61          # 베이스 = 호버 (1.05kg)
+      track_throttle: 0.85    # 1.05kg TRACK 상승 스로틀(호버 0.61 위로 충분히 → climb 확보). 못쫓으면↑
       lead_gain: 0.0          # 고정: 3.6m/s 명중 검증값 (PN이 리드 담당, 예측조준 OFF)
       lead_dot_alpha: 0.2    # 표적 속도추정 LPF (클수록 예측 민첩/노이즈↑)
       lead_clamp: 0.6        # 속도추정 스파이크 제한
@@ -67,7 +67,7 @@ arms_control_node:
       acro_mode: true    # ★ ACRO(각속도) 모드. 브리지 autonomous_acro 도 true 로 (짝).
       max_rate_dps: 400.0   # 풀스틱 각속도[deg/s] (PX4 MC_ACRO_R/P_MAX=400 와 일치). 250급 경량+저관성이라 상향(요격드론급 스냅)
       # 추격 궤적(Pursuit): 조준하며 처음부터 상승 (공쪽으로 대각선 비행)
-      hover_throttle: 0.65  # 1.2kg 호버값 (TWR≈2.4, sqrt(무게/최대추력)). 실제 호버와 일치必
+      hover_throttle: 0.61  # 1.05kg 호버값 (TWR≈2.72, sqrt(무게/최대추력)). MPC_THR_HOVER 와 일치
       pursuit_gate: 0.25    # 오차 이 이하면 full 상승(공쪽 돌진)
       # 자세 피드백(각속도 제어 캐스케이드) — 움직이는 공 뒤처짐 해결
       att_p: 3.5            # 자세루프 게인: rate=att_p×(목표각−실제각). 검증된 안정값(올리면 자가발진)
@@ -78,7 +78,7 @@ arms_control_node:
       att_comp: 0.012         # 자세보정 게인 (1.6m/s 명중 검증값). 발산하면 ↓
       lead_dist: 0.0        # 거리비례 예측 OFF (움직이는 표적 잡을때 조금씩↑)
       # ★★ 아래 PN 게인들은 구 물리량(1.36kg·둔감) 기준 "3.6m/s 검증값"이다.
-      #    250급·저관성·TWR6 로 기체 응답이 빨라졌으므로 SITL 재검증 필수:
+      #    1.05kg·저관성·TWR≈2.7 로 기체 응답이 빨라졌으므로 SITL 재검증 필수:
       #    빠른표적 못잡으면 pn_nav_gain↑, 떨리면 pn_nav_gain↓ 또는 pn_alpha/beta↓.
       #    응답이 빨라져 과조향/발진 시 pn_nav_gain·att_p·kp 부터 낮춰라.
       # ── 유도 방식 ── 0=추미(Pursuit, 기존/검증됨), 1=비례항법(PN, 빠른 표적용)
