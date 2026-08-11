@@ -3,14 +3,14 @@
 balloon_referee.py — 풍선을 "비행"시키고 "명중"을 판정/연출하는 SITL 심판 노드
 
 하는 일:
-  1) 타이머로 red_ball 모델 위치를 gz set_pose 서비스로 갱신 → 풍선이 하늘에서 떠다님
+  1) 타이머로 target_ball 모델 위치를 gz set_pose 서비스로 갱신 → 풍선이 하늘에서 떠다님
   2) /arms/mission_state 를 구독해서 상태가 FIRE 가 되면
      풍선을 멀리(지하)로 치워서 "명중(터짐)" 연출 + 로그 출력
   3) (옵션) 드론-풍선 거리 추정은 control 쪽 ray 센서가 담당하므로 여기선 연출만 함
 
 전제:
   - gz (Gazebo Harmonic) CLI 가 PATH 에 있어야 함  (`gz service` 사용)
-  - 월드 이름 = arms_sitl, 모델 이름 = red_ball
+  - 월드 이름 = arms_sitl, 모델 이름 = target_ball
 
 실행:
   source /opt/ros/humble/setup.bash
@@ -27,7 +27,9 @@ from arms_msgs.msg import MissionState
 from std_msgs.msg import Empty, Float64
 
 WORLD = "arms_sitl"
-MODEL = "red_ball"
+MODEL_BALLOON = "target_ball"   # 표적 A: 풍선(빨간 구)
+MODEL_DRONE = "target_uav"      # 표적 B: 적 드론(x500 외형). 이름에 drone/x500 없음 → 자기드론(arms_drone) 식별과 안 겹침
+MODEL = MODEL_BALLOON        # (하위호환/기본)
 
 # gz in-process transport:
 #   매 프레임 gz service CLI(≈0.38s/회)를 새로 띄우면 초당 ~2.6회밖에 못 보내 공이
@@ -59,15 +61,15 @@ HIDE_Z = -100.0     # 숨길 때 보내는 지하 z [m] (화면에서 안 보임
 HIT_RADIUS = 3.5   # 직격 판정 반경[m] = 요격기 포획반경. 3.6m/s 명중 검증값(RTL 성공). 패널 슬라이더로 조정
 
 
-def set_pose(x, y, z):
-    """모델을 지정 위치로 순간이동(teleport)시킨다.
+def set_pose(model, x, y, z):
+    """지정 모델을 지정 위치로 순간이동(teleport)시킨다.
 
     gz.transport 바인딩이 있으면 in-process 서비스 호출(빠름 → 부드러운 이동).
     없으면 gz service CLI 로 폴백(느림). 둘 다 블로킹 1회씩만 보내므로 큐 폭주 없음.
     """
     if _GZ_OK:
         req = _GzPose()
-        req.name = MODEL
+        req.name = model
         req.position.x = float(x)
         req.position.y = float(y)
         req.position.z = float(z)
@@ -77,7 +79,7 @@ def set_pose(x, y, z):
         except Exception:
             pass
         return
-    req = f'name: "{MODEL}", position: {{x: {x}, y: {y}, z: {z}}}'
+    req = f'name: "{model}", position: {{x: {x}, y: {y}, z: {z}}}'
     subprocess.run(
         ["gz", "service", "-s", f"/world/{WORLD}/set_pose",
          "--reqtype", "gz.msgs.Pose", "--reptype", "gz.msgs.Boolean",
@@ -98,6 +100,9 @@ class BalloonReferee(Node):
         self.declare_parameter("speed", SPEED)
         # hit_radius = 직격/포획 판정 반경[m] (패널 슬라이더). 빠른 공일수록 최소접근이 커지니 ↑
         self.declare_parameter("hit_radius", HIT_RADIUS)
+        # target = "balloon"(기본) | "drone" : UI 토글로 표적 종류 선택. 선택된 모델만 비행, 나머진 숨김.
+        self.declare_parameter("target", "balloon")
+        self.target_model = MODEL_BALLOON
         self.hit = False
         self.t = 0.0                    # 대각선 진행도 [0→1]
         self.pause_until = 0.0          # 재등장 대기 종료 시각
@@ -144,7 +149,7 @@ class BalloonReferee(Node):
                 f"gz dynamic pose 모델들: {[p.name for p in msg.pose]}")
         for p in msg.pose:
             n = p.name
-            if ("drone" in n or "x500" in n) and n != MODEL:
+            if ("drone" in n or "x500" in n) and n not in (MODEL_BALLOON, MODEL_DRONE):
                 self._drone_pos = (p.position.x, p.position.y, p.position.z)
                 if not self._drone_seen:
                     self._drone_seen = True
@@ -179,13 +184,27 @@ class BalloonReferee(Node):
         enabled = self.get_parameter("enabled").value
         now = self.get_clock().now().nanoseconds * 1e-9
 
+        # ---- 표적 종류 전환 (UI 토글: target 파라미터) ----
+        #   선택된 모델만 비행시키고, 직전 표적은 지하로 숨긴다. (명중은 거리기반이라 무손상)
+        tgt = str(self.get_parameter("target").value).lower()
+        want = MODEL_DRONE if tgt == "drone" else MODEL_BALLOON
+        if want != self.target_model:
+            old = self.target_model
+            self.target_model = want
+            set_pose(old, 0.0, 0.0, HIDE_Z)              # 이전 표적 숨김
+            bx, by, bz = self._ball_pos
+            set_pose(self.target_model, bx, by, bz)      # 새 표적을 현재 위치로 (비행 중이면 즉시 교체 보임)
+            self.get_logger().info(
+                f"표적 전환 → {'드론' if want == MODEL_DRONE else '풍선'} ({want})")
+
         # ---- 비활성 상태 처리 ----
-        #   · 초기 대기(발사 전): 공을 지하로 숨겨 화면에 안 보이게.
+        #   · 초기 대기(발사 전): 두 표적 모두 지하로 숨겨 화면에 안 보이게.
         #   · 발사 후 정지: 현재 위치에 그대로 멈춤(일시정지). set_pose 를 안 보내면
         #     Gazebo 가 마지막 위치를 유지하므로 사라지지 않고 제자리에 정지.
         if not enabled:
             if self._prev_enabled and not self._launched_once:
-                set_pose(0.0, 0.0, HIDE_Z)   # 발사 전 초기 스폰만 숨김
+                set_pose(MODEL_BALLOON, 0.0, 0.0, HIDE_Z)   # 발사 전 초기 스폰: 둘 다 숨김
+                set_pose(MODEL_DRONE, 0.0, 0.0, HIDE_Z)
             self._prev_enabled = False
             return
 
@@ -208,7 +227,7 @@ class BalloonReferee(Node):
                 nx = self._ball_pos[0] + kd[0] * step
                 ny = self._ball_pos[1] + kd[1] * step
                 nz = self._ball_pos[2] + kd[2] * step
-                set_pose(nx, ny, nz)
+                set_pose(self.target_model, nx, ny, nz)
                 self._ball_pos = (nx, ny, nz)
             # 튕김이 끝나면 그 자리에 그대로 둔다 (set_pose 안 보냄 → gz가 위치 유지 → 안 사라짐)
             return
@@ -235,7 +254,7 @@ class BalloonReferee(Node):
         x = (span / 2.0) * f
         y = -(span / 2.0) * f
         z = alt
-        set_pose(x, y, z)
+        set_pose(self.target_model, x, y, z)
         self._ball_pos = (x, y, z)
 
         # ── 직격(kinetic) 판정: 드론이 풍선에 실제로 닿으면(중심거리<HIT_RADIUS) 명중 ──
@@ -260,7 +279,7 @@ class BalloonReferee(Node):
             self.get_logger().warn("드론 위치 미수신 — 직격판정 불가 (gz 구독 확인 필요)")
 
         if self.t >= 1.0:
-            set_pose(0.0, 0.0, HIDE_Z)       # 반대편 먼 곳 통과 후 숨김
+            set_pose(self.target_model, 0.0, 0.0, HIDE_Z)   # 반대편 먼 곳 통과 후 숨김
             self.pause_until = now + PAUSE_SEC
             self._new_pass()                 # 재등장: 다시 먼 시작점부터
 

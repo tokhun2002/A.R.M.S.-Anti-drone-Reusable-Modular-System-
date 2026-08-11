@@ -36,7 +36,7 @@ socat PTY,raw,echo=0,link=/tmp/crsf_tx PTY,raw,echo=0,link=/tmp/crsf_rx &
 echo "CRSF 가상 시리얼: /tmp/crsf_tx (arms_control) ↔ /tmp/crsf_rx (arms_comm)"
 sleep 1
 
-# 수정한 월드(red_ball kinematic 등)를 PX4 월드 폴더로 복사 → 항상 최신 반영
+# 수정한 월드(target_ball kinematic 등)를 PX4 월드 폴더로 복사 → 항상 최신 반영
 PX4_WORLDS="$PX4_DIR/Tools/simulation/gz/worlds"
 if [ -d "$PX4_WORLDS" ] && [ -f "$ARMS_SW/simulation/worlds/arms_sitl.sdf" ]; then
   cp "$ARMS_SW/simulation/worlds/arms_sitl.sdf" "$PX4_WORLDS/arms_sitl.sdf"

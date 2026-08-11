@@ -8,7 +8,7 @@
   구성:
     - base_link       : 동체(커스텀 STL) + 센서(IMU/mag/baro/GPS) + collision
     - rotor 0~3       : 프로펠러 + 모터벨 + MulticopterMotorModel 플러그인
-    - upward_camera   : 위쪽 카메라 센서 (320x240 RGB, 30Hz)
+    - upward_camera   : 위쪽 카메라 센서 (720x480 RGB, 실기체 FPV 해상도)
 
   Gazebo 토픽:
     /arms_drone/upward_camera/image   (gz.msgs.Image)
@@ -360,8 +360,8 @@
           <horizontal_fov>2.0</horizontal_fov>   <!-- 광각 ~115° (반각 57°): 기동 중에도 표적 유지 -->
 
           <image>
-            <width>320</width>
-            <height>240</height>
+            <width>720</width>    <!-- 실기체 FPV 카메라 해상도(720x480, 3:2)에 맞춤 -->
+            <height>480</height>
             <format>R8G8B8</format>
           </image>
           <clip>
