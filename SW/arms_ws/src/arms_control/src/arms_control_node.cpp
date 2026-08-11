@@ -754,22 +754,29 @@ class ArmsControlNode : public rclcpp::Node {
       prearm_blocked_ = false;
     }
 
+    // ---- RTL 핸드오버 ----
+    //   FIRE 후 RTL 에서는 조종사가 수동 스위치를 안 올려도 자동으로 Altitude 모드 + 스틱
+    //   passthrough 로 넘어간다. 스틱을 안 건드리면 스프링 중앙 → Altitude 가 고도유지 = 호버.
+    //   조종사는 그대로 스틱 잡고 자기 위치로 몰고 와 착륙 → PX4 가 착지 후 auto-disarm.
+    const bool rtl_handover = (state == State::RTL);
+    const bool manual_out = joy_manual_mode_ || rtl_handover;
+
     // ---- CH5(FC arm) 결정 ----
+    //   RTL: 이미 비행 중이므로 무조건 armed 유지 (착지 후 PX4 COM_DISARM_LAND 가 무장해제).
     //   수동: manual_armed_ (재토글 안전장치 + pre-arm 스틱 idle 확인).
     //   자동: 스위치와 분리 — 상태머신 상태 기반(auto_arm_states_)으로 컨트롤 노드가 결정.
-    //   발행하는 mission_state.state 와 동일한 state 로 판정해 armed/state 를 일관되게 유지.
     const bool ch5_armed =
-        joy_manual_mode_
-            ? manual_armed_
-            : (auto_arm_states_.count(to_string(state)) > 0);
+        rtl_handover      ? true
+        : joy_manual_mode_ ? manual_armed_
+                           : (auto_arm_states_.count(to_string(state)) > 0);
 
     // ---- CRSF output ----
     {
       CrsfOutput::Channels crsf{};
       crsf.fill(CrsfOutput::CRSF_MIN);
 
-      if (joy_manual_mode_) {
-        // 수동 스틱 → AETR 채널 매핑.
+      if (manual_out) {
+        // 수동/RTL 핸드오버: 스틱 → AETR 채널 passthrough.
         //   L-stick: X=axes[0]=yaw,      Y=axes[1]=throttle
         //   R-stick: X=axes[2]=roll,     Y=axes[3]=pitch
         crsf[0] = CrsfOutput::norm_to_crsf(joy_axes_[2]);  // CH1 roll  = R-stick X
@@ -804,9 +811,9 @@ class ArmsControlNode : public rclcpp::Node {
       //   자동: 기본 발사(TRACK)부터 arm (control.auto_arm_states 로 조정).
       crsf[4] = ch5_armed ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
 
-      // CH6: flight mode — auto=PX4 Manual(172), manual=PX4 Altitude(1811).
-      //   모드 스위치(joy_manual_mode_)와 1:1. PX4쪽 RC_MAP_FLTMODE=6 필요.
-      crsf[5] = joy_manual_mode_ ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
+      // CH6: flight mode — auto=PX4 Manual/ACRO(172), manual|RTL=PX4 Altitude(1811).
+      //   RTL 이면 자동으로 Altitude 로 넘어가 조종사가 이어받아 수동 착륙. RC_MAP_FLTMODE=6.
+      crsf[5] = manual_out ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
 
       // CH7: kill switch (양쪽 모드 공통, FC가 직접 모터 차단)
       crsf[6] = joy_kill_ ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
