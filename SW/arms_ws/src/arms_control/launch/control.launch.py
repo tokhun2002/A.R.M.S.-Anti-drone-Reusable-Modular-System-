@@ -8,8 +8,8 @@ from ament_index_python.packages import get_package_share_directory
 def generate_launch_description():
     config_dir = Path(get_package_share_directory("arms_control")) / "config"
     config = config_dir / "control_params.yaml"
-    # 실제 하드웨어용 CRSF 포트/baud 오버레이 (ELRS TX 가 물린 UART).
-    crsf_hw = config_dir / "crsf_hw.yaml"
+    # 실기체 델타 전용 오버레이 (CRSF 포트만이 아니라 서보/게인/자동발진까지).
+    hw = config_dir / "hw_overrides.yaml"
 
     return LaunchDescription([
         Node(
@@ -17,6 +17,6 @@ def generate_launch_description():
             executable="arms_control_node",
             name="arms_control_node",
             output="screen",
-            parameters=[str(config), str(crsf_hw)],
+            parameters=[str(config), str(hw)],
         ),
     ])

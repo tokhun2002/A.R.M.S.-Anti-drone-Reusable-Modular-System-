@@ -14,11 +14,15 @@ arms_control_node:
       loom_s_min: 0.1           # FIRE 최소 bbox 크기(정규화). 작은 x500 기준 낮게. 원거리/노이즈 차단
       loom_size_alpha: 0.3      # bbox 크기 EMA (클수록 민첩/노이즈↑)
       loom_rate_alpha: 0.3      # 크기변화율(ṡ) EMA (τ 안정화)
-      sitl_auto_launch: true    # 락 되면 자동으로 즉시 추격 시작 → 공이 '접근할 때' 요격(꽁무니추격 방지). SITL 전용(실기체는 crsf_hw.yaml 덮어씀)
+      # 락 되면 사람이 LAUNCH 를 누르지 않아도 auto_launch_delay_sec 뒤에 스스로
+      # TRACK 으로 넘어간다. 공이 '접근할 때' 요격하려는 것(꽁무니 추격 방지).
+      #   SITL 전용이다. 실기체는 hw_overrides.yaml 이 false 로 덮어쓴다 —
+      #   한동안 그 주석만 있고 실제 오버라이드가 없어서 실기체도 true 였다.
+      sitl_auto_launch: true
       auto_launch_delay_sec: 0.5
     # 발사 잠금장치 서보 (Jetson 하드웨어 PWM, sysfs).
     #   기본 enabled=false → SITL/개발 PC 에서 /sys/class/pwm 를 건드리지 않는다.
-    #   실기체는 crsf_hw.yaml 이 enabled=true 로 덮어쓴다.
+    #   실기체는 hw_overrides.yaml 이 enabled=true 로 덮어쓴다.
     #   각도 방향은 lock_duty_ns/open_duty_ns 스왑으로 반전 (90°=1500000, 180°=2500000).
     servo:
       enabled: false
@@ -28,19 +32,25 @@ arms_control_node:
       lock_duty_ns: 1500000  # 90°  = 1.5ms (LOCK 기본)
       open_duty_ns: 2500000  # 180° = 2.5ms (OPEN 기본)
     control:
-      # ── 깨끗한 튜닝 기준점 (부가항 OFF, 낮은 kp). 여기서부터 하나씩 올려 튜닝. ──
+      # ── 이 파일의 값 = arms_control_node 의 declare_parameter 기본값과 동일하게
+      #    맞춰 둔다. 예전엔 kp 가 코드 15 / yaml 455 로 30배 달랐고, 파일이 안
+      #    실리면 아무 경고 없이 30배 약한 기체로 날았다. 값을 바꿀 땐 둘 다 바꿔라.
+      # ── 깨끗한 튜닝 기준점 (부가항 OFF). 여기서부터 하나씩 올려 튜닝. ──
       #   kp: 정지표적이 안떨고 중앙오면 조금씩↑, 떨리면 30%↓
-      #   그 다음 kd(감쇠)→att_p→(정지 안정 후)lead→att_comp 순.
+      #   그 다음 kd(감쇠)→(정지 안정 후)lead 순.
+      #   단위: 픽셀오차(정규화) → 각속도[deg/s]. 각도 단계는 없다.
+      #   ★ 아래 값은 옛 값 x 3.5 다. 없어진 att_p(=3.5)가 이 게인에 직렬로 곱해지고
+      #     있었으므로, 흡수해야 동작이 같다. output_limit 도 45 -> 157.5 [deg/s].
       roll_pid:
-        kp: 130.0
+        kp: 455.0
         ki: 0.0
-        kd: 1.0
-        output_limit: 45.0
+        kd: 3.5
+        output_limit: 157.5
       pitch_pid:
-        kp: 130.0
+        kp: 455.0
         ki: 0.0
-        kd: 1.0
-        output_limit: 45.0
+        kd: 3.5
+        output_limit: 157.5
       # 자동 모드 arm 시점: 스위치와 분리, 상태머신 상태로 컨트롤 노드가 결정.
       #   기본=발사(TRACK)부터 무장. SEARCH 등에서 arm 하려면 목록에 추가.
       auto_arm_states: ["SEARCH", "LOCK", "TRACK", "FIRE", "RTL"]   # SEARCH/LOCK(throttle 0)에서 미리 arm → TRACK서 throttle↑ 전에 armed 완료(PX4 high-throttle arm거부 회피). SITL 전용
@@ -52,7 +62,8 @@ arms_control_node:
 
       # ★ 물리량(AUW 1.05kg·추력 4kgf·TWR≈3.81·호버≈0.51) 기준 스로틀. MPC_THR_HOVER 와 일치.
       #   구 "3.6m/s 검증값"(track 0.87)은 구 물리량 전용이라 폐기 → SITL 재검증 필요.
-      throttle: 0.51          # 베이스 = 호버 (1.05kg, 모터 1kgf×4)
+      #   TRACK 추력은 hover_throttle ↔ track_throttle 보간이 전부다
+      #   (베이스 throttle 파라미터는 아무도 읽지 않아 삭제).
       track_throttle: 0.85    # 1.05kg TRACK 상승 스로틀(호버 0.51 위로 충분히 → climb 확보). 못쫓으면↑
       lead_gain: 0.0          # 고정: 3.6m/s 명중 검증값 (PN이 리드 담당, 예측조준 OFF)
       lead_dot_alpha: 0.2    # 표적 속도추정 LPF (클수록 예측 민첩/노이즈↑)
@@ -63,27 +74,28 @@ arms_control_node:
       control_rate_hz: 50.0  # 제어 루프 주파수. 높을수록 반응 빠르고 매끄러움(PN 정확도↑). 카메라 60Hz와 짝
       deadzone: 0.04
       deriv_lpf_alpha: 0.25
-      # ACRO(각속도) 제어. acro_mode=true 면 자동요격을 각속도로 (브리지 autonomous_acro 와 일치必).
-      acro_mode: true    # ★ ACRO(각속도) 모드. 브리지 autonomous_acro 도 true 로 (짝).
+      # 자동요격은 ACRO(각속도) 고정. 짝이던 control.acro_mode / Stabilized 출력
+      # 분기 / 브리지의 autonomous_acro 는 모두 삭제됐다 -- 유효한 값이 하나뿐인
+      # 설정이었고, 어긋나도 아무도 검사하지 않았다.
       max_rate_dps: 400.0   # 풀스틱 각속도[deg/s] (PX4 MC_ACRO_R/P_MAX=400 와 일치). 250급 경량+저관성이라 상향(요격드론급 스냅)
       # 추격 궤적(Pursuit): 조준하며 처음부터 상승 (공쪽으로 대각선 비행)
       hover_throttle: 0.51  # 1.05kg 호버값 (TWR≈3.81, sqrt(무게/최대추력)). MPC_THR_HOVER 와 일치
       pursuit_gate: 0.25    # 오차 이 이하면 full 상승(공쪽 돌진)
-      # acro 각속도 명령 게인 (자세 피드백 없음 — 유도출력=목표기울기 → att_p 배 → 각속도)
-      att_p: 3.5            # 유도출력[deg] → 각속도[deg/s] 변환 게인. 올리면 반응↑/발진↑
-      max_tilt_deg: 65.0    # 유도출력 제한[deg]. 요격드론급 횡가속용
-      # 유도 시스템: 거리비례 예측
-      lead_dist: 0.0        # 거리비례 예측 OFF (움직이는 표적 잡을때 조금씩↑)
+      # 유도 출력(각속도) 상한. 옛 max_tilt_deg 65 x att_p 3.5 = 227.5 과 같은 값이다.
+      max_cmd_rate_dps: 227.5   # 유도가 낼 수 있는 최대 각속도[deg/s] (max_rate_dps 400 이 풀스틱)
       # ★★ 아래 PN 게인들은 구 물리량(1.36kg·둔감) 기준 "3.6m/s 검증값"이다.
       #    1.05kg·저관성·TWR≈3.8 로 기체 응답이 빨라졌으므로 SITL 재검증 필수:
       #    빠른표적 못잡으면 pn_nav_gain↑, 떨리면 pn_nav_gain↓ 또는 pn_alpha/beta↓.
-      #    응답이 빨라져 과조향/발진 시 pn_nav_gain·att_p·kp 부터 낮춰라.
+      #    응답이 빨라져 과조향/발진 시 pn_nav_gain·kp 부터 낮춰라.
       # ── 유도 방식 ── 0=추미(Pursuit, 기존/검증됨), 1=비례항법(PN, 빠른 표적용)
       #   PN: 시선각속도(LOS rate)를 없애도록 조종 → 미래 충돌점 앞질러 겨냥.
       #   빠른 표적을 못 잡으면 pn_nav_gain↑, 떨리면 pn_nav_gain↓ 또는 pn_alpha/beta↓.
-      guidance_mode: 1        # 고정: 3.6m/s 명중 검증값 = PN(비례항법). 정지공은 0(Pursuit)
-      pn_nav_gain: 50.0       # 고정: 3.6m/s 명중 검증값 (LOS각속도→기울기, 앞질러 겨냥)
-      pn_center_gain: 15.0    # 고정: 3.6m/s 명중 검증값 (err→0 정면조준). 정지공은 ↑(45~60)
+      # 0=기본 추적(각속도 PID 추종), 1=PN(비례항법).
+      #   기본은 0. PN(1) 은 3.6m/s 표적 명중 검증값이지만, 그 검증은 구 물리량
+      #   (1.36kg·둔감) 기준이고 현재 기체(1.05kg·TWR 3.8)에서는 재검증 전이다.
+      guidance_mode: 0
+      pn_nav_gain: 175.0      # = 옛 50 x att_p 3.5. (LOS각속도→각속도 명령, 앞질러 겨냥)
+      pn_center_gain: 52.5    # = 옛 15 x att_p 3.5. (err→0 정면조준). 정지표적은 ↑
       pn_alpha: 0.35          # alpha-beta 위치이득 (표적 상태추정)
       pn_beta: 0.02           # alpha-beta 속도이득 (LOS각속도 추정). 낮춰서 리드를 '매끈'하게 → 빠른공서 요동↓
       pn_los_clamp: 1.5       # PN 시선각속도 제한. 근거리서 폭주(±2↑) 막아 안정화. 0=무제한

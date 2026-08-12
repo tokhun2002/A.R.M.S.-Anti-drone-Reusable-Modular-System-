@@ -5,7 +5,7 @@ arms_command_node.py — A.R.M.S. SITL 가상 조종기 (tkinter GUI)
 실기체의 물리 조종기(ESP32 → arms_command_hw_node)에 대응하는 SITL 쌍둥이.
 오직 /arms/command (sensor_msgs/Joy) 만 발행한다:
   - 스틱 드래그        → axes  (roll/pitch/throttle/yaw)
-  - KILL/ARM/MODE 버튼 → buttons[0..2]
+  - MODE/KILL/ARM 버튼 → buttons[2]/[0]/[1]  (화면 순서 ≠ 인덱스 순서)
   - LAUNCH 버튼        → buttons[3] (수동 TRACK 전환, 순간 눌림)
 
 튜닝/심판 콘솔은 arms_sim 패키지의 panel 노드로 분리됨.
@@ -64,30 +64,35 @@ class ControllerNode(Node):
 
 
 class ControllerGUI:
-    """가상 조종기 창 — 스틱 2개 + KILL/ARM/MODE 버튼 + LAUNCH."""
+    """가상 조종기 창 — 스틱 2개 + 모드/킬/암 버튼 + LAUNCH."""
 
     def __init__(self, root, node):
         self.root = root
         self.node = node
 
-        root.title("Controller Input")
+        root.title("RC CONTROLLER")
         root.configure(bg="#1e1e1e")
-        root.geometry("460x560")
+        # 내용 자연 높이(reqheight)가 387 px 이다. 560 이던 시절에는 소제목이
+        # 있었고, 그걸 뺀 뒤로는 LAUNCH 아래로 187 px 가 빈 채였다.
+        root.geometry("460x390")
 
-        tk.Label(root, text="CONTROLLER INPUT", fg="#dddddd", bg="#1e1e1e",
-                 font=("Arial", 15, "bold")).pack(pady=(12, 0))
-        tk.Label(root, text="스틱: 드래그 (놓으면 중앙 복귀 / throttle 은 그 자리 유지)",
-                 fg="#777777", bg="#1e1e1e", font=("Arial", 9)).pack()
+        tk.Label(root, text="RC CONTROLLER", fg="#dddddd", bg="#1e1e1e",
+                 font=("Arial", 22, "bold")).pack(pady=(14, 6))
 
         # ── 스틱 2개 ──────────────────────────────────────────────────────────
         stick_frm = tk.Frame(root, bg="#1e1e1e")
         stick_frm.pack(pady=12)
 
         # 왼쪽 스틱 (ax0=X=yaw, ax1=Y=throttle)
-        #   throttle 초기값 = 중앙(0.0): PX4 Altitude 모드에서 중앙 = 고도유지(호버).
-        #   → 자동에서 수동으로 넘겨도 스틱 안 건드리면 그 자리 호버.
-        self._thr_hold = 0.0
-        self.node.set_axis(1, 0.0)
+        #   throttle 초기값 = 최하단(-1.0), 실물 송신기와 같다. 이건 취향이 아니라
+        #   arm 조건이다: arms_control_node 의 pre-arm 확인이
+        #     joy_axes_[1] <= prearm_throttle_max_
+        #   를 요구하므로, 중앙(0.0)으로 시작하면 ARM 을 눌러도 계속 차단되고
+        #   UI 에는 "ARM DENIED - STICKS NOT IDLE" 만 뜬다.
+        #   대가: 자동→수동 인계 시 스틱을 안 건드리면 throttle 최저가 그대로 나간다.
+        #   (예전 0.0 기본값은 PX4 Altitude 모드의 "중앙=고도유지"를 노린 것이었다.)
+        self._thr_hold = -1.0
+        self.node.set_axis(1, -1.0)
         lfrm = tk.Frame(stick_frm, bg="#1e1e1e")
         lfrm.grid(row=0, column=0, padx=24)
         tk.Label(lfrm, text="L-STICK", fg="#999999", bg="#1e1e1e",
@@ -117,27 +122,33 @@ class ControllerGUI:
             *self._dot_coords(0, 0), fill="#e53935", outline="")
         self._bind_stick(self.r_canvas, self.r_dot, 2, 3)
 
-        # ── 스위치 (큼직하게): KILL / ARM / MODE ──────────────────────────────
-        sw_frm = tk.Frame(root, bg="#1e1e1e")
-        sw_frm.pack(pady=(8, 4))
-        self.kill_btn = tk.Button(sw_frm, text="KILL", width=8, height=2,
-                                  font=("Arial", 14, "bold"), bg="#444444", fg="#cccccc",
-                                  activebackground="#c62828", command=self._toggle_kill)
-        self.kill_btn.grid(row=0, column=0, padx=5)
-        self.arm_btn = tk.Button(sw_frm, text="DISARM", width=8, height=2,
-                                 font=("Arial", 14, "bold"), bg="#444444", fg="#cccccc",
-                                 activebackground="#1565c0", command=self._toggle_arm)
-        self.arm_btn.grid(row=0, column=1, padx=5)
-        self.mode_btn = tk.Button(sw_frm, text="모드: 자동", width=10, height=2,
+        # ── 스위치 + LAUNCH ───────────────────────────────────────────────────
+        #   한 grid 에 같이 넣는다. 3개 버튼과 그 아래 LAUNCH 의 폭을 맞추려면
+        #   같은 컬럼 격자를 공유해야 한다(uniform + columnspan). 버튼에 width= 를
+        #   주면 글자수 기준이라 폭이 제각각 되므로 쓰지 않고 sticky="ew" 로 늘린다.
+        btn_frm = tk.Frame(root, bg="#1e1e1e")
+        btn_frm.pack(pady=(8, 14), fill="x", padx=28)
+        for c in range(3):
+            btn_frm.grid_columnconfigure(c, weight=1, uniform="sw")
+
+        # 순서: 모드 / 킬 / 암-디스암
+        self.mode_btn = tk.Button(btn_frm, text="모드: 자동", height=2,
                                   font=("Arial", 14, "bold"), bg="#444444", fg="#cccccc",
                                   activebackground="#2e7d32", command=self._toggle_mode)
-        self.mode_btn.grid(row=0, column=2, padx=5)
+        self.mode_btn.grid(row=0, column=0, padx=(0, 3), sticky="ew")
+        self.kill_btn = tk.Button(btn_frm, text="KILL", height=2,
+                                  font=("Arial", 14, "bold"), bg="#444444", fg="#cccccc",
+                                  activebackground="#c62828", command=self._toggle_kill)
+        self.kill_btn.grid(row=0, column=1, padx=3, sticky="ew")
+        self.arm_btn = tk.Button(btn_frm, text="DISARM", height=2,
+                                 font=("Arial", 14, "bold"), bg="#444444", fg="#cccccc",
+                                 activebackground="#1565c0", command=self._toggle_arm)
+        self.arm_btn.grid(row=0, column=2, padx=(3, 0), sticky="ew")
 
-        # ── LAUNCH (3버튼 아래, 크게) ─────────────────────────────────────────
-        self.launch_btn = tk.Button(root, text="🚀 LAUNCH (→TRACK)", height=2,
+        self.launch_btn = tk.Button(btn_frm, text="LAUNCH", height=2,
                                     font=("Arial", 17, "bold"), bg="#d0021b", fg="white",
                                     activebackground="#ff1744", command=self._on_launch)
-        self.launch_btn.pack(pady=(8, 14), fill="x", padx=28)
+        self.launch_btn.grid(row=1, column=0, columnspan=3, pady=(6, 0), sticky="ew")
 
     # ---- 스위치 핸들러 (토글 + 색/텍스트 갱신) ----
     def _toggle_kill(self):

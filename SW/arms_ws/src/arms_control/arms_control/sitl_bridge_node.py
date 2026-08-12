@@ -9,7 +9,7 @@ Channel mapping:
   CH1: roll     CH2: pitch     CH3: throttle  CH4: yaw
   CH5: arm sw   CH6: mode sw   CH7: kill sw   CH8: (unused)
 
-CH6 flight mode: low=ACRO(auto/영상유도, autonomous_acro=True), high=Altitude(manual/손제어).
+CH6 flight mode: low=ACRO(자동/영상유도, 젯슨이 계산한 CRSF), high=Altitude(수동/사람 입력).
 """
 
 import threading
@@ -26,7 +26,6 @@ except ImportError:
 
 # PX4 mode constants
 PX4_BASE_MODE_CUSTOM          = 1
-PX4_CUSTOM_MAIN_MODE_MANUAL   = 1   # 각도(자동수평) — 예전 자동모드
 PX4_CUSTOM_MAIN_MODE_ALTCTL   = 2   # manual/손제어 Altitude (CH6 high)
 PX4_CUSTOM_MAIN_MODE_ACRO     = 5   # 각속도(rate) 제어 — 자동 요격용 (자동수평 없음)
 
@@ -114,17 +113,15 @@ class ArmsSITLCommNode(Node):
         self.declare_parameter("connection", "udpin:0.0.0.0:14540")
         self.declare_parameter("crsf_port", "/tmp/crsf_rx")
         self.declare_parameter("send_rate_hz", 50.0)
-        # autonomous_acro: True 면 자동(영상유도) 모드를 ACRO(각속도)로, False 면 Manual(각도/자동수평)로.
-        #   ★ 제어 노드(arms_control_node)의 control.acro_mode 와 반드시 일치시킬 것.
-        self.declare_parameter("autonomous_acro", True)
 
         self._conn_str   = self.get_parameter("connection").value
         self._crsf_port  = self.get_parameter("crsf_port").value
         self._send_rate  = self.get_parameter("send_rate_hz").value
-        # 자동(CH6 low) 모드: ACRO 또는 Manual
-        self._auto_mode  = (PX4_CUSTOM_MAIN_MODE_ACRO
-                            if self.get_parameter("autonomous_acro").value
-                            else PX4_CUSTOM_MAIN_MODE_MANUAL)
+        # 자동(CH6 low)은 ACRO 고정이다. 고를 여지가 없다 -- arms_control_node 가
+        # 내는 자동 출력은 각속도[deg/s]를 max_rate_dps 로 정규화한 값이고, PX4 가
+        # 그걸 각속도로 되돌리는 모드는 ACRO 뿐이다. Manual(각도) 로 넣으면 같은
+        # 숫자에 MPC_MAN_TILT_MAX 가 곱해져 '기울기 명령'으로 조용히 오해석된다
+        # (안 떨어지고 그냥 다른 제어 법칙으로 난다 -- 그래서 더 나쁘다).
 
         self._channels  = [CRSF_MIN] * 16
         self._channels[2] = CRSF_MIN   # throttle min
@@ -172,11 +169,11 @@ class ArmsSITLCommNode(Node):
 
     def _initial_setup(self):
         """Set default autonomous mode after EKF convergence; arming is done via CH5.
-        Flight mode thereafter follows CH6 (low=auto[ACRO/Manual], high=Altitude)."""
+        Flight mode thereafter follows CH6 (low=ACRO/자동, high=Altitude/수동)."""
         time.sleep(3.0)
-        mode_name = "ACRO(각속도)" if self._auto_mode == PX4_CUSTOM_MAIN_MODE_ACRO else "Manual(각도)"
+        mode_name = "ACRO(각속도)"
         self.get_logger().info(f"Setting autonomous mode: {mode_name} (CH6 default)...")
-        self._send_set_mode(self._auto_mode)
+        self._send_set_mode(PX4_CUSTOM_MAIN_MODE_ACRO)
         time.sleep(0.5)
 
         self._connected = True
@@ -228,9 +225,9 @@ class ArmsSITLCommNode(Node):
         ch6 = channels[5]
         ch6_high = ch6 > SWITCH_THRESH
         if ch6_high != (self._prev_ch6 > SWITCH_THRESH):
-            # CH6 low→자동(ACRO/Manual, 영상유도), high→Altitude(manual/손제어)
+            # CH6 low→ACRO(자동/영상유도), high→Altitude(수동/사람 입력)
             self._mode_pending = (PX4_CUSTOM_MAIN_MODE_ALTCTL if ch6_high
-                                  else self._auto_mode)
+                                  else PX4_CUSTOM_MAIN_MODE_ACRO)
         self._prev_ch6 = ch6
 
     # ------------------------------------------------------------------
@@ -261,8 +258,7 @@ class ArmsSITLCommNode(Node):
         # Handle pending flight-mode change (CH6)
         if mode_req is not None:
             name = {PX4_CUSTOM_MAIN_MODE_ALTCTL: "Altitude",
-                    PX4_CUSTOM_MAIN_MODE_ACRO:   "ACRO(각속도)",
-                    PX4_CUSTOM_MAIN_MODE_MANUAL: "Manual(각도)"}.get(mode_req, "?")
+                    PX4_CUSTOM_MAIN_MODE_ACRO:   "ACRO(각속도)"}.get(mode_req, "?")
             self.get_logger().info(f"CH6 → {name} mode")
             self._send_set_mode(mode_req)
 

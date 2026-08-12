@@ -32,9 +32,9 @@ class ArmsControlNode : public rclcpp::Node {
     // Declare & load parameters
     // ----------------------------------------------------------------
     declare_parameter("mission.detection_confidence_threshold", 0.65);
-    declare_parameter("mission.lock_duration_sec", 2.0);
+    declare_parameter("mission.lock_duration_sec", 0.3);
     declare_parameter("mission.detection_timeout_sec", 1.0);
-    declare_parameter("mission.lock_box_tolerance", 0.15);
+    declare_parameter("mission.lock_box_tolerance", 0.5);
     declare_parameter("mission.fire_align_tol", 0.2);  // FIRE 정렬 허용오차(가짜명중 방지)
     // 비전 looming(τ) 기반 FIRE — 거리센서 없이 bbox 팽창률로 충돌 임박을 판정.
     //   (3D 거리는 실기체에서 못 쓰므로 sim 에서도 제거. FIRE 는 τ 로만.)
@@ -43,32 +43,30 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("mission.loom_size_alpha", 0.3);   // bbox 크기 EMA (지터 억제)
     declare_parameter("mission.loom_rate_alpha", 0.3);   // 크기변화율(ṡ) EMA
 
-    declare_parameter("control.roll_pid.kp", 15.0);
-    declare_parameter("control.roll_pid.ki", 0.5);
-    declare_parameter("control.roll_pid.kd", 1.0);
-    declare_parameter("control.roll_pid.output_limit", 90.0);
-    declare_parameter("control.pitch_pid.kp", 15.0);
-    declare_parameter("control.pitch_pid.ki", 0.5);
-    declare_parameter("control.pitch_pid.kd", 1.0);
-    declare_parameter("control.pitch_pid.output_limit", 90.0);
-    declare_parameter("control.throttle", 0.55);
-    declare_parameter("control.track_throttle", 0.60);
+    declare_parameter("control.roll_pid.kp", 455.0);
+    declare_parameter("control.roll_pid.ki", 0.0);
+    declare_parameter("control.roll_pid.kd", 3.5);
+    declare_parameter("control.roll_pid.output_limit", 157.5);
+    declare_parameter("control.pitch_pid.kp", 455.0);
+    declare_parameter("control.pitch_pid.ki", 0.0);
+    declare_parameter("control.pitch_pid.kd", 3.5);
+    declare_parameter("control.pitch_pid.output_limit", 157.5);
+    declare_parameter("control.track_throttle", 0.85);
     declare_parameter("control.lead_gain", 0.0);
     declare_parameter("control.roll_sign", 1.0);
     declare_parameter("control.pitch_sign", 1.0);
-    declare_parameter("control.error_lpf_alpha", 0.3);
-    declare_parameter("control.control_rate_hz", 30.0);
+    declare_parameter("control.error_lpf_alpha", 0.25);
+    declare_parameter("control.control_rate_hz", 50.0);
     declare_parameter("control.deadzone", 0.04);
     declare_parameter("control.deriv_lpf_alpha", 0.25);
 
-    declare_parameter("mission.sitl_auto_launch", false);
-    declare_parameter("mission.auto_launch_delay_sec", 1.0);
+    declare_parameter("mission.sitl_auto_launch", true);
+    declare_parameter("mission.auto_launch_delay_sec", 0.5);
 
     // 자동 모드 CH5(FC arm)를 켜는 상태 목록. 자동 모드에선 arm 을 스위치와 분리해
     //   컨트롤 노드가 상태머신 상태로 결정한다. 기본=발사(TRACK)부터 무장.
     //   나중에 SEARCH 등에서 arm 하도록 바꾸려면 이 목록만 수정하면 된다.
-    declare_parameter("control.auto_arm_states",
-                      std::vector<std::string>{"TRACK", "FIRE", "RTL"});
+    declare_parameter("control.auto_arm_states", std::vector<std::string>{"SEARCH", "LOCK", "TRACK", "FIRE", "RTL"});
 
     // 수동 arm pre-arm 안전 확인: arm 순간 스틱이 idle(throttle 최저 + roll/pitch/yaw 중앙)
     //   이어야만 실제 arm 되게 한다(급상승/오발 방지). 한 번 arm 되면 비행 중엔 무관.
@@ -86,29 +84,29 @@ class ArmsControlNode : public rclcpp::Node {
 
     declare_parameter("crsf.port", std::string("/tmp/crsf_tx"));
     declare_parameter("crsf.baud", 400000);
-    declare_parameter("crsf.max_angle_deg", 35.0);
-    // ACRO(각속도) 제어: true 면 자동요격 출력을 '각속도[deg/s]' 명령으로 내보냄
-    //   (PX4 ACRO 모드용). false 면 기존 '각도[deg]' 명령(Stabilized/Manual).
-    //   ★ 브리지(sitl_bridge)의 autonomous_acro 와 반드시 일치시킬 것.
-    declare_parameter("control.acro_mode", true);
-    declare_parameter("control.max_rate_dps", 120.0);  // 풀스틱 각속도[deg/s], PX4 MC_ACRO_*_MAX 와 일치
+    // 자동요격은 ACRO(각속도) 고정이다. crsf.max_angle_deg / control.acro_mode 와
+    // Stabilized(각도) 출력 분기는 삭제됐다 -- 유도 출력이 각속도[deg/s]가 된 이상
+    // 그 분기는 각속도를 각도로 잘못 해석할 뿐이다. 브리지 쪽 짝이던
+    // autonomous_acro 도 같이 없앴다(CH6 low = ACRO 고정).
+    declare_parameter("control.max_rate_dps", 400.0);  // 풀스틱 각속도[deg/s], PX4 MC_ACRO_*_MAX 와 일치
     // 추격 궤적(Pursuit): 정렬 기다리지 않고 조준하며 처음부터 상승.
-    declare_parameter("control.hover_throttle", 0.62);  // 겨냥 안 될 때 최소 상승(호버)
+    declare_parameter("control.hover_throttle", 0.51);  // 겨냥 안 될 때 최소 상승(호버)
     declare_parameter("control.pursuit_gate", 0.25);    // 오차 이 이하면 full 상승(공쪽으로 돌진)
     // 예측조준(Lead): 움직이는 공의 미래 위치를 겨냥. lead_gain(리드 세기)은 위에 이미 있음.
     declare_parameter("control.lead_dot_alpha", 0.2);   // 표적 속도추정 LPF(클수록 민첩/노이즈↑)
     declare_parameter("control.lead_clamp", 0.6);       // 속도추정 스파이크 제한[1/s]
-    // 자세 피드백(각속도 제어 캐스케이드): 비전=목표기울기 → 자세루프가 rate 산출
-    declare_parameter("control.att_p", 6.0);            // 자세루프 게인: rate=att_p×(목표각−실제각)
-    declare_parameter("control.max_tilt_deg", 35.0);    // 목표 기울기 제한[deg]
-    // 유도(Guidance): 거리비례 예측
-    declare_parameter("control.lead_dist", 0.02);       // 거리비례 예측: 리드시간 += 이값×거리[m]
+    // 각도 단계는 없다. PID/PN 이 곧바로 각속도[deg/s] 명령을 낸다.
+    //   예전에는 PID -> '목표기울기[deg]' -> clamp(max_tilt) -> x att_p -> 각속도 였는데,
+    //   자세 피드백이 없어서 그 '각도'는 이름뿐이었고 att_p 는 kp 와 직렬로 곱해지는
+    //   두 번째 게인일 뿐이었다. att_p 는 kp/kd/pn_* 게인에 흡수했고(3.5배),
+    //   max_tilt_deg 클램프는 아래 max_cmd_rate_dps 로 대체했다.
+    declare_parameter("control.max_cmd_rate_dps", 227.5);  // 유도 출력 각속도 상한[deg/s]
     // 유도 방식: 0=추미(Pursuit, 현위치추종/기존), 1=비례항법(PN, 시선각속도 제거/빠른표적)
     declare_parameter("control.guidance_mode", 0);
-    declare_parameter("control.pn_nav_gain", 150.0);    // PN 항법이득 N (LOS각속도→기울기). 못따라가면↑ 떨리면↓
-    declare_parameter("control.pn_center_gain", 40.0);  // 표적 중심유지(화면 이탈 방지)
-    declare_parameter("control.pn_alpha", 0.5);         // alpha-beta 위치이득 (표적 상태추정)
-    declare_parameter("control.pn_beta", 0.15);         // alpha-beta 속도이득 (LOS각속도 추정)
+    declare_parameter("control.pn_nav_gain", 175.0);    // PN 항법이득 N (LOS각속도→기울기). 못따라가면↑ 떨리면↓
+    declare_parameter("control.pn_center_gain", 52.5);  // 표적 중심유지(화면 이탈 방지)
+    declare_parameter("control.pn_alpha", 0.35);         // alpha-beta 위치이득 (표적 상태추정)
+    declare_parameter("control.pn_beta", 0.02);         // alpha-beta 속도이득 (LOS각속도 추정)
     declare_parameter("control.pn_los_clamp", 1.5);     // PN 시선각속도 제한(0=무제한)
 
     // ----------------------------------------------------------------
@@ -161,7 +159,6 @@ class ArmsControlNode : public rclcpp::Node {
     pkd_ = get_parameter("control.pitch_pid.kd").as_double();
     plim_ = get_parameter("control.pitch_pid.output_limit").as_double();
 
-    throttle_ = get_parameter("control.throttle").as_double();
     track_throttle_ = get_parameter("control.track_throttle").as_double();
     lead_gain_ = get_parameter("control.lead_gain").as_double();
     roll_sign_ = get_parameter("control.roll_sign").as_double();
@@ -185,16 +182,12 @@ class ArmsControlNode : public rclcpp::Node {
     prearm_throttle_max_ = get_parameter("control.prearm_throttle_max").as_double();
     prearm_stick_tol_ = get_parameter("control.prearm_stick_tol").as_double();
 
-    crsf_max_angle_ = get_parameter("crsf.max_angle_deg").as_double();
-    acro_mode_ = get_parameter("control.acro_mode").as_bool();
     max_rate_dps_ = get_parameter("control.max_rate_dps").as_double();
     hover_throttle_ = get_parameter("control.hover_throttle").as_double();
     pursuit_gate_ = get_parameter("control.pursuit_gate").as_double();
     lead_dot_alpha_ = get_parameter("control.lead_dot_alpha").as_double();
     lead_clamp_ = get_parameter("control.lead_clamp").as_double();
-    att_p_ = get_parameter("control.att_p").as_double();
-    max_tilt_deg_ = get_parameter("control.max_tilt_deg").as_double();
-    lead_dist_ = get_parameter("control.lead_dist").as_double();
+    max_cmd_rate_dps_ = get_parameter("control.max_cmd_rate_dps").as_double();
     guidance_mode_ = static_cast<int>(get_parameter("control.guidance_mode").as_int());
     pn_nav_gain_ = get_parameter("control.pn_nav_gain").as_double();
     pn_center_gain_ = get_parameter("control.pn_center_gain").as_double();
@@ -232,14 +225,10 @@ class ArmsControlNode : public rclcpp::Node {
               track_throttle_ = p.as_double();
             else if (n == "control.lead_gain")
               lead_gain_ = p.as_double();
-            else if (n == "control.throttle")
-              throttle_ = p.as_double();
             else if (n == "control.error_lpf_alpha")
               error_lpf_alpha_ = p.as_double();
             else if (n == "control.deadzone")
               deadzone_ = p.as_double();
-            else if (n == "control.acro_mode")
-              acro_mode_ = p.as_bool();
             else if (n == "control.max_rate_dps")
               max_rate_dps_ = p.as_double();
             else if (n == "control.hover_throttle")
@@ -250,12 +239,8 @@ class ArmsControlNode : public rclcpp::Node {
               lead_dot_alpha_ = p.as_double();
             else if (n == "control.lead_clamp")
               lead_clamp_ = p.as_double();
-            else if (n == "control.att_p")
-              att_p_ = p.as_double();
-            else if (n == "control.max_tilt_deg")
-              max_tilt_deg_ = p.as_double();
-            else if (n == "control.lead_dist")
-              lead_dist_ = p.as_double();
+            else if (n == "control.max_cmd_rate_dps")
+              max_cmd_rate_dps_ = p.as_double();
             else if (n == "control.guidance_mode")
               guidance_mode_ = static_cast<int>(p.as_int());
             else if (n == "control.pn_nav_gain")
@@ -530,8 +515,9 @@ class ArmsControlNode : public rclcpp::Node {
 
     State state = sm_->state();
 
-    double roll_deg = 0.0;
-    double pitch_deg = 0.0;
+    // 유도 출력 = 각속도 명령[deg/s]. 각도가 아니다 (ACRO 고정, 자세 피드백 없음).
+    double roll_rate_cmd = 0.0;
+    double pitch_rate_cmd = 0.0;
     float thrust = 0.f;
 
     prev_state_ = state;
@@ -606,8 +592,8 @@ class ArmsControlNode : public rclcpp::Node {
         }
         double rc = pn_nav_gain_ * ldx + pn_center_gain_ * los_x;
         double pc = pn_nav_gain_ * ldy + pn_center_gain_ * los_y;
-        roll_deg  = roll_sign_  * std::clamp(rc, -max_tilt_deg_, max_tilt_deg_);
-        pitch_deg = pitch_sign_ * std::clamp(pc, -max_tilt_deg_, max_tilt_deg_);
+        roll_rate_cmd  = roll_sign_  * rc;
+        pitch_rate_cmd = pitch_sign_ * pc;
       } else {
         // ===== 추미 (Pursuit): PID + 시간기반 리드 (기존/검증됨) =====
         double emag_g = std::hypot(ex, ey);
@@ -618,14 +604,14 @@ class ArmsControlNode : public rclcpp::Node {
           if (emag_g < 0.08)      gain_scale = 0.5;
           else if (emag_g < 0.20) gain_scale = 0.75;
         }
-        double t_lead = lead_gain_;   // 거리비례 리드(lead_dist)는 3D 거리 제거로 삭제
+        double t_lead = lead_gain_;   // 시간기반 리드만 쓴다 (거리비례 리드는 3D 거리와 함께 삭제됨)
         double ex_lead = ex + t_lead * err_dot_x_;
         double ey_lead = ey + t_lead * err_dot_y_;
-        roll_deg = roll_sign_ * gain_scale * pid_roll_->compute(ex_lead, dt);
+        roll_rate_cmd = roll_sign_ * gain_scale * pid_roll_->compute(ex_lead, dt);
         double pitch_scale = 1.0;
         if (fabs(ex) > 0.12)      pitch_scale = 0.8;
         else if (fabs(ex) > 0.06) pitch_scale = 0.9;
-        pitch_deg = pitch_sign_ * gain_scale * pitch_scale * pid_pitch_->compute(ey_lead, dt);
+        pitch_rate_cmd = pitch_sign_ * gain_scale * pitch_scale * pid_pitch_->compute(ey_lead, dt);
       }
 
       // ---- 추격 궤적(Pursuit): 조준하며 처음부터 상승 ----
@@ -649,13 +635,13 @@ class ArmsControlNode : public rclcpp::Node {
 
       if (++dbg_count_ % 6 == 0) {
         RCLCPP_INFO(get_logger(),
-                    "TRACK[%s] err=(%.2f,%.2f) losdot=(%.2f,%.2f) bbox=%.2f roll=%.1f pitch=%.1f",
+                    "TRACK[%s] err=(%.2f,%.2f) losdot=(%.2f,%.2f) bbox=%.2f rate=(%.0f,%.0f)deg/s",
                     guidance_mode_ == 1 ? "PN" : "PUR",
                     filt_err_x_, filt_err_y_,
                     guidance_mode_ == 1 ? losf_x_dot_ : err_dot_x_,
                     guidance_mode_ == 1 ? losf_y_dot_ : err_dot_y_,
-                    loom_s_ema_, roll_deg,
-                    pitch_deg);
+                    loom_s_ema_, roll_rate_cmd,
+                    pitch_rate_cmd);
       }
     } else {
       // IDLE / SEARCH / LOCK / RTL
@@ -784,25 +770,14 @@ class ArmsControlNode : public rclcpp::Node {
         crsf[2] = CrsfOutput::norm_to_crsf(joy_axes_[1]);  // CH3 thr   = L-stick Y (스프링, 중앙=50%)
         crsf[3] = CrsfOutput::norm_to_crsf(joy_axes_[0]);  // CH4 yaw   = L-stick X
       } else {
-        // AUTO(영상유도) 출력.
-        //   acro_mode : roll_deg/pitch_deg 를 '각속도[deg/s]' 명령으로 해석 → max_rate_dps 로
-        //               정규화 → PX4 ACRO 가 그 각속도로 회전 (자동수평 없음, 민첩).
-        //   아니면    : '각도[deg]' 명령 → max_angle 정규화 → PX4 Stabilized(자동수평).
-        if (acro_mode_) {
-          // ---- 각속도 명령 (자세 피드백 없음) ----
-          //   비전 유도 출력(roll_deg)을 ±max_tilt 로 제한 후 att_p 게인으로 각속도[deg/s]
-          //   명령을 만든다. 실제 자세 피드백은 쓰지 않는다 — 자동=PX4 ACRO 이므로 FC 가
-          //   그 각속도로 직접 회전(자동수평 없음).
-          double roll_des  = std::clamp(roll_deg,  -max_tilt_deg_, max_tilt_deg_);
-          double pitch_des = std::clamp(pitch_deg, -max_tilt_deg_, max_tilt_deg_);
-          double roll_rate  = att_p_ * roll_des;
-          double pitch_rate = att_p_ * pitch_des;
-          crsf[0] = CrsfOutput::norm_to_crsf(roll_rate  / max_rate_dps_);
-          crsf[1] = CrsfOutput::norm_to_crsf(pitch_rate / max_rate_dps_);
-        } else {
-          crsf[0] = CrsfOutput::norm_to_crsf(roll_deg / crsf_max_angle_);   // Stabilized: 각도
-          crsf[1] = CrsfOutput::norm_to_crsf(pitch_deg / crsf_max_angle_);
-        }
+        // AUTO(영상유도) 출력 — ACRO 고정.
+        //   유도(PID/PN)가 낸 각속도 명령을 max_cmd_rate_dps 로 제한하고,
+        //   풀스틱 기준 max_rate_dps 로 정규화한다. PX4 ACRO 가 그 각속도로 직접
+        //   회전한다(자동수평 없음). 중간의 '목표 기울기' 단계는 없다.
+        double rr = std::clamp(roll_rate_cmd,  -max_cmd_rate_dps_, max_cmd_rate_dps_);
+        double pr = std::clamp(pitch_rate_cmd, -max_cmd_rate_dps_, max_cmd_rate_dps_);
+        crsf[0] = CrsfOutput::norm_to_crsf(rr / max_rate_dps_);
+        crsf[1] = CrsfOutput::norm_to_crsf(pr / max_rate_dps_);
         crsf[2] = CrsfOutput::thr_to_crsf(static_cast<double>(thrust));
         crsf[3] = CrsfOutput::CRSF_CENTER;  // yaw 중앙 = yaw rate 0(헤딩 유지)
       }
@@ -830,8 +805,8 @@ class ArmsControlNode : public rclcpp::Node {
     // ---- Debug publish (UI 화살표용) — 구독자 있을 때만 ----
     if (pub_dbg_->get_subscription_count() > 0) {
       geometry_msgs::msg::Vector3 dbg;
-      dbg.x = roll_deg;
-      dbg.y = pitch_deg;
+      dbg.x = roll_rate_cmd;   // deg/s (각도 아님)
+      dbg.y = pitch_rate_cmd;
       dbg.z = thrust;
       pub_dbg_->publish(dbg);
     }
@@ -906,12 +881,11 @@ class ArmsControlNode : public rclcpp::Node {
   State servo_prev_state_{State::IDLE};
   bool  servo_init_{false};
 
-  double throttle_{0.55};
-  double track_throttle_{0.60};
+  double track_throttle_{0.85};
   double lead_gain_{0.0};
   double roll_sign_{1.0};
   double pitch_sign_{1.0};
-  double error_lpf_alpha_{0.3};
+  double error_lpf_alpha_{0.25};
   double filt_err_x_{0.0};
   double filt_err_y_{0.0};
   double prev_err_x_{0.0};
@@ -931,14 +905,14 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Time loom_last_time_;
 
   int dbg_count_{0};
-  double control_rate_hz_{30.0};
+  double control_rate_hz_{50.0};
 
   State prev_state_{State::IDLE};
 
   bool align_locked_{false};
 
   bool sitl_auto_launch_{false};
-  double auto_launch_delay_sec_{1.0};
+  double auto_launch_delay_sec_{0.5};
   bool lock_timer_started_{false};
   bool auto_launched_{false};
   rclcpp::Time lock_enter_time_;
@@ -969,29 +943,25 @@ class ArmsControlNode : public rclcpp::Node {
 
   // CRSF 송수신 상태
   std::unique_ptr<CrsfOutput> crsf_out_;                          // CRSF UART 송수신기를 소유한다.
-  double crsf_max_angle_{35.0};                                  // 자동 제어 각도의 CRSF 정규화 기준을 둔다.
   std::array<bool, 256> crsf_seen_types_{};                       // 처음 발견한 텔레메트리 타입을 구분한다.
   std::size_t crsf_rx_bytes_{0};                                 // 누적 UART 수신량을 센다.
   std::size_t crsf_rx_valid_frames_{0};                          // 정상 텔레메트리 프레임 수를 센다.
   std::size_t crsf_rx_echoes_{0};                                // 자체 송신 에코 프레임 수를 센다.
   std::size_t crsf_rx_crc_errors_{0};                            // CRC 오류 프레임 수를 센다.
   std::size_t crsf_rx_framing_errors_{0};                        // 길이 오류 프레임 수를 센다.
-  // 자동요격 제어(ACRO 각속도 + 자세 피드백 + 유도)
-  bool   acro_mode_{true};
-  double max_rate_dps_{120.0};
-  double hover_throttle_{0.62};
+  // 자동요격 제어(ACRO 각속도 + 유도). 각도 단계 없음.
+  double max_rate_dps_{400.0};
+  double hover_throttle_{0.51};
   double pursuit_gate_{0.25};
   double lead_dot_alpha_{0.2};
   double lead_clamp_{0.6};
-  double att_p_{6.0};          // 유도출력(목표기울기)→각속도 변환 게인 (자세 피드백 없음)
-  double max_tilt_deg_{35.0};
-  double lead_dist_{0.02};
+  double max_cmd_rate_dps_{227.5};   // 유도 출력 각속도 상한[deg/s]
   // 유도(Guidance): 추미(0) / 비례항법 PN(1)
   int    guidance_mode_{0};
-  double pn_nav_gain_{150.0};
-  double pn_center_gain_{40.0};
-  double pn_alpha_{0.5};
-  double pn_beta_{0.15};
+  double pn_nav_gain_{175.0};
+  double pn_center_gain_{52.5};
+  double pn_alpha_{0.35};
+  double pn_beta_{0.02};
   double pn_los_clamp_{1.5};
   // alpha-beta 표적 상태추정 (매끈한 LOS + LOS각속도)
   double losf_x_{0.0}, losf_y_{0.0};
@@ -1006,8 +976,8 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 
-  double rkp_{0}, rki_{0}, rkd_{0}, rlim_{0};
-  double pkp_{0}, pki_{0}, pkd_{0}, plim_{0};
+  double rkp_{455.0}, rki_{0}, rkd_{0}, rlim_{0};
+  double pkp_{455.0}, pki_{0}, pkd_{0}, plim_{0};
 
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Time last_tick_;

@@ -45,7 +45,7 @@ def generate_launch_description():
     control_dir = Path(get_package_share_directory("arms_control")) / "config"
     control_config = control_dir / "control_params.yaml"
     # 실기체 CRSF 오버레이: crsf.port=/dev/ttyTHS1, crsf.baud=400000
-    crsf_hw_config = control_dir / "crsf_hw.yaml"
+    hw_config = control_dir / "hw_overrides.yaml"
     video_launch = (
         Path(get_package_share_directory("arms_video")) / "launch" / "video.launch.py"
     )
@@ -91,7 +91,7 @@ def generate_launch_description():
             output="screen",
             parameters=[
                 str(control_config),
-                str(crsf_hw_config),                              # port + baud (실기체 확정값)
+                str(hw_config),                                   # 실기체 델타 (포트/서보/게인/자동발진)
                 {"crsf.port": LaunchConfiguration("crsf_port")},  # 필요시 포트만 오버라이드
             ],
         ),
