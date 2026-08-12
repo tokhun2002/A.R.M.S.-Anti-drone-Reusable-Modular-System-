@@ -49,7 +49,7 @@ param set-default SIM_GZ_EC_MAX2 1000
 param set-default SIM_GZ_EC_MAX3 1000
 param set-default SIM_GZ_EC_MAX4 1000
 
-param set-default MPC_THR_HOVER 0.61   # AUW 1.05kg(실기체 실측)+추력 28N → TWR≈2.72, 호버≈√(1/2.72)
+param set-default MPC_THR_HOVER 0.51   # AUW 1.05kg + 추력 39.2N(모터 1kgf×4) → TWR≈3.81, 호버≈√(1/3.81)
 
 # ── 요격드론급 민첩화 (250급 경량 기체) ──
 # 참고: 자동요격은 sitl_bridge 의 acro(각속도) 경로로 나가므로 MC_ACRO_* 가 핵심.
