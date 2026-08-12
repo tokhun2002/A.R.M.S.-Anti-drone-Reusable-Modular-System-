@@ -11,7 +11,7 @@ setup(
     zip_safe=True,
     maintainer="arms",
     maintainer_email="dev@arms.local",
-    description="A.R.M.S. command interface (GUI panel, GPIO button, ADS1115 joystick)",
+    description="A.R.M.S. 조종 입력 → /arms/command (실기체 ESP32 HW / SITL 가상 조종기). 튜닝 콘솔은 arms_sim/panel.",
     license="MIT",
     entry_points={
         "console_scripts": [
