@@ -2,7 +2,7 @@
 <package format="3">
   <name>arms_command</name>
   <version>0.1.0</version>
-  <description>A.R.M.S. command interface (GUI panel, GPIO button, ADS1115 joystick)</description>
+  <description>A.R.M.S. 조종 입력 → /arms/command. 실기체: ESP32(ADS1115+GPIO) UART 수신 / SITL: tkinter 가상 조종기. (튜닝 콘솔은 arms_sim/panel 로 분리됨)</description>
   <maintainer email="dev@arms.local">arms</maintainer>
   <license>MIT</license>
 

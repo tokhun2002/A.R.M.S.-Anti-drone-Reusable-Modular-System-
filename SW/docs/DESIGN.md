@@ -46,7 +46,8 @@ arms_ws/
     ├── arms_bringup/          # 최상위 런치 파일 및 설정
     ├── arms_video/            # 영상 소스 추상화 (v4l2_camera / gz_ros2_bridge)
     ├── arms_detection/        # 융합 검출 노드 (YOLO in-process + HSV + absdiff, Docker)
-    ├── arms_command/          # 조종 인터페이스 (tkinter GUI / ADS1115 + GPIO)
+    ├── arms_command/          # 조종 입력 → /arms/command (SITL 가상 조종기 / 실기체 ESP32+ADS1115+GPIO)
+    ├── arms_sim/              # SITL 전용: 표적 심판(referee) + 튜닝/심판 콘솔(panel)
     ├── arms_control/          # 상태 머신 + PID + CRSF 출력 (C++/Python hybrid)
     │     ├── src/             #   C++: arms_control_node, crsf_output
     │     └── arms_control/    #   Python: sitl_bridge_node (SITL 전용)
@@ -78,9 +79,16 @@ graph TD
     end
 
     subgraph arms_command ["arms_command"]
-        CMD_GUI["arms_command_node<br/>(tkinter GUI) SITL"]
+        CMD_GUI["arms_command_node<br/>(가상 조종기, tkinter) SITL"]
         CMD_JOY["arms_command_hw_node<br/>(ESP32 수신) 실기체"]
     end
+
+    subgraph arms_sim ["arms_sim (SITL 전용)"]
+        PANEL["panel<br/>(튜닝/심판 콘솔)"]
+        REFEREE["referee<br/>(표적 비행 + 명중 판정)"]
+    end
+
+    HIT(["/arms/hit"])
 
     ADS1115["ADS1115 ADC<br/>(I2C 짐벌 4축)"]
     SWGPIO["GPIO 스위치 4개"]
@@ -122,6 +130,12 @@ graph TD
     CN --> MISSION_STATE
     CN --> CRSF_SERIAL
     MISSION_STATE --> UN
+    MISSION_STATE --> PANEL
+    MISSION_STATE --> REFEREE
+    REFEREE --> HIT
+    HIT --> CN
+    PANEL -.->|ros2 param set| CN
+    PANEL -.->|ros2 param set| REFEREE
     CRSF_SERIAL -->|SITL: socat PTY| BRIDGE
     BRIDGE -->|RC_CHANNELS_OVERRIDE UDP| FC_SITL
     CRSF_SERIAL -->|실기체: UART| ELRS_TX
@@ -131,9 +145,11 @@ graph TD
 | 노드                       | subscribe                                                                                | publish                                                         |
 | -------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | `arms_video_node`          | —                                                                                        | `/arms/image_raw`                                               |
-| `arms_detection_node`      | `/arms/image_raw`                                                                        | `/arms/detections`<br/>`/arms/roi_image`<br/>`/arms/debug_image`<br/>`/arms/debug_absdiff` |
-| `arms_command_node`        | `/arms/mission_state`                                                                    | `/arms/command`                                                 |
-| `arms_command_hw_node` | —                                                                                        | `/arms/command`                                                 |
+| `arms_detection_node`      | `/arms/image_raw`                                                                        | `/arms/detections`<br/>`/arms/debug_image`<br/>`/arms/debug_absdiff` |
+| `arms_command_node`        | —                                                                                        | `/arms/command` (가상 조종기, SITL)                            |
+| `arms_command_hw_node`     | —                                                                                        | `/arms/command` (실기체 ESP32)                                 |
+| `panel` (`arms_sim`)       | `/arms/mission_state`                                                                    | — (`ros2 param set` 으로 튜닝/심판 제어)                       |
+| `referee` (`arms_sim`)     | `/arms/mission_state`                                                                    | `/arms/hit` (SITL 명중 판정)                                   |
 | `arms_control_node`        | `/arms/detections`<br/>`/arms/command`<br/>`/arms/hit`                        | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>CRSF serial |
 | `sitl_bridge_node`         | CRSF serial (`/tmp/crsf_rx`)                                                             | MAVLink RC_CHANNELS_OVERRIDE → PX4                              |
 | `arms_ui_node`             | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/control_debug` | —                                                           |
@@ -144,8 +160,10 @@ graph TD
 | -------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
 | `arms_video_node`          | `arms_video`     | 영상 소스 추상화. 실기체는 v4l2_camera, SITL은 gz_ros2_bridge로 `/arms/image_raw` 발행                                                      | 호스트        |
 | `arms_detection_node`      | `arms_detection` | YOLO(in-process)·HSV·absdiff 를 우선순위 융합 + detect-then-track(CSRT/KCF, ROI) 후 `/arms/detections` 발행. 실기체는 GPU Docker, SITL/호스트는 YOLO 자동 비활성(HSV/absdiff만) | Docker(실기체) / 호스트(SITL) |
-| `arms_command_node`        | `arms_command`   | SITL용 tkinter GUI 패널. 드래그 스틱·스위치 클릭으로 `/arms/command` 발행                                                                   | 호스트        |
-| `arms_command_hw_node` | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. fake_mode 지원 | 호스트        |
+| `arms_command_node`        | `arms_command`   | **SITL 가상 조종기.** 드래그 스틱·KILL/ARM/MODE/LAUNCH 버튼으로 `/arms/command`(Joy) 발행. 실기체 물리 조종기의 SITL 쌍둥이 (발행자는 이 노드 하나뿐 → 레이스 방지) | 호스트 (SITL) |
+| `arms_command_hw_node`     | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. fake_mode 지원 | 호스트 (실기체) |
+| `panel`                    | `arms_sim`       | **SITL 전용 튜닝/심판 콘솔.** PID·τ·PN 등 arms_control 파라미터 + 표적·접촉반경 등 referee 파라미터를 `ros2 param set` 으로 실시간 제어. 미션 상태 표시 | 호스트 (SITL) |
+| `referee`                  | `arms_sim`       | **SITL 전용 표적 심판.** 표적(풍선/드론)을 gz set_pose 로 비행시키고, 드론-표적 중심거리<접촉반경(hit_radius≈1.3m) 이면 명중 → `/arms/hit` 발행 + 튕김 연출 | 호스트 (SITL) |
 | `arms_control_node`        | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환. CRSF 프레임을 시리얼로 직접 출력                          | 호스트        |
 | `sitl_bridge_node`         | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. CH5=arm(레벨), CH6=flight mode(ACRO/Altitude) | 호스트 (SITL) |
 | `arms_ui_node`             | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                      | 호스트        |
@@ -315,7 +333,7 @@ arms_video_node는 영상 소스에 따라 두 가지 모드로 동작한다.
     BoundingBox 변환 (normalized coords)
         |
         v
-/arms/detections (arms_msgs/DetectionArray)  [+ /arms/roi_image, debug]
+/arms/detections (arms_msgs/DetectionArray)  [+ /arms/debug_image, /arms/debug_absdiff]
 ```
 
 ### 6.2 Docker Compose

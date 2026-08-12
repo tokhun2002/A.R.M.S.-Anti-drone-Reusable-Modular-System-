@@ -7,7 +7,7 @@ arms_command 노드 담당). 여기서 하는 일은 전부 파라미터/서비�
   - 미션 상태 표시 (IDLE/SEARCH/LOCK/TRACK/FIRE/RTL) — 읽기전용 구독
   - 검출 모드(YOLO/HSV/ABSDIFF) 토글 → arms_detection_node 파라미터
   - Roll/Pitch 부호, PID, τ, 추력, PN 게인 등 → arms_control_node 파라미터
-  - 표적(풍선/드론) 비행·정지·고도·속도·포획반경 → referee 파라미터
+  - 표적(풍선/드론) 비행·정지·고도·속도·접촉반경(hit_radius) → referee 파라미터
   - RESET(추후 디벨롭) → gz 서비스 + /arms/reset_cmd
 
 실행: ros2 run arms_sim panel
@@ -276,11 +276,12 @@ class PanelGUI:
         self.tau_fire.pack(pady=(10, 0))
         self.tau_fire.bind("<ButtonRelease-1>",
                            lambda e: ros_param_set("mission.tau_fire_sec", float(self.tau_fire.get())))
-        # 포획반경(HIT_RADIUS) — 빠른 공일수록 최소접근이 커지니 ↑ (심판 직격 판정)
-        self.hit_radius = tk.Scale(right, from_=1, to=10, resolution=0.5, orient="horizontal",
-                                   length=150, bg="#1e1e1e", fg="white", label="포획반경 [m] (빠를수록↑)",
+        # 접촉반경 = 심판 직격(kinetic) 판정 거리. 드론-표적 중심거리<이 값 → 명중(/arms/hit).
+        #   그물 포획이 아니라 직격이라 실제 표면접촉(풍선1.0+드론0.3≈1.3m). 빠른 표적은 살짝↑.
+        self.hit_radius = tk.Scale(right, from_=0.5, to=5, resolution=0.1, orient="horizontal",
+                                   length=150, bg="#1e1e1e", fg="white", label="접촉반경 [m] (직격 판정)",
                                    highlightthickness=0, troughcolor="#444")
-        self.hit_radius.set(3.5)
+        self.hit_radius.set(1.3)
         self.hit_radius.pack(pady=(6, 0))
         self.hit_radius.bind("<ButtonRelease-1>",
                              lambda e: ros_param_set_node(REFEREE_NODE, "hit_radius", float(self.hit_radius.get())))
