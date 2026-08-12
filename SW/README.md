@@ -72,11 +72,13 @@ SW/
 │       ├── arms_bringup/       # 런치 파일
 │       ├── arms_video/         # 영상 수신
 │       ├── arms_detection/     # YOLO 객체 인식 (Docker)
-│       ├── arms_control/       # 상태 머신 + PID + MAVLink
+│       ├── arms_control/       # 상태 머신 + PID + CRSF 출력
+│       ├── arms_command/       # 조종 입력 (실기체 C++ HW / SITL 가상 조종기)
+│       ├── arms_sim/           # SITL 전용: 표적 심판(referee) + 튜닝 콘솔(panel)
 │       ├── arms_ui/            # 오퍼레이터 UI
 │       └── arms_msgs/          # 커스텀 메시지
-├── simulation/         # Gazebo 월드, 모델(arms_drone/x500/x500_base), airframes(4021)
-├── tools/              # balloon_referee_diagonal(런치 자동 실행) / log_detections / kf_analyze
+├── simulation/         # Gazebo 월드, 모델(arms_drone), airframes(4022)
+├── scripts/            # 하드웨어 테스트 스크립트 (crsf / joy / servo / detection_analysis)
 ├── setup_sim.sh        # 최초 셋업 (한 번)
 ├── run_arms.sh         # 실행 (매번)
 ├── YOLO_balloon/       # YOLOv11 학습

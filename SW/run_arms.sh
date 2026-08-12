@@ -20,7 +20,7 @@ pkill -9 -f px4 2>/dev/null; pkill -9 -f 'gz sim' 2>/dev/null
 pkill -9 -f ruby 2>/dev/null; pkill -9 -f parameter_bridge 2>/dev/null
 pkill -9 -f arms_control 2>/dev/null; pkill -9 -f arms_command 2>/dev/null
 pkill -9 -f arms_detection 2>/dev/null
-pkill -9 -f balloon_referee 2>/dev/null
+pkill -9 -f arms_sim 2>/dev/null   # referee + panel (arms_sim 패키지)
 pkill -9 -f arms_ui 2>/dev/null
 pkill -9 -f "socat.*crsf" 2>/dev/null
 sleep 3

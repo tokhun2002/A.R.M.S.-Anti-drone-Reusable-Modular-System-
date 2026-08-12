@@ -10,6 +10,8 @@
   <exec_depend>arms_detection</exec_depend>
   <exec_depend>arms_video</exec_depend>
   <exec_depend>arms_ui</exec_depend>
+  <exec_depend>arms_command</exec_depend>
+  <exec_depend>arms_sim</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

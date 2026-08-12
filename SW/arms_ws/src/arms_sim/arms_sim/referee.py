@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-balloon_referee.py — 풍선을 "비행"시키고 "명중"을 판정/연출하는 SITL 심판 노드
+referee.py — 표적(풍선/드론)을 "비행"시키고 "명중"을 판정/연출하는 SITL 심판 노드  [arms_sim]
 
 하는 일:
   1) 타이머로 target_ball 모델 위치를 gz set_pose 서비스로 갱신 → 풍선이 하늘에서 떠다님
@@ -12,10 +12,7 @@ balloon_referee.py — 풍선을 "비행"시키고 "명중"을 판정/연출하�
   - gz (Gazebo Harmonic) CLI 가 PATH 에 있어야 함  (`gz service` 사용)
   - 월드 이름 = arms_sitl, 모델 이름 = target_ball
 
-실행:
-  source /opt/ros/humble/setup.bash
-  source <arms_ws>/install/setup.bash
-  python3 balloon_referee.py
+실행: ros2 run arms_sim referee   (node name = balloon_referee)
 """
 
 import math

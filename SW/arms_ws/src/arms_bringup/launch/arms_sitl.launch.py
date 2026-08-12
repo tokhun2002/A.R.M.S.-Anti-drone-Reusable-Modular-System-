@@ -2,19 +2,17 @@
 arms_sitl.launch.py — SITL "날아다니는 풍선 요격" 올인원 런치
 이거 하나로 다음을 전부 띄운다 (PX4 SITL 제외, 그건 무거워서 따로):
   - gz 카메라 브리지        (/arms/image_raw)
-  - arms_control_node       (상태머신 + PID + CRSF 출력)
-  - arms_sitl_bridge_node   (CRSF→MAVLink RC override → PX4 Stabilized)
-  - arms_ui_node            (OpenCV 영상 오버레이)
   - arms_detection_node     (융합검출: HSV + absdiff, YOLO 선택)
-  - balloon_referee_diagonal.py      (풍선 비행 + 명중 연출)
-  - arms_command_node       (컨트롤 패널 GUI)
-
-전제: 환경변수 ARMS_SW 가 SW 폴더(=tools, simulation 들어있는 곳)를 가리켜야 함.
+  - arms_control_node       (상태머신 + PID + CRSF 출력)
+  - arms_sitl_bridge_node   (CRSF→MAVLink RC override → PX4)
+  - arms_command_node       (가상 조종기: 스틱+버튼 → /arms/command)   [arms_command]
+  - panel                   (튜닝/심판 콘솔)                          [arms_sim]
+  - referee                 (표적 풍선/드론 비행 + 명중 판정)          [arms_sim]
+  - arms_ui_node            (OpenCV 영상 오버레이)
 """
-import os
 from pathlib import Path
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, LogInfo, TimerAction
+from launch.actions import ExecuteProcess, TimerAction
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -27,8 +25,7 @@ def generate_launch_description():
     pj_cmd = ["ros2", "run", "plotjuggler", "plotjuggler", "--buffer_size", "60"]
     if pj_layout.exists():
         pj_cmd += ["--layout", str(pj_layout)]
-    sw_dir = os.environ.get("ARMS_SW", "")
-    tools = Path(sw_dir) / "tools" if sw_dir else None
+
     actions = [
         # 카메라 브리지 — 상방 카메라 → /arms/image_raw
         Node(
@@ -58,10 +55,22 @@ def generate_launch_description():
                          "crsf_port":    "/tmp/crsf_rx",
                          "send_rate_hz": 50.0}],
         ),
-        # 컨트롤 패널 GUI
+        # 가상 조종기 (스틱+버튼 → /arms/command). 실기체 물리 조종기의 SITL 쌍둥이.
+        #   /arms/command 발행자는 이 노드 하나뿐 (레이스 방지).
         Node(
             package="arms_command", executable="arms_command_node",
             name="arms_command_node", output="screen",
+        ),
+        # 튜닝/심판 콘솔 (파라미터·referee 제어). SITL 전용, /arms/command 발행 안 함.
+        Node(
+            package="arms_sim", executable="panel",
+            name="arms_panel_node", output="screen",
+        ),
+        # 표적 심판 (풍선/드론 비행 + 명중 판정). SITL 전용.
+        #   node name = balloon_referee (panel 의 REFEREE_NODE 와 일치必).
+        Node(
+            package="arms_sim", executable="referee",
+            name="balloon_referee", output="screen",
         ),
         # UI 오버레이
         Node(
@@ -69,17 +78,6 @@ def generate_launch_description():
             name="arms_ui_node", output="screen",
         ),
     ]
-
-    if tools and tools.is_dir():
-        # 풍선 심판 노드만 실행. 컨트롤 패널은 arms_command_node(위에서 실행)가 담당한다.
-        actions += [
-            ExecuteProcess(cmd=["python3", str(tools / "balloon_referee_diagonal.py")],
-                           output="screen"),
-        ]
-    else:
-        actions.append(LogInfo(msg=(
-            "[arms_sitl_flying] ARMS_SW 환경변수가 안 잡혀서 풍선을 못 띄웠음. "
-            "run_arms.sh 를 쓰거나 'export ARMS_SW=<SW경로>' 후 다시 실행.")))
 
     # PlotJuggler — 노드 startup 후 5초 지연해서 실행
     actions.append(TimerAction(period=5.0, actions=[

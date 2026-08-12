@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>arms_sim</name>
+  <version>0.1.0</version>
+  <description>
+    SITL 전용 지원 패키지: 표적 심판(referee) + 튜닝/개발 콘솔(panel).
+    실기체에서는 쓰이지 않는다 (Jetson 빌드에서 제외 가능).
+  </description>
+  <maintainer email="dev@arms.local">arms</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>arms_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
