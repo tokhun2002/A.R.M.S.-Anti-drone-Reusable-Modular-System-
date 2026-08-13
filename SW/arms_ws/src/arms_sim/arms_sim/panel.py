@@ -7,7 +7,7 @@ arms_command 노드 담당). 여기서 하는 일은 전부 파라미터/서비�
   - 미션 상태 표시 (IDLE/SEARCH/LOCK/TRACK/FIRE/RTL) — 읽기전용 구독
   - 검출 모드(YOLO/HSV/ABSDIFF) 토글 → arms_detection_node 파라미터
   - Roll/Pitch 부호, PID, τ, 추력, PN 게인 등 → arms_control_node 파라미터
-  - 표적(풍선/드론) 비행·정지·고도·속도·접촉반경(hit_radius) → referee 파라미터
+  - 표적(풍선/드론) 비행·정지·고도·속도 → referee 파라미터
   - RESET(추후 디벨롭) → gz 서비스 + /arms/reset_cmd
 
 실행: ros2 run arms_sim panel
@@ -97,7 +97,10 @@ class PanelGUI:
 
         root.title("A.R.M.S. Control Panel")
         root.configure(bg="#1e1e1e")
-        root.geometry("760x880")
+        # 내용 자연 크기에 맞춘다(reqwidth/reqheight = 610x762). 760x880 이던
+        # 시절에는 오른쪽 150px·아래 118px 가 빈 채였다. 위젯을 더 넣으면
+        # 여기도 같이 키울 것 — 안 키우면 아래쪽이 잘린다.
+        root.geometry("612x766")
 
         # ── 상단: 미션 상태 (전체 폭) ──────────────────────────────────────
         top = tk.Frame(root, bg="#1e1e1e")
@@ -118,14 +121,13 @@ class PanelGUI:
         cols = tk.Frame(root, bg="#1e1e1e")
         cols.pack(fill="both", expand=True, padx=(12, 4), pady=4)
 
+        # 가운데 구분선 없음. LabelFrame 테두리가 이미 그룹 경계를 그리므로
+        # 세로줄까지 있으면 선이 두 겹이 된다.
         left = tk.Frame(cols, bg="#1e1e1e")
-        left.grid(row=0, column=0, sticky="nw", padx=(0, 16))
-
-        sep = tk.Frame(cols, bg="#444444", width=1)
-        sep.grid(row=0, column=1, sticky="ns", padx=4)
+        left.grid(row=0, column=0, sticky="nw", padx=(0, 12))
 
         right = tk.Frame(cols, bg="#1e1e1e")
-        right.grid(row=0, column=2, sticky="nw")
+        right.grid(row=0, column=1, sticky="nw")
 
         # ── [검출] arms_detection_node ──────────────────────────────────────
         g_det = group(left, "검출  ·  arms_detection")
@@ -296,15 +298,9 @@ class PanelGUI:
         self.tau_fire.pack()
         self.tau_fire.bind("<ButtonRelease-1>",
                            lambda e: ros_param_set("mission.tau_fire_sec", float(self.tau_fire.get())))
-        # 접촉반경 = 심판 직격(kinetic) 판정 거리. 드론-표적 중심거리<이 값 → 명중(/arms/hit).
-        #   그물 포획이 아니라 직격이라 실제 표면접촉(풍선1.0+드론0.3≈1.3m). 빠른 표적은 살짝↑.
-        self.hit_radius = tk.Scale(right, from_=0.5, to=5, resolution=0.1, orient="horizontal",
-                                   length=150, bg="#1e1e1e", fg="white", label="접촉반경 [m] (직격 판정)",
-                                   highlightthickness=0, troughcolor="#444")
-        self.hit_radius.set(1.3)
-        self.hit_radius.pack(pady=(6, 0))
-        self.hit_radius.bind("<ButtonRelease-1>",
-                             lambda e: ros_param_set_node(REFEREE_NODE, "hit_radius", float(self.hit_radius.get())))
+        # 명중 판정 슬라이더는 없다. Gazebo 접촉 센서가 실제 충돌 형상으로
+        # 판정하므로 조절할 값 자체가 없다 — 예전 hit_radius 는 "빗나가도 명중"
+        # 을 만들 수 있는 노브였다. 판정은 이제 설정값이 아니라 물리다.
 
         self._push_defaults()
         self._poll()

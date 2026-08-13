@@ -85,7 +85,7 @@ graph TD
 
     subgraph arms_sim ["arms_sim (SITL 전용)"]
         PANEL["panel<br/>(튜닝/심판 콘솔)"]
-        REFEREE["referee<br/>(표적 비행 + 명중 판정)"]
+        REFEREE["referee<br/>(표적 비행 + 접촉 판정)"]
     end
 
     HIT(["/arms/hit"])
@@ -131,9 +131,9 @@ graph TD
     CN --> CRSF_SERIAL
     MISSION_STATE --> UN
     MISSION_STATE --> PANEL
-    MISSION_STATE --> REFEREE
+    GZ_CONTACT(["gz 접촉 센서"]) --> REFEREE
     REFEREE --> HIT
-    HIT --> CN
+    HIT -.->|로그 전용| CN
     PANEL -.->|ros2 param set| CN
     PANEL -.->|ros2 param set| REFEREE
     CRSF_SERIAL -->|SITL: socat PTY| BRIDGE
@@ -149,7 +149,7 @@ graph TD
 | `arms_command_node`        | —                                                                                        | `/arms/command` (가상 조종기, SITL)                            |
 | `arms_command_hw_node`     | —                                                                                        | `/arms/command` (실기체 ESP32)                                 |
 | `panel` (`arms_sim`)       | `/arms/mission_state`                                                                    | — (`ros2 param set` 으로 튜닝/심판 제어)                       |
-| `referee` (`arms_sim`)     | `/arms/mission_state`                                                                    | `/arms/hit` (SITL 명중 판정)                                   |
+| `referee` (`arms_sim`)     | gz 접촉 센서 · gz dynamic_pose (ROS 구독 없음)                                            | `/arms/hit` (SITL 명중 판정, 로그용)                           |
 | `arms_control_node`        | `/arms/detections`<br/>`/arms/command`<br/>`/arms/hit`                        | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>CRSF serial |
 | `sitl_bridge_node`         | CRSF serial (`/tmp/crsf_rx`)                                                             | MAVLink RC_CHANNELS_OVERRIDE → PX4                              |
 | `arms_ui_node`             | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/control_debug` | —                                                           |
@@ -162,8 +162,8 @@ graph TD
 | `arms_detection_node`      | `arms_detection` | YOLO(in-process)·HSV·absdiff 를 우선순위 융합 + detect-then-track(CSRT/KCF, ROI) 후 `/arms/detections` 발행. 실기체는 GPU Docker, SITL/호스트는 YOLO 자동 비활성(HSV/absdiff만) | Docker(실기체) / 호스트(SITL) |
 | `arms_command_node`        | `arms_command`   | **SITL 가상 조종기.** 드래그 스틱·KILL/ARM/MODE/LAUNCH 버튼으로 `/arms/command`(Joy) 발행. 실기체 물리 조종기의 SITL 쌍둥이 (발행자는 이 노드 하나뿐 → 레이스 방지) | 호스트 (SITL) |
 | `arms_command_hw_node`     | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. fake_mode 지원 | 호스트 (실기체) |
-| `panel`                    | `arms_sim`       | **SITL 전용 튜닝/심판 콘솔.** PID·τ·PN 등 arms_control 파라미터 + 표적·접촉반경 등 referee 파라미터를 `ros2 param set` 으로 실시간 제어. 미션 상태 표시 | 호스트 (SITL) |
-| `referee`                  | `arms_sim`       | **SITL 전용 표적 심판.** 표적(풍선/드론)을 gz set_pose 로 비행시키고, 드론-표적 중심거리<접촉반경(hit_radius≈1.3m) 이면 명중 → `/arms/hit` 발행 + 튕김 연출 | 호스트 (SITL) |
+| `panel`                    | `arms_sim`       | **SITL 전용 튜닝/심판 콘솔.** PID·τ·PN 등 arms_control 파라미터 + 표적 고도/속도 등 referee 파라미터를 `ros2 param set` 으로 실시간 제어. 미션 상태 표시. 노드별로 묶은 그룹 UI | 호스트 (SITL) |
+| `referee`                  | `arms_sim`       | **SITL 전용 표적 심판.** 표적(풍선/드론)을 gz set_pose 로 비행시키고, **Gazebo 접촉 센서**로 실제 충돌을 감지해 `/arms/hit` 발행 + 로그. 미션 상태는 바꾸지 않는다 | 호스트 (SITL) |
 | `arms_control_node`        | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환. CRSF 프레임을 시리얼로 직접 출력                          | 호스트        |
 | `sitl_bridge_node`         | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. CH5=arm(레벨), CH6=flight mode(ACRO/Altitude) | 호스트 (SITL) |
 | `arms_ui_node`             | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                      | 호스트        |
@@ -247,12 +247,12 @@ stateDiagram-v2
     IDLE --> SEARCH : auto 모드 + effective_arm(ARM 스위치 상승, 재토글 래치 해제)
 
     SEARCH --> LOCK : 연속 감지 >= lock_duration_sec<br/>(confidence > threshold)
-    LOCK --> SEARCH : 타겟 소실 lost_frames_threshold 프레임
+    LOCK --> SEARCH : 타겟 소실 detection_timeout_sec
 
     LOCK --> TRACK : joy buttons[3] launch<br/>(또는 sitl_auto_launch 타이머)
     TRACK --> SEARCH : 타겟 소실
 
-    TRACK --> FIRE : 비전 looming τ &lt; tau_fire_sec + 정렬<br/>또는 심판 명중(/arms/hit, SITL)
+    TRACK --> FIRE : 비전 looming τ &lt; tau_fire_sec + 정렬<br/>(유일한 경로 — 심판은 전이시키지 않음)
     FIRE --> RTL : 페이로드 트리거 즉시 (mission_state 신호)
 
     RTL --> IDLE : 착륙 완료
@@ -264,13 +264,16 @@ stateDiagram-v2
 # arms_control/config/control_params.yaml
 mission:
   detection_confidence_threshold: 0.65
-  lock_duration_sec: 2.0
-  lost_frames_threshold: 10
-  fire_align_tol: 0.2        # FIRE 정렬 허용오차
+  detection_timeout_sec: 1.0
+  lock_duration_sec: 0.3
+  lock_box_tolerance: 0.5
   tau_fire_sec: 0.3         # 비전 looming: 충돌까지 시간(τ) 임계 [s] → FIRE
+  fire_align_tol: 0.2       # FIRE 정렬 허용오차
   loom_s_min: 0.1           # FIRE 최소 bbox 크기(정규화)
-  sitl_auto_launch: false
-  auto_launch_delay_sec: 1.0
+  loom_size_alpha: 0.3
+  loom_rate_alpha: 0.3
+  sitl_auto_launch: true    # SITL 만. 실기체는 hw_overrides.yaml 이 false 로 덮어씀
+  auto_launch_delay_sec: 0.5
 ```
 
 > 제어 게인(유도/PID/acro)은 [7.5](#75-유도제어-track--fire-상태에서-활성) 및
@@ -402,7 +405,8 @@ SITL:
 > - **CH6 flight mode**는 오퍼레이터 모드 스위치(joy buttons[2])와 1:1이다.
 >   auto(영상유도)=PX4 **ACRO**(172, 각속도/자동수평 없음), manual(손제어)=PX4 **Altitude**(1811).
 >   실기체는 `RC_MAP_FLTMODE=6` + `COM_FLTMODE*` 슬롯에서 **CH6 low 슬롯=ACRO, high 슬롯=Altitude**
->   로 설정. (SITL은 sitl_bridge 의 `autonomous_acro=True` 가 ACRO 로 세팅 — control 노드 `acro_mode` 와 짝)
+>   로 설정. SITL 은 sitl_bridge 가 CH6 low 를 **ACRO 고정**으로 매핑한다
+>   (예전의 `autonomous_acro` / `control.acro_mode` 짝은 유효값이 하나뿐이라 둘 다 삭제됨).
 > - **CH5 arm**은 모드에 따라 소스가 다르다. **auto**: 스위치와 분리 — 상태머신 상태 기반
 >   (`control.auto_arm_states`, 기본 발사 TRACK 부터). **manual**: arm 스위치(buttons[1]) +
 >   재토글 안전장치(모드 전환/부팅 직후 재토글 전까지 disarm). 자세히는 [7.3](#73-auto--manual-모드).
@@ -426,7 +430,7 @@ CRSF 프레임 포맷: `[0xC8][24][0x16][22 bytes: 16ch × 11bit][CRC8-DVB-S2]`
 
 | 모드   | PX4 flight mode | CH1-4 소스                                              | CH5 arm                       | buttons[1] 역할 |
 | ------ | --------------- | ------------------------------------------------------- | ----------------------------- | --------------- |
-| auto   | **ACRO**        | 유도(PN/추미) → **acro 각속도**(roll/pitch), throttle=추격상승, yaw rate 0 | **상태머신 상태 기반** (스위치와 분리) | IDLE↔SEARCH     |
+| auto   | **ACRO**        | 유도(기본 추적/PN) → **각속도**(roll/pitch), throttle=추격상승, yaw rate 0 | **상태머신 상태 기반** (스위치와 분리) | IDLE↔SEARCH     |
 | manual | Altitude        | Mode2 스틱 패스스루 (아래 축 재배치)                    | arm 스위치 (재토글 안전장치)  | ARM/DISARM      |
 
 > **자동 모드 = 스위치와 arm 분리**: 자동 모드에서 상태 스위치(buttons[1])는 미션 상태
@@ -482,27 +486,52 @@ manual 모드 축→채널 매핑 (Mode2 조종기 → AETR 채널 순서):
 1. **LOS = 픽셀 오차** (`filt_err_x/y`, LPF) → 중앙 데드존.
    (예전의 자세보정 LOS는 **제거** — acro 전환으로 attitude 의존 삭제.)
 2. **alpha-beta 필터** (`pn_alpha`/`pn_beta`) 로 매끈한 LOS + **시선각속도(LOS rate)** 추정.
-3. **유도** (`control.guidance_mode`):
-   - **0 = 추미(Pursuit)**: `roll_pid`/`pitch_pid` PID(kp·ki·kd)로 LOS 오차 + 시간기반 리드
-     (`lead_gain`/`lead_dist`) → 목표 조향[deg].
-   - **1 = 비례항법(PN, 기본값)**: `roll_deg = pn_nav_gain × 시선각속도 + pn_center_gain × LOS`.
+3. **유도** (`control.guidance_mode`) — 출력은 **각속도[deg/s]** 다:
+   - **0 = 기본 추적 (기본값)**: `roll_pid`/`pitch_pid` PID(kp·ki·kd)로 LOS 오차
+     + 시간기반 리드(`lead_gain`) → 각속도 명령.
+   - **1 = 비례항법(PN)**: `각속도 = pn_nav_gain × 시선각속도 + pn_center_gain × LOS`.
      시선각속도를 0으로 만들어 미래 충돌점을 앞질러 겨냥(빠른 표적에 유리). PID 미사용.
-   출력은 `±max_tilt_deg` 로 제한.
+
+   출력은 `±max_cmd_rate_dps`(227.5 deg/s) 로 제한한다.
 4. **스로틀(추격 궤적)**: 표적이 화면 중앙에 가까울수록(`center_q↑`) `hover_throttle`→`track_throttle`
-   로 상승 → 공을 향해 대각선 돌진.
-5. **CRSF 출력** (`control.acro_mode`):
-   - **true = PX4 ACRO(각속도, 기본)**: `각속도 = att_p × 목표조향[deg]` → `max_rate_dps` 정규화
-     → CH1/CH2. **자세 피드백 없음** (FC가 ACRO로 각속도를 직접 처리). CH3=스로틀, CH4=중앙(yaw rate 0).
-   - false = PX4 Stabilized(각도): 목표조향 / `max_angle_deg` → CH1/CH2 (FC 자동수평).
+   로 상승 → 표적을 향해 대각선 돌진.
+5. **CRSF 출력**: 각속도 명령 / `max_rate_dps`(400) → CH1/CH2.
+   CH3=스로틀, CH4=중앙(yaw rate 0). PX4 ACRO 가 그 각속도로 직접 회전한다.
 6. **수동 모드**: PX4 **Altitude**, 스틱 패스스루 (FC 자동수평·고도유지).
 
-추미(Pursuit) 모드 PID 특이사항:
+### 각도 단계는 없다
+
+자동요격은 **PX4 ACRO 고정**이고 자세 피드백이 없다. 유도가 내는 값은 처음부터
+각속도이며, 중간에 "목표 기울기[deg]" 라는 단계가 존재하지 않는다.
+
+예전에는 이런 캐스케이드였다:
+
+```
+픽셀오차 → PID → 목표기울기[deg] → clamp(max_tilt_deg) → ×att_p → 각속도
+```
+
+그런데 이 노드는 **실제 자세를 읽지도 않으므로** 그 "각도" 는 이름뿐이었고,
+`att_p` 는 `kp` 와 직렬로 곱해지는 두 번째 게인일 뿐이었다. 그래서 정리했다:
+
+| 삭제 | 대체 / 흡수처 |
+|---|---|
+| `control.att_p` (3.5) | `kp`·`kd`·`pn_*` 게인에 ×3.5 로 흡수 |
+| `control.max_tilt_deg` (65) | `max_cmd_rate_dps` = 65 × 3.5 = **227.5 deg/s** |
+| `control.acro_mode` + Stabilized(각도) 출력 분기 | 삭제 (ACRO 고정) |
+| `crsf.max_angle_deg` | 삭제 |
+| 브리지 `autonomous_acro` | 삭제 (CH6 low = ACRO 고정) |
+
+동작은 동치다 — 게인을 흡수했으므로 같은 픽셀오차에 같은 각속도가 나간다.
+`output_limit` 도 45 → 157.5 [deg/s] 로 같이 환산했다(이게 실제로 먼저 물리는
+한계다: 157.5 < 227.5).
+
+기본 추적 모드 PID 특이사항:
 
 - **anti-windup**: integral 값 clamp.
 - **derivative kick 방지**: 첫 호출 미분항 생략 + `deriv_lpf_alpha` LPF.
 
 > 게인 등 전체 파라미터는 `arms_control/config/control_params.yaml` 참고(여기 중복 나열 안 함).
-> CRSF: `crsf.port`(SITL `/tmp/crsf_tx`, 실기체 `crsf_hw.yaml`로 `/dev/ttyTHS1` 오버레이), `crsf.baud`=400000.
+> CRSF: `crsf.port`(SITL `/tmp/crsf_tx`, 실기체 `hw_overrides.yaml` 로 `/dev/ttyTHS1` 오버레이), `crsf.baud`=400000.
 
 ### 7.6 sitl_bridge_node 동작 (SITL 전용)
 
@@ -513,7 +542,7 @@ CRSF serial (/tmp/crsf_rx)
         ├─ CH5 레벨 (arm 스위치) → 실제 armed 상태와 다르면 재전송
         │       MAV_CMD_COMPONENT_ARM_DISARM (arm/disarm)
         ├─ CH6 에지 → MAV_CMD_DO_SET_MODE
-        │       low(<1500)=ACRO(auto), high(≥1500)=Altitude(manual)
+        │       low(<1500)=ACRO(auto, 고정), high(≥1500)=Altitude(manual)
         └─ CH1-4, CH7 → RC_CHANNELS_OVERRIDE (50Hz, UDP → PX4)
 ```
 
@@ -527,12 +556,12 @@ arms_control_node
   |
   +-- [Subscribers]
   |     /arms/detections   (DetectionArray → 검출 + 비전 looming τ)
-  |     /arms/hit          (Empty → 외부 명중 → FIRE. SITL 심판 접촉 / 실기체 IMU 충격)
+  |     /arms/hit          (Empty → 심판의 실제 접촉 통지. **로그 전용**, 상태 전이 없음)
   |     /arms/command      (Joy → 조종 입력 + 버튼)
   |
   +-- [Publishers]
   |     /arms/mission_state   (MissionState, 30Hz)
-  |     /arms/control_debug   (Vector3 — UI 화살표용, 구독 중에만 발행)
+  |     /arms/control_debug   (Vector3 — UI 화살표용. x,y = 각속도[deg/s], z = throttle)
   |     /arms/debug_looming   (Vector3 — x=τ, y=bbox크기, z=팽창률; τ 튜닝용, 구독 중에만 발행)
   |
   +-- [Serial Output]
@@ -546,8 +575,9 @@ arms_control_node
   |       (거리센서·표적크기 무관. 3D 거리는 실기체 미지원이라 전면 제거)
   |
   +-- [유도·제어]  (TRACK / FIRE 상태에서 활성)
-  |     LOS(픽셀오차) → alpha-beta 필터 → 유도(PN 기본 / 추미=PID)
-  |       → 목표 조향[deg] → acro 각속도(att_p×조향, 자세피드백 없음) → CH1/CH2
+  |     LOS(픽셀오차) → alpha-beta 필터 → 유도(기본 추적=PID / PN)
+  |       → 각속도[deg/s] → clamp(max_cmd_rate_dps) → ÷max_rate_dps → CH1/CH2
+  |       (각도 단계 없음. ACRO 고정, 자세 피드백 없음)
   |     스로틀: hover→track (center_q 기반 추격 상승) → CH3
   |
   +-- [ServoLock]  (발사 잠금장치, sysfs 하드웨어 PWM)
@@ -585,11 +615,11 @@ arms_control_node
 - **전제**: jetson-io 로 핀15 PWM1 pinmux 설정 + `/sys/class/pwm` 쓰기 권한(`99-gpio.rules` udev).
   (README_SERVO_TEST.md 의 파이썬 경로와 동일 요건.) 미충족/비-Jetson/SITL 에서는 경고 1회 후 no-op.
 
-**파라미터** (`arms_control_node`, `control_params.yaml` / 실기체 `crsf_hw.yaml` 오버레이)
+**파라미터** (`arms_control_node`, `control_params.yaml` / 실기체 `hw_overrides.yaml` 오버레이)
 
 ```yaml
 servo:
-  enabled: false          # 기본 off(SITL). 실기체는 crsf_hw.yaml 이 true 로 덮어씀
+  enabled: false          # 기본 off(SITL). 실기체는 hw_overrides.yaml 이 true 로 덮어씀
   chip_path: "/sys/class/pwm/pwmchip0"
   channel: 0
   period_ns: 20000000     # 50Hz
@@ -674,7 +704,8 @@ nodes:
 
 nodes:
   - arms_control_node  (arms_control)   상태머신 + PID + CRSF → /dev/ttyTHS1
-      파라미터: config/crsf_hw.yaml 오버레이 (crsf.port=/dev/ttyTHS1, crsf.baud=400000)
+      파라미터: config/hw_overrides.yaml 오버레이 (crsf.port, servo.enabled,
+                sitl_auto_launch=false, 실기체 PID)
   - arms_ui_node       (arms_ui)
 
 # arms_command/launch/command.launch.py  (별도 실행)
@@ -684,7 +715,7 @@ nodes:
   docker compose -f docker-compose.jetson.yml up
 
 # arms_control/launch/control.launch.py  (단독 실행용)
-  arms_control_node only (control_params.yaml + crsf_hw.yaml 오버레이)
+  arms_control_node only (control_params.yaml + hw_overrides.yaml 오버레이)
 ```
 
 ## 10. 전체 데이터 흐름 요약

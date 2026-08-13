@@ -359,11 +359,21 @@ class ArmsControlNode : public rclcpp::Node {
           prev_btn_[2] = mode; prev_btn_[3] = launch;
         });
 
-    // 심판의 실제충돌(직격) 통지 → FIRE→RTL (라이다 판정과 무관, 진짜 명중)
+    // 심판(referee)의 직격 통지 — 로그만 남기고 상태머신은 건드리지 않는다.
+    //
+    // 예전에는 이게 on_external_hit() 로 들어가 TRACK/LOCK 을 곧장 FIRE 로
+    // 밀었다. 그러면 영상 파이프라인이 한 번도 발사 판정을 못 해도 미션이
+    // 성공으로 끝나서, 검출/τ 판정이 고장난 걸 심판이 덮어버린다. 채점자가
+    // 응시자 답을 대신 써 주는 배선이라 성능 측정이 오염된다.
+    //
+    // FIRE 는 이제 on_vision_tick(τ, bbox) 한 경로로만 들어간다. 심판은
+    // 그것과 독립적으로 "실제로 닿았는가"만 보고한다 — 둘이 어긋나는 것
+    // 자체가 정보다(닿았는데 FIRE 없음 = 판정 실패, 그 반대 = 오발).
     sub_hit_ = create_subscription<std_msgs::msg::Empty>(
         "/arms/hit", 10, [this](std_msgs::msg::Empty::SharedPtr) {
-          RCLCPP_INFO(get_logger(), "직격 명중 통지 수신 → FIRE.");
-          sm_->on_external_hit();
+          RCLCPP_INFO(get_logger(),
+              "[심판] 직격 명중 (미션 상태에는 영향 없음, 현재 %s)",
+              to_string(sm_->state()).c_str());
         });
 
 

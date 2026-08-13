@@ -27,6 +27,9 @@
 
     <!-- 핵심 시스템 플러그인 -->
     <plugin filename="gz-sim-physics-system"            name="gz::sim::systems::Physics"/>
+    <!-- 표적 접촉 센서를 살리는 시스템. 이게 없으면 <sensor type="contact"> 는
+         에러 없이 그냥 무시되고 토픽이 아예 안 생긴다. -->
+    <plugin filename="gz-sim-contact-system"            name="gz::sim::systems::Contact"/>
     <plugin filename="gz-sim-sensors-system"            name="gz::sim::systems::Sensors">
       <render_engine>ogre2</render_engine>
     </plugin>
@@ -90,6 +93,15 @@
         <collision name="collision">
           <geometry><sphere><radius>1.0</radius></sphere></geometry>
         </collision>
+        <!-- 실제 접촉 판정. referee 가 이 토픽을 구독해 명중을 보고한다
+             (거리 임계값 방식은 폐기: hit_radius 는 임의 상수였다). -->
+        <sensor name="contact_sensor" type="contact">
+          <always_on>true</always_on>
+          <update_rate>100</update_rate>
+          <contact>
+            <collision>collision</collision>
+          </contact>
+        </sensor>
         <visual name="visual">
           <geometry><sphere><radius>1.0</radius></sphere></geometry>
           <material>
@@ -116,6 +128,15 @@
         <collision name="collision">
           <geometry><sphere><radius>1.0</radius></sphere></geometry>
         </collision>
+        <!-- 풍선 표적과 같은 접촉 센서. 시각적으로는 x500 이지만 충돌 형상은
+             반경 1.0 구 하나라, 접촉 판정 기준은 두 표적이 동일하다. -->
+        <sensor name="contact_sensor" type="contact">
+          <always_on>true</always_on>
+          <update_rate>100</update_rate>
+          <contact>
+            <collision>collision</collision>
+          </contact>
+        </sensor>
         <visual name="drone_frame">
           <pose>0 0 0.025 0 0 3.141592654</pose>
           <geometry><mesh><scale>1 1 1</scale><uri>model://x500_base/meshes/NXP-HGD-CF.dae</uri></mesh></geometry>
