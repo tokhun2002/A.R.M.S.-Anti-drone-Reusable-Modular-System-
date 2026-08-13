@@ -5,6 +5,9 @@ Full real-hardware launch: arms_video + arms_command + arms_detection + arms_con
 - Detection(YOLO+HSV+absdiff)은 GPU 도커 컨테이너로 동작. 이 런치가 'docker compose
   up -d' 로 자동 기동한다(멱등: 안 떠 있으면 띄우고, 떠 있으면 그대로). start_detection:=false
   로 끌 수 있음. 도커를 못 쓰거나 compose 를 못 찾으면 경고만 남기고 나머지는 계속 뜬다.
+  로드할 가중치는 model:= 로 고른다 (기본 balloon.engine):
+    ros2 launch arms_bringup arms.launch.py                                  # balloon(기본)
+    ros2 launch arms_bringup arms.launch.py model:=/models/drone.engine      # 드론 추적
 """
 
 import os
@@ -59,14 +62,20 @@ def generate_launch_description():
                               description="ELRS TX serial port (CRSF output, 실기체 UART)"),
         DeclareLaunchArgument("start_detection", default_value="true",
                               description="detection(YOLO) 도커 컨테이너 자동 기동 여부"),
+        DeclareLaunchArgument(
+            "model", default_value="/models/balloon.engine",
+            description="detection 컨테이너가 로드할 가중치(컨테이너 내부 경로). "
+                        "기본=/models/balloon.engine, 드론추적=/models/drone.engine"),
     ]
 
     # 검출 컨테이너 자동 기동 (docker compose up -d — 멱등). 컨테이너의 arms_detection_node
     # 가 /arms/detections 를 발행하므로 호스트에선 detection 노드를 따로 띄우지 않는다.
+    #   model:= 런치 인자를 ARMS_MODEL 로 주입 → compose 의 ${ARMS_MODEL:-...} 가 이를 읽는다.
     if detection_compose:
         actions.append(ExecuteProcess(
             cmd=["docker", "compose", "-f", detection_compose, "up", "-d"],
             output="screen",
+            additional_env={"ARMS_MODEL": LaunchConfiguration("model")},
             condition=IfCondition(LaunchConfiguration("start_detection")),
         ))
     else:
