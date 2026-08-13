@@ -394,18 +394,6 @@ private:
 
   void handleValidPacket(const ControllerPacket & packet)
   {
-    if (have_last_seq_) {
-      const uint32_t expected = last_seq_ + 1U;
-      if (packet.seq != expected) {
-        // 최신값만 쓰므로 오래된 패킷 건너뜀은 정상이다. 얼마나 밀리는지 진단용으로만 출력.
-        const uint32_t skipped = (packet.seq >= expected) ? (packet.seq - expected) : 0U;
-        RCLCPP_INFO_THROTTLE(
-          get_logger(), *get_clock(), 3000,
-          "USB serial: 최신 패킷만 사용 (오래된 패킷 ~%u개 건너뜀/초당 누적)",
-          skipped);
-      }
-    }
-
     last_seq_ = packet.seq;
     have_last_seq_ = true;
     last_valid_packet_time_ = SteadyClock::now();

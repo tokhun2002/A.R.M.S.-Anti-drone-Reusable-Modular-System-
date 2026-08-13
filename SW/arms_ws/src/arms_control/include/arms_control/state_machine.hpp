@@ -43,6 +43,7 @@ public:
   // τ 는 스케일 불변 → 표적 실제크기·카메라 스펙 무관(작은 x500도 큰 풍선도 동일).
   void on_looming(double tau_sec, double bbox_size);
   void on_fire_complete();
+  void on_hit();   // 심판 직격 명중(/arms/hit) → RTL (SITL: 영상 FIRE 대신)
   void arm();
   void disarm();
   void on_landed();

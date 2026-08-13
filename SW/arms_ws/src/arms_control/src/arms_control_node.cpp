@@ -59,6 +59,9 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.deriv_lpf_alpha", 0.25);
 
     declare_parameter("mission.sitl_auto_launch", true);
+    // sitl_hit_rtl: true 면 RTL 을 심판 /arms/hit(거리 직격)로 트리거하고 영상 FIRE→RTL 은 끔.
+    //   SITL 에서 영상 τ 판정이 불안정할 때 지상진실 명중으로 RTL. 실기체는 false(영상 FIRE→RTL).
+    declare_parameter("mission.sitl_hit_rtl", false);
     declare_parameter("mission.auto_launch_delay_sec", 0.5);
 
     // 자동 모드 CH5(FC arm)를 켜는 상태 목록. 자동 모드에선 arm 을 스위치와 분리해
@@ -90,6 +93,9 @@ class ArmsControlNode : public rclcpp::Node {
     // 추격 궤적(Pursuit): 정렬 기다리지 않고 조준하며 처음부터 상승.
     declare_parameter("control.hover_throttle", 0.51);  // 겨냥 안 될 때 최소 상승(호버)
     declare_parameter("control.pursuit_gate", 0.25);    // 오차 이 이하면 full 상승(공쪽으로 돌진)
+    // pursuit_center_boost: true=중앙 정렬될수록 추력↑(center_q 스케일, 기존동작).
+    //                       false=정렬 무관 상수 추력(track_throttle 고정) → "정렬시 추력증가" 비활성.
+    declare_parameter("control.pursuit_center_boost", true);
     // 예측조준(Lead): 움직이는 공의 미래 위치를 겨냥. lead_gain(리드 세기)은 위에 이미 있음.
     declare_parameter("control.lead_dot_alpha", 0.2);   // 표적 속도추정 LPF(클수록 민첩/노이즈↑)
     declare_parameter("control.lead_clamp", 0.6);       // 속도추정 스파이크 제한[1/s]
@@ -183,6 +189,7 @@ class ArmsControlNode : public rclcpp::Node {
     pid_pitch_->set_deriv_alpha(deriv_lpf_alpha_);
 
     sitl_auto_launch_ = get_parameter("mission.sitl_auto_launch").as_bool();
+    sitl_hit_rtl_ = get_parameter("mission.sitl_hit_rtl").as_bool();
     auto_launch_delay_sec_ =
         get_parameter("mission.auto_launch_delay_sec").as_double();
 
@@ -197,6 +204,7 @@ class ArmsControlNode : public rclcpp::Node {
     max_rate_dps_ = get_parameter("control.max_rate_dps").as_double();
     hover_throttle_ = get_parameter("control.hover_throttle").as_double();
     pursuit_gate_ = get_parameter("control.pursuit_gate").as_double();
+    pursuit_center_boost_ = get_parameter("control.pursuit_center_boost").as_bool();
     lead_dot_alpha_ = get_parameter("control.lead_dot_alpha").as_double();
     lead_clamp_ = get_parameter("control.lead_clamp").as_double();
     max_cmd_rate_dps_ = get_parameter("control.max_cmd_rate_dps").as_double();
@@ -247,6 +255,10 @@ class ArmsControlNode : public rclcpp::Node {
               hover_throttle_ = p.as_double();
             else if (n == "control.pursuit_gate")
               pursuit_gate_ = p.as_double();
+            else if (n == "control.pursuit_center_boost")
+              pursuit_center_boost_ = p.as_bool();
+            else if (n == "mission.sitl_hit_rtl")
+              sitl_hit_rtl_ = p.as_bool();
             else if (n == "control.lead_dot_alpha")
               lead_dot_alpha_ = p.as_double();
             else if (n == "control.lead_clamp")
@@ -381,9 +393,17 @@ class ArmsControlNode : public rclcpp::Node {
     // 자체가 정보다(닿았는데 FIRE 없음 = 판정 실패, 그 반대 = 오발).
     sub_hit_ = create_subscription<std_msgs::msg::Empty>(
         "/arms/hit", 10, [this](std_msgs::msg::Empty::SharedPtr) {
-          RCLCPP_INFO(get_logger(),
-              "[심판] 직격 명중 (미션 상태에는 영향 없음, 현재 %s)",
-              to_string(sm_->state()).c_str());
+          if (sitl_hit_rtl_) {
+            const auto prev = to_string(sm_->state());
+            sm_->on_hit();   // 거리 직격 명중 → RTL (영상 FIRE 대신)
+            RCLCPP_INFO(get_logger(),
+                "[심판] 직격 명중 → RTL (hit-RTL 모드, %s→%s)",
+                prev.c_str(), to_string(sm_->state()).c_str());
+          } else {
+            RCLCPP_INFO(get_logger(),
+                "[심판] 직격 명중 (미션 상태에는 영향 없음, 현재 %s)",
+                to_string(sm_->state()).c_str());
+          }
         });
 
 
@@ -430,7 +450,11 @@ class ArmsControlNode : public rclcpp::Node {
     double tau = (loom_rate_ema_ > 1e-4)
                    ? (loom_s_ema_ / loom_rate_ema_)
                    : std::numeric_limits<double>::infinity();
-    sm_->on_looming(tau, loom_s_ema_);
+    // hit-RTL 모드(SITL 순수 요격)에선 영상 τ 로 FIRE 하지 않는다.
+    //   TRACK 유지하며 추격 → 실제 충돌(/arms/hit) → RTL. (FIRE 상태 자체를 안 씀)
+    if (!sitl_hit_rtl_) {
+      sm_->on_looming(tau, loom_s_ema_);
+    }
 
     geometry_msgs::msg::Vector3 lm;
     lm.x = std::isfinite(tau) ? std::min(tau, 9.99) : 9.99;  // 무한대(미접근)는 9.99로 표시
@@ -648,9 +672,15 @@ class ArmsControlNode : public rclcpp::Node {
         const double up = track_throttle_;      // 잘 겨눴을 때 최대 상승(=공쪽 돌진)
         const double hover = hover_throttle_;   // 빗나갔을 때 최소(재조준)
         double emag = std::hypot(filt_err_x_, filt_err_y_);
-        double center_q =
-            std::clamp(1.0 - emag / std::max(pursuit_gate_, 1e-3), 0.0, 1.0);
-        thrust = static_cast<float>(hover + (up - hover) * center_q);
+        if (pursuit_center_boost_) {
+          // 중앙 정렬될수록(center_q↑) 그쪽으로 더 세게 상승, 빗나가면 hover 로 낮춰 재조준 우선.
+          double center_q =
+              std::clamp(1.0 - emag / std::max(pursuit_gate_, 1e-3), 0.0, 1.0);
+          thrust = static_cast<float>(hover + (up - hover) * center_q);
+        } else {
+          // 비활성화: 정렬 정도와 무관하게 상수 추력(track_throttle) 유지.
+          thrust = static_cast<float>(up);
+        }
 
         if (!align_locked_ && emag < 0.15) {
           align_locked_ = true;
@@ -837,6 +867,7 @@ class ArmsControlNode : public rclcpp::Node {
     }
 
     // ---- FIRE one-shot ----
+    // FIRE 는 실기체 경로(sitl_hit_rtl=false)에서만 진입한다(hit-RTL 모드는 on_looming 게이트로 차단).
     if (state == State::FIRE && !fire_sent_) {
       fire_sent_ = true;
       RCLCPP_INFO(get_logger(), "FIRE state — payload trigger signaled via mission_state.");
@@ -937,6 +968,7 @@ class ArmsControlNode : public rclcpp::Node {
   bool align_locked_{false};
 
   bool sitl_auto_launch_{false};
+  bool sitl_hit_rtl_{false};   // RTL 트리거를 /arms/hit(거리명중)로 (영상 FIRE 대신). SITL 용.
   double auto_launch_delay_sec_{0.5};
   bool lock_timer_started_{false};
   bool auto_launched_{false};
@@ -978,6 +1010,7 @@ class ArmsControlNode : public rclcpp::Node {
   double max_rate_dps_{400.0};
   double hover_throttle_{0.51};
   double pursuit_gate_{0.25};
+  bool   pursuit_center_boost_{true};   // 중앙 정렬시 추력증가 on/off (config)
   double lead_dot_alpha_{0.2};
   double lead_clamp_{0.6};
   double max_cmd_rate_dps_{227.5};   // 유도 출력 각속도 상한[deg/s]

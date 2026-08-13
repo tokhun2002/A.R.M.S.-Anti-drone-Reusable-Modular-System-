@@ -42,6 +42,8 @@ arms_control_node:
       #   그 주석만 있고 실제 오버라이드가 없어서 실기체도 true 였다.
       sitl_auto_launch: true
       auto_launch_delay_sec: 0.5
+      # RTL 트리거: true=심판 /arms/hit(거리 직격)로 RTL, 영상 FIRE→RTL 끔. SITL 전용(실기체는 false).
+      sitl_hit_rtl: true
 
     # =====================================================================
     # 발사 잠금장치 서보 (Jetson 하드웨어 PWM, sysfs)
@@ -89,11 +91,11 @@ arms_control_node:
       #   부터 P 항만으로 최대 출력이라, 그 위로는 kp 를 올려도 아무것도 안 바뀐다.
       # 튜닝 순서: kp 를 낮은 값에서 조금씩 ↑ (떨리면 30% ↓) → 그 다음 kd → lead.
       roll_pid:
-        kp: 200.0
+        kp: 400.0
         ki: 0.0
         kd: 3.5
       pitch_pid:
-        kp: 200.0
+        kp: 400.0
         ki: 0.0
         kd: 3.5
 
@@ -127,7 +129,9 @@ arms_control_node:
       #   물리량 AUW 1.05kg · 추력 4kgf · TWR≈3.81 · 호버≈0.51 기준.
       hover_throttle: 0.51    # 빗나갔을 때 최소 상승(재조준). MPC_THR_HOVER 와 일치
       track_throttle: 0.85    # 잘 겨눴을 때 최대 상승(표적쪽 돌진). 못 쫓으면 ↑
-      pursuit_gate: 0.25      # 오차 이 이하면 full 상승
+      pursuit_gate: 0.25      # 오차 이 이하면 full 상승 (pursuit_center_boost=true 일 때만 의미)
+      # 중앙 정렬될수록 추력 세지는 로직 on/off. false=정렬 무관 상수 추력(track_throttle 고정).
+      pursuit_center_boost: false   # ★ 비활성화(요청). true 면 기존처럼 center_q 로 hover↔track 보간
 
       # ── 오차 필터 ─────────────────────────────────────────────────────
       error_lpf_alpha: 0.25
