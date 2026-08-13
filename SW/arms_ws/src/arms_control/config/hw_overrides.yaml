@@ -1,19 +1,11 @@
 # 실기체(Jetson) 전용 오버레이 — control_params.yaml 위에 얹힌다.
 #
-# 여기에는 "실기체가 SITL과 다른 것"만 적는다. 같은 값은 적지 않는다 —
-# 두 곳에 같은 숫자가 있으면 한쪽만 고쳐지고 조용히 갈라진다.
+# 여기에는 "실기체가 SITL과 다른 것"만 적는다.
 #
 # 로드 순서 (뒤가 이김):
 #   control.launch.py       control_params.yaml → 이 파일
 #   arms.launch.py          control_params.yaml → 이 파일 → crsf_port 인자
 #   *_sitl.launch.py        control_params.yaml 만  ← 이 파일 안 실림
-#
-# CRSF 포트가 이 파일에 있는 것은 의도적이다. 이 파일이 실리지 않으면
-# crsf.port 가 SITL 기본값(/tmp/crsf_tx)으로 남아 실기체에서 CRSF 출력이
-# 아예 안 나간다 — 즉 시동 단계에서 대놓고 실패한다. 게인·자동발진 같은
-# "틀려도 일단 나는" 항목을 같은 파일에 두면 그 소란스러운 실패에 묶여서,
-# 설정 누락이 조용한 오작동으로 끝나지 않는다. 포트를 다른 파일로 옮기면
-# 그 안전장치가 깨진다.
 #
 # ELRS TX 모듈이 연결된 UART 에 맞게 port 를 조정할 것.
 #   - 40핀 헤더 UART (8=TXD, 10=RXD): /dev/ttyTHS1
