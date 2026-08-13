@@ -46,11 +46,9 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.roll_pid.kp", 455.0);
     declare_parameter("control.roll_pid.ki", 0.0);
     declare_parameter("control.roll_pid.kd", 3.5);
-    declare_parameter("control.roll_pid.output_limit", 157.5);
     declare_parameter("control.pitch_pid.kp", 455.0);
     declare_parameter("control.pitch_pid.ki", 0.0);
     declare_parameter("control.pitch_pid.kd", 3.5);
-    declare_parameter("control.pitch_pid.output_limit", 157.5);
     declare_parameter("control.track_throttle", 0.85);
     declare_parameter("control.lead_gain", 0.0);
     declare_parameter("control.roll_sign", 1.0);
@@ -100,8 +98,17 @@ class ArmsControlNode : public rclcpp::Node {
     //   자세 피드백이 없어서 그 '각도'는 이름뿐이었고 att_p 는 kp 와 직렬로 곱해지는
     //   두 번째 게인일 뿐이었다. att_p 는 kp/kd/pn_* 게인에 흡수했고(3.5배),
     //   max_tilt_deg 클램프는 아래 max_cmd_rate_dps 로 대체했다.
-    declare_parameter("control.max_cmd_rate_dps", 227.5);  // 유도 출력 각속도 상한[deg/s]
-    // 유도 방식: 0=추미(Pursuit, 현위치추종/기존), 1=비례항법(PN, 시선각속도 제거/빠른표적)
+    declare_parameter("control.max_cmd_rate_dps", 227.5);
+    // 중심 근처 게인 감쇠(gain_scale / pitch_scale) 를 켤지. 기본 false = 순수 P.
+    //   true 면 아래 두 가지가 켜진다:
+    //     · 느린 표적(|LOS각속도| < 0.2) 이 중심 근처일 때 게인 감쇠 (0.08→x0.5, 0.20→x0.75)
+    //     · roll 오차가 크면 pitch 게인 감쇠 (0.12→x0.8, 0.06→x0.9) = 좌우 정렬 우선
+    //   이 숫자들은 구 물리량 시절 지터를 막으려고 손으로 넣은 값이고 현재 기체에서
+    //   재검증된 적이 없다. deadzone 과 함께 "중심 근처에서 일부러 약해지는" 장치라,
+    //   표적이 중앙에 안 붙는 증상을 만들 수 있다. 먼저 끄고 순수 P 를 본 뒤,
+    //   지터가 실제로 보이면 그때 켠다.
+    declare_parameter("control.gain_shaping", false);  // 유도 출력 각속도 상한[deg/s]
+    // 유도 방식: 0=기본 추적(현위치 추종 PID), 1=비례항법(PN, 시선각속도 제거/빠른표적)
     declare_parameter("control.guidance_mode", 0);
     declare_parameter("control.pn_nav_gain", 175.0);    // PN 항법이득 N (LOS각속도→기울기). 못따라가면↑ 떨리면↓
     declare_parameter("control.pn_center_gain", 52.5);  // 표적 중심유지(화면 이탈 방지)
@@ -138,26 +145,31 @@ class ArmsControlNode : public rclcpp::Node {
     // ----------------------------------------------------------------
     // PID controllers
     // ----------------------------------------------------------------
+    // PID 의 출력 한계 = control.max_cmd_rate_dps. 각속도 천장은 이 하나뿐이다.
+    //   예전에는 roll_pid.output_limit / pitch_pid.output_limit 가 따로 있었고
+    //   값도 달랐다(157.5 vs 227.5). 순서상 PID 쪽이 항상 먼저 물려서 뒤의
+    //   max_cmd_rate_dps 는 기본 추적 경로에서 죽은 값이었다 — 같은 일을 하는
+    //   한계가 둘이면 어느 쪽이 실제로 걸리는지 아무도 모른다.
+    max_cmd_rate_dps_ = get_parameter("control.max_cmd_rate_dps").as_double();
+    gain_shaping_ = get_parameter("control.gain_shaping").as_bool();
     pid_roll_ = std::make_unique<PIDController>(
         get_parameter("control.roll_pid.kp").as_double(),
         get_parameter("control.roll_pid.ki").as_double(),
         get_parameter("control.roll_pid.kd").as_double(),
-        get_parameter("control.roll_pid.output_limit").as_double());
+        max_cmd_rate_dps_);
 
     pid_pitch_ = std::make_unique<PIDController>(
         get_parameter("control.pitch_pid.kp").as_double(),
         get_parameter("control.pitch_pid.ki").as_double(),
         get_parameter("control.pitch_pid.kd").as_double(),
-        get_parameter("control.pitch_pid.output_limit").as_double());
+        max_cmd_rate_dps_);
 
     rkp_ = get_parameter("control.roll_pid.kp").as_double();
     rki_ = get_parameter("control.roll_pid.ki").as_double();
     rkd_ = get_parameter("control.roll_pid.kd").as_double();
-    rlim_ = get_parameter("control.roll_pid.output_limit").as_double();
     pkp_ = get_parameter("control.pitch_pid.kp").as_double();
     pki_ = get_parameter("control.pitch_pid.ki").as_double();
     pkd_ = get_parameter("control.pitch_pid.kd").as_double();
-    plim_ = get_parameter("control.pitch_pid.output_limit").as_double();
 
     track_throttle_ = get_parameter("control.track_throttle").as_double();
     lead_gain_ = get_parameter("control.lead_gain").as_double();
@@ -239,8 +251,12 @@ class ArmsControlNode : public rclcpp::Node {
               lead_dot_alpha_ = p.as_double();
             else if (n == "control.lead_clamp")
               lead_clamp_ = p.as_double();
-            else if (n == "control.max_cmd_rate_dps")
+            else if (n == "control.max_cmd_rate_dps") {
               max_cmd_rate_dps_ = p.as_double();
+              pid_changed = true;   // PID 출력 한계도 이 값이라 같이 반영해야 한다
+            }
+            else if (n == "control.gain_shaping")
+              gain_shaping_ = p.as_bool();
             else if (n == "control.guidance_mode")
               guidance_mode_ = static_cast<int>(p.as_int());
             else if (n == "control.pn_nav_gain")
@@ -274,9 +290,6 @@ class ArmsControlNode : public rclcpp::Node {
             } else if (n == "control.roll_pid.kd") {
               rkd_ = p.as_double();
               pid_changed = true;
-            } else if (n == "control.roll_pid.output_limit") {
-              rlim_ = p.as_double();
-              pid_changed = true;
             } else if (n == "control.pitch_pid.kp") {
               pkp_ = p.as_double();
               pid_changed = true;
@@ -286,14 +299,11 @@ class ArmsControlNode : public rclcpp::Node {
             } else if (n == "control.pitch_pid.kd") {
               pkd_ = p.as_double();
               pid_changed = true;
-            } else if (n == "control.pitch_pid.output_limit") {
-              plim_ = p.as_double();
-              pid_changed = true;
             }
           }
           if (pid_changed) {
-            pid_roll_->set_gains(rkp_, rki_, rkd_, rlim_);
-            pid_pitch_->set_gains(pkp_, pki_, pkd_, plim_);
+            pid_roll_->set_gains(rkp_, rki_, rkd_, max_cmd_rate_dps_);
+            pid_pitch_->set_gains(pkp_, pki_, pkd_, max_cmd_rate_dps_);
           }
           RCLCPP_INFO(get_logger(),
                       "param 적용: roll_sign=%.0f pitch_sign=%.0f rkp=%.1f "
@@ -591,7 +601,7 @@ class ArmsControlNode : public rclcpp::Node {
 
       if (guidance_mode_ == 1) {
         // ===== 비례항법 (Proportional Navigation) =====
-        //   추미(현위치 추종)와 달리 '시선각속도(losf_dot)를 0으로' 만들도록 조종한다.
+        //   기본 추적(현위치 추종)과 달리 '시선각속도(losf_dot)를 0으로' 만들도록 조종한다.
         //   → 자동으로 미래 충돌점을 앞질러 겨냥 = 가로지르는 빠른 표적에 훨씬 유리.
         //   횡가속(=기울기) 명령 = N×LOS각속도 + 약한 중심유지(표적 화면이탈 방지).
         //   LOS각속도 클램프로 노이즈 폭주 방지.
@@ -605,22 +615,27 @@ class ArmsControlNode : public rclcpp::Node {
         roll_rate_cmd  = roll_sign_  * rc;
         pitch_rate_cmd = pitch_sign_ * pc;
       } else {
-        // ===== 추미 (Pursuit): PID + 시간기반 리드 (기존/검증됨) =====
-        double emag_g = std::hypot(ex, ey);
-        double tgt_spd = std::hypot(err_dot_x_, err_dot_y_);   // 표적 각속도(리드 신호)
+        // ===== 기본 추적: PID + 시간기반 리드 =====
+        // 게인 감쇠는 control.gain_shaping 이 true 일 때만. 기본은 순수 P 다.
         double gain_scale = 1.0;
-        // 중앙 근처 게인 감쇠는 '느린/정지' 표적에서만(지터 방지). 빠른 공은 full 게인 유지 → 뒤처짐 방지.
-        if (tgt_spd < 0.2) {
-          if (emag_g < 0.08)      gain_scale = 0.5;
-          else if (emag_g < 0.20) gain_scale = 0.75;
+        if (gain_shaping_) {
+          double emag_g = std::hypot(ex, ey);
+          double tgt_spd = std::hypot(err_dot_x_, err_dot_y_);   // 표적 각속도
+          // 중앙 근처 감쇠는 '느린/정지' 표적에서만(지터 방지). 빠른 표적은 full 게인 → 뒤처짐 방지.
+          if (tgt_spd < 0.2) {
+            if (emag_g < 0.08)      gain_scale = 0.5;
+            else if (emag_g < 0.20) gain_scale = 0.75;
+          }
         }
         double t_lead = lead_gain_;   // 시간기반 리드만 쓴다 (거리비례 리드는 3D 거리와 함께 삭제됨)
         double ex_lead = ex + t_lead * err_dot_x_;
         double ey_lead = ey + t_lead * err_dot_y_;
         roll_rate_cmd = roll_sign_ * gain_scale * pid_roll_->compute(ex_lead, dt);
         double pitch_scale = 1.0;
-        if (fabs(ex) > 0.12)      pitch_scale = 0.8;
-        else if (fabs(ex) > 0.06) pitch_scale = 0.9;
+        if (gain_shaping_) {          // roll 오차가 크면 pitch 를 눌러 좌우 정렬 우선
+          if (fabs(ex) > 0.12)      pitch_scale = 0.8;
+          else if (fabs(ex) > 0.06) pitch_scale = 0.9;
+        }
         pitch_rate_cmd = pitch_sign_ * gain_scale * pitch_scale * pid_pitch_->compute(ey_lead, dt);
       }
 
@@ -966,7 +981,8 @@ class ArmsControlNode : public rclcpp::Node {
   double lead_dot_alpha_{0.2};
   double lead_clamp_{0.6};
   double max_cmd_rate_dps_{227.5};   // 유도 출력 각속도 상한[deg/s]
-  // 유도(Guidance): 추미(0) / 비례항법 PN(1)
+  bool   gain_shaping_{false};       // 중심 근처 게인 감쇠 (기본 off = 순수 P)
+  // 유도(Guidance): 기본 추적(0) / 비례항법 PN(1)
   int    guidance_mode_{0};
   double pn_nav_gain_{175.0};
   double pn_center_gain_{52.5};
@@ -986,8 +1002,8 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 
-  double rkp_{455.0}, rki_{0}, rkd_{0}, rlim_{0};
-  double pkp_{455.0}, pki_{0}, pkd_{0}, plim_{0};
+  double rkp_{455.0}, rki_{0}, rkd_{0};
+  double pkp_{455.0}, pki_{0}, pkd_{0};
 
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Time last_tick_;

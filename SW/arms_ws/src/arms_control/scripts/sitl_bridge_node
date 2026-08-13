@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""ros2 run 진입점 — 얇은 런처.
+
+모듈 소스를 여기에 복사하지 않는 것이 핵심이다. CMakeLists 가 예전에
+`install(PROGRAMS arms_control/sitl_bridge_node.py ... RENAME sitl_bridge_node)` 로 소스를 통째
+**복사**했는데, install(PROGRAMS) 는 colcon --symlink-install 로도 심링크가
+되지 않는다. 그래서 심링크 빌드를 해 놓고도 이 노드만 빌드 시점의 옛 코드로
+조용히 돌았다 (실제로 조종기 throttle 기본값 변경이 반영되지 않았다).
+
+이 파일은 내용이 바뀌지 않으므로 복사돼도 무해하고, 실제 구현은
+ament_python_install_package 가 심링크로 깐 모듈에서 가져온다.
+"""
+from arms_control.sitl_bridge_node import main
+
+if __name__ == "__main__":
+    main()

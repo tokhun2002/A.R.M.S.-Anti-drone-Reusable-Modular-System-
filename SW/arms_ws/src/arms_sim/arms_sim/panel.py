@@ -16,6 +16,7 @@ arms_command 노드 담당). 여기서 하는 일은 전부 파라미터/서비�
 import queue
 import subprocess
 import threading
+import time
 import tkinter as tk
 
 import rclpy
@@ -71,6 +72,27 @@ def ros_param_set_node(node, name, value):
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
 
 
+def ros_param_get(node, name, timeout=4.0):
+    """노드에서 파라미터 값을 읽어 문자열로 돌려준다. 실패하면 None.
+
+    출력 형식이 "Double value is: 455.0" 같은 꼴이라 접두어를 떼어낸다.
+    (--hide-type 은 배포판마다 있는지 달라서 의존하지 않는다.)
+    """
+    try:
+        r = subprocess.run(["ros2", "param", "get", node, name],
+                           capture_output=True, text=True, timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if r.returncode != 0:
+        return None
+    out = r.stdout.strip()
+    if " value is: " in out:
+        out = out.split(" value is: ", 1)[1]
+    elif " values are: " in out:
+        out = out.split(" values are: ", 1)[1]
+    return out.strip() or None
+
+
 class PanelNode(Node):
     """콘솔 노드 — 미션 상태만 구독(표시용). /arms/command 는 발행하지 않는다."""
 
@@ -94,6 +116,9 @@ class PanelGUI:
         self.q = q
         self.roll_sign  = 1.0
         self.pitch_sign = 1.0
+        # (노드, 파라미터, 반영함수) — _pull_from_nodes 가 시작할 때 읽어 채운다.
+        self._pullables = []
+        self._applyq = queue.Queue()      # 워커 → 메인 루프 (_poll 이 비운다)
 
         root.title("A.R.M.S. Control Panel")
         root.configure(bg="#1e1e1e")
@@ -146,6 +171,11 @@ class PanelGUI:
             b.grid(row=0, column=len(self.det_btns), padx=2)
             self.det_btns[key] = (b, col)
         self._refresh_det_btns()
+        for key in self.det_on:
+            self._track(FUSION_NODE, f"use_{key}",
+                        lambda v, k=key: (self.det_on.__setitem__(
+                            k, str(v).strip().lower() == "true"),
+                            self._refresh_det_btns()))
         tk.Label(g_det, text="눌린 것 = ON. 여러 개 켜면 융합 검출.",
                  fg="#777777", bg="#1e1e1e", font=("Arial", 8)).pack()
 
@@ -186,6 +216,9 @@ class PanelGUI:
             tk.Button(row, text="적용", bg="#455a64", fg="white",
                       activebackground="#607d8b", relief="flat",
                       command=apply).grid(row=0, column=6, padx=(2, 0))
+            for widget, pname in zip(entries, params):
+                self._track(CTRL_NODE, pname,
+                            lambda v, w=widget: (w.delete(0, "end"), w.insert(0, v)))
             return ep, ei, ed
 
         self.roll_kp, self.roll_ki, self.roll_kd = make_pid_group(
@@ -206,6 +239,9 @@ class PanelGUI:
                                   insertbackground="white", relief="flat")
         self.thr_entry.insert(0, "0.85")   # yaml track_throttle 과 일치 (1.05kg)
         self.thr_entry.grid(row=0, column=0, padx=(4, 6))
+        self._track(CTRL_NODE, "control.track_throttle",
+                    lambda v: (self.thr_entry.delete(0, "end"),
+                               self.thr_entry.insert(0, v)))
         tk.Button(thr_row, text="적용", bg="#455a64", fg="white",
                   activebackground="#607d8b", relief="flat",
                   command=lambda: ros_param_set(
@@ -243,6 +279,8 @@ class PanelGUI:
                             highlightthickness=0, troughcolor="#444")
         self.alt.set(42)
         self.alt.pack(pady=(2, 0))
+        self._track(REFEREE_NODE, "alt",
+                    lambda v: self.alt.set(float(v)))
         self.alt.bind("<ButtonRelease-1>",
                       lambda e: ros_param_set_node(REFEREE_NODE, "alt", float(self.alt.get())))
 
@@ -252,6 +290,8 @@ class PanelGUI:
                                    highlightthickness=0, troughcolor="#444")
         self.ball_speed.set(1.6)
         self.ball_speed.pack(pady=(2, 0))
+        self._track(REFEREE_NODE, "speed",
+                    lambda v: self.ball_speed.set(float(v)))
         self.ball_speed.bind("<ButtonRelease-1>",
                              lambda e: ros_param_set_node(REFEREE_NODE, "speed", float(self.ball_speed.get())))
 
@@ -263,6 +303,8 @@ class PanelGUI:
                                   bg="#37474f", fg="white", activebackground="#546e7a",
                                   command=self.toggle_guidance)
         self.guid_btn.pack(pady=(0, 4), fill="x")
+        self._track(CTRL_NODE, "control.guidance_mode",
+                    lambda v: self._set_guidance(int(float(v))))
 
         # 예측 조준(lead) — 움직이는 공의 미래 위치를 겨냥 (control.lead_gain)
         self.lead = tk.Scale(g_guid, from_=0.0, to=1.5, resolution=0.05, orient="horizontal",
@@ -270,6 +312,8 @@ class PanelGUI:
                              highlightthickness=0, troughcolor="#444")
         self.lead.set(0.0)
         self.lead.pack(pady=(2, 0))
+        self._track(CTRL_NODE, "control.lead_gain",
+                    lambda v: self.lead.set(float(v)))
         self.lead.bind("<ButtonRelease-1>",
                        lambda e: ros_param_set("control.lead_gain", float(self.lead.get())))
 
@@ -278,6 +322,8 @@ class PanelGUI:
                                highlightthickness=0, troughcolor="#444")
         self.pn_nav.set(175)
         self.pn_nav.pack(pady=(2, 0))
+        self._track(CTRL_NODE, "control.pn_nav_gain",
+                    lambda v: self.pn_nav.set(float(v)))
         self.pn_nav.bind("<ButtonRelease-1>",
                          lambda e: ros_param_set("control.pn_nav_gain", float(self.pn_nav.get())))
         self.pn_center = tk.Scale(g_guid, from_=0.0, to=350.0, resolution=0.5, orient="horizontal",
@@ -285,6 +331,8 @@ class PanelGUI:
                                   highlightthickness=0, troughcolor="#444")
         self.pn_center.set(52.5)
         self.pn_center.pack(pady=(2, 0))
+        self._track(CTRL_NODE, "control.pn_center_gain",
+                    lambda v: self.pn_center.set(float(v)))
         self.pn_center.bind("<ButtonRelease-1>",
                             lambda e: ros_param_set("control.pn_center_gain", float(self.pn_center.get())))
 
@@ -296,27 +344,61 @@ class PanelGUI:
                                  highlightthickness=0, troughcolor="#444")
         self.tau_fire.set(0.3)
         self.tau_fire.pack()
+        self._track(CTRL_NODE, "mission.tau_fire_sec",
+                    lambda v: self.tau_fire.set(float(v)))
         self.tau_fire.bind("<ButtonRelease-1>",
                            lambda e: ros_param_set("mission.tau_fire_sec", float(self.tau_fire.get())))
         # 명중 판정 슬라이더는 없다. Gazebo 접촉 센서가 실제 충돌 형상으로
         # 판정하므로 조절할 값 자체가 없다 — 예전 hit_radius 는 "빗나가도 명중"
         # 을 만들 수 있는 노브였다. 판정은 이제 설정값이 아니라 물리다.
 
-        self._push_defaults()
+        self._pull_from_nodes()
         self._poll()
 
-    def _push_defaults(self):
-        """패널이 그려놓은 초기 상태를 실제 노드로 한 번 밀어준다.
+    def _track(self, node, param, apply_fn):
+        """시작할 때 노드에서 읽어와 위젯에 반영할 항목을 등록한다."""
+        self._pullables.append((node, param, apply_fn))
 
-        이게 없으면 패널은 '표시'만 하고 노드는 자기 기본값대로 돌아, 화면과
-        실제가 조용히 어긋난다. 실제로 그랬다: 패널은 YOLO OFF 로 그렸는데
-        arms_detection_node 의 use_yolo 기본값은 True 였다.
-        토글 버튼 계열(검출 3종, 유도 방식)만 민다 — 슬라이더/입력란은 사용자가
-        '적용'을 누르거나 드래그를 놓을 때 나가는 게 맞다.
+    def _pull_from_nodes(self):
+        """실제 노드 값을 읽어 화면을 맞춘다. 노드가 진실이고 패널은 거울이다.
+
+        예전에는 반대로 패널이 자기 하드코딩 값을 노드로 밀었다(_push_defaults).
+        그러면 control_params.yaml 을 고쳐도 패널은 옛 숫자를 그대로 보여주고,
+        심지어 '적용' 을 누르는 순간 yaml 값을 옛 숫자로 되돌려버린다.
+        실제로 kp 를 1055 로 올려도 패널은 455 를 그리고 있었다.
+
+        노드가 아직 안 떴을 수 있으니 몇 번 재시도한다. tkinter 는 스레드 안전이
+        아니라서 위젯을 워커 스레드에서 직접 못 건드리고, root.after 조차
+        메인 스레드 전용이다("main thread is not in main loop"). 그래서 결과를
+        큐에 넣고 이미 도는 _poll 루프가 꺼내 반영한다.
         """
-        for key, on in self.det_on.items():
-            ros_param_set_node(FUSION_NODE, f"use_{key}", str(on).lower())
-        ros_param_set("control.guidance_mode", self._guidance_mode)
+        def worker():
+            pending = list(self._pullables)
+            for attempt in range(6):
+                if not pending:
+                    break
+                still = []
+                for node, param, apply_fn in pending:
+                    raw = ros_param_get(node, param)
+                    if raw is None:
+                        still.append((node, param, apply_fn))
+                        continue
+                    self._applyq.put((apply_fn, raw))
+                pending = still
+                if pending:
+                    time.sleep(1.0)
+            if pending:
+                names = ", ".join(f"{n}{p}" for n, p, _ in pending[:3])
+                print(f"[panel] 파라미터를 못 읽음 (노드 미기동?): {names}"
+                      f"{' 외 %d개' % (len(pending) - 3) if len(pending) > 3 else ''}")
+        threading.Thread(target=worker, daemon=True).start()
+
+    @staticmethod
+    def _safe_apply(apply_fn, raw):
+        try:
+            apply_fn(raw)
+        except (ValueError, TypeError) as e:
+            print(f"[panel] 파라미터 반영 실패: {raw!r} ({e})")
 
     def toggle_det(self, key):
         self.det_on[key] = not self.det_on[key]
@@ -351,6 +433,14 @@ class PanelGUI:
             ros_param_set_node(REFEREE_NODE, "target", "balloon")
 
     # ---- 유도 방식 전환 (기본 추적 ↔ PN) ----
+    def _set_guidance(self, mode):
+        """버튼 표시만 갱신 (노드로 쓰지 않는다 — 읽어온 값 반영용)."""
+        self._guidance_mode = 1 if mode == 1 else 0
+        if self._guidance_mode == 1:
+            self.guid_btn.config(text="방식: PN(비례항법)", bg="#6a1b9a")
+        else:
+            self.guid_btn.config(text="방식: 기본 추적", bg="#37474f")
+
     def toggle_guidance(self):
         self._guidance_mode = 1 if self._guidance_mode == 0 else 0
         ros_param_set("control.guidance_mode", self._guidance_mode)
@@ -386,6 +476,13 @@ class PanelGUI:
             self.ball_stop_btn.config(bg="#333333", fg="#cccccc", relief="raised")
 
     def _poll(self):
+        # 노드에서 읽어온 파라미터를 메인 스레드에서 위젯에 반영
+        try:
+            while True:
+                apply_fn, raw = self._applyq.get_nowait()
+                self._safe_apply(apply_fn, raw)
+        except queue.Empty:
+            pass
         try:
             while True:
                 msg = self.q.get_nowait()

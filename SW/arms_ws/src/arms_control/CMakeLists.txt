@@ -71,10 +71,12 @@ install(DIRECTORY launch config
 # -----------------------------------------------------------------------
 ament_python_install_package(${PROJECT_NAME})
 
+# ros2 run 진입점 — 소스 복사가 아니라 scripts/ 의 얇은 런처.
+#   install(PROGRAMS) 는 --symlink-install 로도 심링크가 안 되므로, 소스를
+#   직접 깔면 파이썬을 고쳐도 빌드 전까지 옛 코드가 돈다. arms_command 와 동일.
 install(PROGRAMS
-  arms_control/sitl_bridge_node.py
+  scripts/sitl_bridge_node
   DESTINATION lib/${PROJECT_NAME}
-  RENAME sitl_bridge_node
 )
 
 ament_package()

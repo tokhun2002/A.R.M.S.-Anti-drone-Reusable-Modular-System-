@@ -12,11 +12,15 @@ find_package(sensor_msgs REQUIRED)
 # Python 모듈 설치 (import arms_command.xxx 가능하게)
 ament_python_install_package(${PROJECT_NAME})
 
-# Python 실행파일을 lib/<pkg>/ 에 직접 설치 (ros2 run이 여기서 찾음)
+# ros2 run 진입점 — 소스가 아니라 scripts/ 의 얇은 런처를 깐다.
+#   ★ 예전에는 arms_command/arms_command_node.py 를 RENAME 으로 복사했는데,
+#     install(PROGRAMS) 는 colcon --symlink-install 로도 심링크가 되지 않는다.
+#     그래서 심링크 빌드를 해도 이 노드만 빌드 시점 코드로 굳어, 소스를 고쳐도
+#     조용히 옛 동작을 했다. 런처는 내용이 안 바뀌므로 복사돼도 무해하고,
+#     실제 코드는 위 ament_python_install_package 가 깐 모듈에서 온다.
 install(PROGRAMS
-  arms_command/arms_command_node.py
+  scripts/arms_command_node
   DESTINATION lib/${PROJECT_NAME}
-  RENAME arms_command_node
 )
 
 # ESP32 UART 수신 노드

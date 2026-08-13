@@ -84,15 +84,17 @@ class ControllerGUI:
         stick_frm.pack(pady=12)
 
         # 왼쪽 스틱 (ax0=X=yaw, ax1=Y=throttle)
-        #   throttle 초기값 = 최하단(-1.0), 실물 송신기와 같다. 이건 취향이 아니라
-        #   arm 조건이다: arms_control_node 의 pre-arm 확인이
-        #     joy_axes_[1] <= prearm_throttle_max_
-        #   를 요구하므로, 중앙(0.0)으로 시작하면 ARM 을 눌러도 계속 차단되고
-        #   UI 에는 "ARM DENIED - STICKS NOT IDLE" 만 뜬다.
-        #   대가: 자동→수동 인계 시 스틱을 안 건드리면 throttle 최저가 그대로 나간다.
-        #   (예전 0.0 기본값은 PX4 Altitude 모드의 "중앙=고도유지"를 노린 것이었다.)
-        self._thr_hold = -1.0
-        self.node.set_axis(1, -1.0)
+        #   throttle 초기값 = 중앙(0.0). 수동 모드의 PX4 는 Altitude 라 중앙이
+        #   "고도 유지" 다 — 자동→수동으로 넘겨도 스틱을 안 건드리면 그 자리에
+        #   떠 있는다. 최하단으로 시작하면 인계 순간 급강하한다.
+        #
+        #   ★ 대가: 수동 ARM 이 바로 안 된다. arms_control_node 의 pre-arm 확인이
+        #     joy_axes_[1] <= prearm_throttle_max_(-0.85) 를 요구하므로, ARM 을
+        #     누르기 전에 throttle 을 한 번 맨 아래로 내려야 한다. 안 내리면
+        #     화면에 "ARM DENIED - STICKS NOT IDLE" 배너가 뜬다(조용히 실패하진 않음).
+        #     자동 모드 arm 은 상태머신(auto_arm_states)이 결정하므로 무관하다.
+        self._thr_hold = 0.0
+        self.node.set_axis(1, 0.0)
         lfrm = tk.Frame(stick_frm, bg="#1e1e1e")
         lfrm.grid(row=0, column=0, padx=24)
         tk.Label(lfrm, text="L-STICK", fg="#999999", bg="#1e1e1e",
