@@ -27,4 +27,8 @@ services:
     volumes:
       - ./models:/models:ro # place .engine model file here
       - ./fastdds_udp.xml:/fastdds_udp.xml:ro
+      # 노드 소스를 바인드 마운트 → 코드 수정 시 이미지 재빌드 없이 컨테이너
+      # 재시작(docker compose restart arms_detection)만으로 반영. Dockerfile 이
+      # 같은 경로로 COPY 한 파일 위에 덮어씌운다. (의존성/Dockerfile 변경 때만 재빌드)
+      - ../arms_detection/arms_detection_node.py:/ros_ws/arms_detection_node.py:ro
     restart: unless-stopped

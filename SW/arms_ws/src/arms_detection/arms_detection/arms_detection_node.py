@@ -40,6 +40,7 @@ arms_detection_node — A.R.M.S. 다중 검출기 (우선순위 기반)
 """
 
 import os
+import time
 
 import numpy as np
 import cv2
@@ -321,6 +322,13 @@ class ArmsDetectionNode(Node):
         self._yolo = None
         self._yolo_conf = float(os.environ.get("ARMS_CONF", "0.5"))
         self._yolo_iou  = float(os.environ.get("ARMS_IOU",  "0.45"))
+        # TensorRT 엔진은 첫 predict() 에서 지연 로딩된다. GPU OOM/버전불일치로 실패하면
+        # 예외를 그대로 두면 노드가 죽고 재시작→CUDA 컨텍스트 미해제로 'device busy'
+        # 폭주가 난다. 아래 상태로 "실패 시 크래시 대신 쿨다운 후 재시도"(그동안
+        # HSV/ABSDIFF 폴백)하게 만든다.
+        self._yolo_retry_after = 0.0   # 이 시각(monotonic)까지는 YOLO 재시도 안 함
+        self._yolo_fail_count  = 0
+        self._yolo_retry_cooldown = float(os.environ.get("ARMS_YOLO_RETRY_SEC", "3.0"))
         model_path = os.environ.get("ARMS_MODEL", "")
         if model_path:
             try:
@@ -485,13 +493,40 @@ class ArmsDetectionNode(Node):
     # ------------------------------------------------------------------
 
     def _detect_yolo(self, bgr: np.ndarray) -> BoundingBox | None:
-        """같은 프로세스에서 YOLO 추론 → 최고 confidence 박스 하나 (normalized)."""
+        """같은 프로세스에서 YOLO 추론 → 최고 confidence 박스 하나 (normalized).
+
+        엔진 로딩/추론이 GPU OOM 등으로 실패해도 노드를 죽이지 않는다. 실패하면
+        쿨다운을 걸고 None(=이번 프레임 YOLO 스킵, HSV/ABSDIFF 폴백)을 반환하며,
+        쿨다운 후 자동으로 다시 시도한다. 같은 프로세스 안에서 재시도하므로 재시작
+        시 발생하던 'CUDA device busy(error 46)' 폭주가 생기지 않는다.
+        """
         if self._yolo is None:
             return None
+        now = time.monotonic()
+        if now < self._yolo_retry_after:
+            return None   # 최근 실패 → 쿨다운 동안 YOLO 건너뜀
         h, w = bgr.shape[:2]
         rgb = np.ascontiguousarray(bgr[:, :, ::-1])   # 모델은 RGB 기대
-        res = self._yolo.predict(rgb, conf=self._yolo_conf, iou=self._yolo_iou,
-                                 verbose=False)
+        try:
+            res = self._yolo.predict(rgb, conf=self._yolo_conf, iou=self._yolo_iou,
+                                     verbose=False)
+        except Exception as e:
+            self._yolo_fail_count += 1
+            self._yolo_retry_after = now + self._yolo_retry_cooldown
+            # 반쯤 초기화된 backend/컨텍스트를 폐기 → 다음 시도에서 깨끗이 재로딩.
+            try:
+                self._yolo.predictor = None
+            except Exception:
+                pass
+            self.get_logger().warning(
+                f"YOLO 추론/엔진로딩 실패 #{self._yolo_fail_count} (GPU OOM 등) — "
+                f"{self._yolo_retry_cooldown:.0f}s 후 재시도, 그동안 HSV/ABSDIFF 폴백: {e}")
+            return None
+        # 이전에 실패한 적이 있으면 복구 로그 후 카운터 리셋.
+        if self._yolo_fail_count:
+            self.get_logger().info(
+                f"YOLO 추론 복구됨 (실패 {self._yolo_fail_count}회 후 정상).")
+            self._yolo_fail_count = 0
         if not res or len(res[0].boxes) == 0:
             return None
         best = max(res[0].boxes, key=lambda b: float(b.conf[0]))
