@@ -116,6 +116,14 @@ void StateMachine::on_fire_complete()
   }
 }
 
+void StateMachine::on_hit()
+{
+  // 심판이 실제 직격(거리)을 보고하면 즉시 RTL. 교전 중(TRACK/FIRE)에서만.
+  if (state_ == State::TRACK || state_ == State::FIRE) {
+    transition(State::RTL);
+  }
+}
+
 void StateMachine::arm()
 {
   if (state_ == State::IDLE) {
