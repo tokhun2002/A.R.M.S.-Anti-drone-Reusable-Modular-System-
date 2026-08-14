@@ -7,14 +7,14 @@
 #   arms.launch.py          control_params.yaml → 이 파일 → crsf_port 인자
 #   *_sitl.launch.py        control_params.yaml 만  ← 이 파일 안 실림
 #
-# ELRS TX 모듈이 연결된 UART 에 맞게 port 를 조정할 것.
-#   - 40핀 헤더 UART (8=TXD, 10=RXD): /dev/ttyTHS1
-#   - 그 외 UART:                     /dev/ttyTHS2
+# ELRS 모듈이 연결된 포트/속도.
+#   - USB-C(CP2102 USB-UART, full duplex): /dev/ttyUSB0   ← 현재 셋업, baud 115200
+#       번호 고정: /dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0
 arms_control_node:
   ros__parameters:
     crsf:
-      port: "/dev/ttyTHS1"
-      baud: 400000
+      port: "/dev/ttyUSB0"
+      baud: 115200
 
     # 실기체: 발사 잠금장치 서보 활성화 (핀15 PWM1, pwmchip0 ch0).
     #   전제: jetson-io 로 핀15 PWM1 pinmux 설정 + /sys/class/pwm 쓰기 권한(99-gpio.rules).

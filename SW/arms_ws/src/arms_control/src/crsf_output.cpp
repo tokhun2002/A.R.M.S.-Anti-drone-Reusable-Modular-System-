@@ -47,6 +47,12 @@ bool CrsfOutput::try_open() {
     close_port();
     return false;
   }
+
+  // USB-CRSF(CP2102) 연결에서 DTR/RTS 가 assert 되면 모듈을 흔들거나 리셋/부트로더로
+  // 오인될 수 있어 내려둔다. (성공 사례 scripts/crsf/test.py 의 dtr=False, rts=False 와 동일)
+  // 40핀 UART(ttyTHS*) 에는 모뎀 제어선이 없어 무해하므로 항상 적용한다.
+  int modem_bits = TIOCM_DTR | TIOCM_RTS;
+  ioctl(fd_, TIOCMBIC, &modem_bits);   // 실패해도 치명적이지 않으므로 반환값은 무시한다.
   return true;
 }
 

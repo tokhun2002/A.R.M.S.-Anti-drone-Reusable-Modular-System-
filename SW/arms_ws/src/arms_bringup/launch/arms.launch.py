@@ -47,7 +47,7 @@ def _find_detection_compose():
 def generate_launch_description():
     control_dir = Path(get_package_share_directory("arms_control")) / "config"
     control_config = control_dir / "control_params.yaml"
-    # 실기체 CRSF 오버레이: crsf.port=/dev/ttyTHS1, crsf.baud=400000
+    # 실기체 CRSF 오버레이: crsf.port=/dev/ttyUSB0(USB-C CP2102), crsf.baud=115200
     hw_config = control_dir / "hw_overrides.yaml"
     video_launch = (
         Path(get_package_share_directory("arms_video")) / "launch" / "video.launch.py"
@@ -58,8 +58,8 @@ def generate_launch_description():
     detection_compose = _find_detection_compose()
 
     actions = [
-        DeclareLaunchArgument("crsf_port", default_value="/dev/ttyTHS1",
-                              description="ELRS TX serial port (CRSF output, 실기체 UART)"),
+        DeclareLaunchArgument("crsf_port", default_value="/dev/ttyUSB0",
+                              description="ELRS CRSF serial port (USB-C CP2102=/dev/ttyUSB0, 40핀 UART=/dev/ttyTHS1)"),
         DeclareLaunchArgument("start_detection", default_value="true",
                               description="detection(YOLO) 도커 컨테이너 자동 기동 여부"),
         DeclareLaunchArgument(
