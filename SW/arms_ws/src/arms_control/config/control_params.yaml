@@ -71,6 +71,7 @@ arms_control_node:
       cell_count: 0        # 직렬 셀 수(S). 0=CRSF 값 그대로
       cell_full_v: 4.2     # 만충 시 셀당 전압[V]
       cell_empty_v: 3.5    # 방전(0%) 셀당 전압[V]
+      voltage_offset: 0.0  # 측정 전압 보정[V] (실기체는 hw_overrides 에서 조정)
 
     # =====================================================================
     # 제어

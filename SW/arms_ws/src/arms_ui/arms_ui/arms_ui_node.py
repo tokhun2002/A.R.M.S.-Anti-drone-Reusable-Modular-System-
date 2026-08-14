@@ -346,8 +346,9 @@ class ArmsUINode(Node):
         self._draw_crosshair(frame)
         # 배터리(전압/퍼센트)는 좌측 하단에 자동/수동 무관하게 항상 표시.
         self._draw_battery(frame)
-        # SEARCH 상태에서만 검출기(YOLO/HSV/ABSDIFF) 작동여부·confidence 표시.
-        if not self._manual_mode and (self._latest_state.state or "IDLE") == "SEARCH":
+        # 검출이 도는 상태(SEARCH/LOCK/추적)에서 검출기 작동여부·confidence·모드 표시.
+        if not self._manual_mode and (self._latest_state.state or "IDLE") in (
+                "SEARCH", "LOCK", "BOOST", "TRACK", "FIRE"):
             self._draw_detector_status(frame)
         # kill 스위치 ON 이면 자동/수동 무관하게 화면 중앙에 크게 경고 (최상단).
         self._draw_kill_banner(frame)
@@ -513,7 +514,7 @@ class ArmsUINode(Node):
         cv2.putText(frame, text, (x, y), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
 
     def _draw_detector_status(self, frame):
-        """SEARCH 중 YOLO/HSV/ABSDIFF 작동여부·confidence 를 좌상단에 표시."""
+        """YOLO/HSV/ABSDIFF 작동여부·confidence 와 검출 모드(FULL/ROI)를 좌상단에 표시."""
         raw = self._det_status
         if raw is None or len(raw) < 3:
             return
@@ -526,6 +527,15 @@ class ArmsUINode(Node):
         x = 10
         y = int(56 * max(1.0, h / 480.0))     # 상태 라벨(10,30) 아래에서 시작
         dy = int(cv2.getTextSize("A", font, scale, thick)[0][1] * 2.2)
+
+        # 검출 모드 헤더: FULL=전체프레임(획득), ROI=크롭 안에서만(추적) → '가중치' 전환 확인용
+        mode = raw[3] if len(raw) >= 4 else 0.0
+        mtext = "MODE: ROI (crop)" if mode >= 0.5 else "MODE: FULL frame"
+        mcolor = (0, 200, 255) if mode >= 0.5 else (200, 200, 200)
+        cv2.putText(frame, mtext, (x, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
+        cv2.putText(frame, mtext, (x, y), font, scale, mcolor, thick, cv2.LINE_AA)
+        y += dy
+
         for i, name in enumerate(names):
             rv = raw[i]
             held = self._det_hold.get(i)

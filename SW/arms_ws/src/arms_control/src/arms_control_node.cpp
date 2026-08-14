@@ -94,6 +94,9 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("battery.cell_count", 0);          // 직렬 셀 수(S). 0=CRSF 값 그대로
     declare_parameter("battery.cell_full_v", 4.2);       // 만충 시 셀당 전압[V]
     declare_parameter("battery.cell_empty_v", 3.5);      // 방전(0%) 셀당 전압[V]
+    // 측정 전압 보정: CRSF/FC 가 실제보다 낮/높게 보고할 때 더할 오프셋[V].
+    //   예) 실측 15.9V 인데 15.3V 로 뜨면 +0.6. (근본 해결은 FC 전압분배 캘리브레이션)
+    declare_parameter("battery.voltage_offset", 0.0);
     // 자동요격은 ACRO(각속도) 고정이다. crsf.max_angle_deg / control.acro_mode 와
     // Stabilized(각도) 출력 분기는 삭제됐다 -- 유도 출력이 각속도[deg/s]가 된 이상
     // 그 분기는 각속도를 각도로 잘못 해석할 뿐이다. 브리지 쪽 짝이던
@@ -240,6 +243,7 @@ class ArmsControlNode : public rclcpp::Node {
 
     // ---- 배터리 잔량 계산 설정 ----
     battery_cell_count_   = static_cast<int>(get_parameter("battery.cell_count").as_int());
+    battery_voltage_offset_ = get_parameter("battery.voltage_offset").as_double();
     battery_cell_full_v_  = get_parameter("battery.cell_full_v").as_double();
     battery_cell_empty_v_ = get_parameter("battery.cell_empty_v").as_double();
 
@@ -560,7 +564,7 @@ class ArmsControlNode : public rclcpp::Node {
           voltage_dv / 10.0, current_da / 10.0,
           capacity_mah, remaining_pct);                            // 배터리 텔레메트리를 1초마다 보여준다.
 
-        const double voltage_v = voltage_dv / 10.0;                // 전압을 V 단위로 환산한다.
+        const double voltage_v = voltage_dv / 10.0 + battery_voltage_offset_;   // 전압을 V 단위로 환산하고 보정 오프셋을 더한다.
         double pct_ratio = remaining_pct / 100.0;                  // 기본은 CRSF 잔량값(0~1)이다.
         if (battery_cell_count_ > 0) {                             // 셀 수가 설정되면 전압으로 직접 계산한다.
           const double empty_v = battery_cell_count_ * battery_cell_empty_v_;   // 0% 기준 전압.
@@ -1069,6 +1073,7 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;
   rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr pub_battery_;
   int battery_cell_count_{0};        // 직렬 셀 수(S). 0=CRSF 잔량값 그대로 사용
+  double battery_voltage_offset_{0.0};  // 측정 전압 보정 오프셋[V]
   double battery_cell_full_v_{4.2};  // 만충 셀당 전압[V]
   double battery_cell_empty_v_{3.5}; // 방전(0%) 셀당 전압[V]
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;

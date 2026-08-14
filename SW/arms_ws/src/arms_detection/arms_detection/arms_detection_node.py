@@ -466,7 +466,10 @@ class ArmsDetectionNode(Node):
                 return None
             # ROI 재검출은 YOLO 항상 실행. absdiff 는 배경 문맥이 없어 무의미하므로
             # header=None(디버그 마스크 미발행). 우선순위 stack 은 동일.
-            box = self._detect_stack(crop, None, run_yolo=True)
+            # LOCK/추적 모드(status_mode=1)로 상태 발행 → UI 가 ROI 안 confidence 를 본다.
+            report = bool(self.get_parameter("debug.detector_status").value)
+            box = self._detect_stack(crop, None, run_yolo=True, allow_cv=True,
+                                     report_status=report, status_mode=1.0)
             if box is None:
                 return None
             return self._remap_from_crop(box, off, bgr.shape[1], bgr.shape[0])
@@ -479,16 +482,17 @@ class ArmsDetectionNode(Node):
         interval = max(1, int(self.get_parameter("yolo.acquire_interval").value))
         run_yolo = (self._frame_i % interval == 0)
         report = bool(self.get_parameter("debug.detector_status").value)
-        return self._detect_stack(bgr, header, run_yolo=run_yolo,
-                                  allow_cv=allow_cv, report_status=report)
+        return self._detect_stack(bgr, header, run_yolo=run_yolo, allow_cv=allow_cv,
+                                  report_status=report, status_mode=0.0)  # FULL
 
-    def _detect_stack(self, img, header, run_yolo, allow_cv=True, report_status=False):
+    def _detect_stack(self, img, header, run_yolo, allow_cv=True,
+                      report_status=False, status_mode=0.0):
         """단일 이미지에 대해 우선순위 검출 stack 실행 → best 박스(없으면 None).
 
         allow_cv=False 면 YOLO 로만 판단하고 HSV/ABSDIFF 폴백을 쓰지 않는다
         (초기 획득에서 CV 헛검출로 인한 오-LOCK 방지).
         report_status=True 면 세 검출기 결과를 /arms/detector_status 로 발행한다
-        (표시 전용 — LOCK 판단에는 영향 없음)."""
+        (표시 전용 — LOCK 판단에는 영향 없음). status_mode: 0=FULL(획득), 1=ROI(추적)."""
         yolo_on     = bool(self.get_parameter("use_yolo").value)
         use_yolo    = yolo_on and self._yolo is not None
         use_hsv     = bool(self.get_parameter("use_hsv").value)
@@ -510,7 +514,7 @@ class ArmsDetectionNode(Node):
             hv = (-1.0 if not use_hsv     else (float(hsv_box.confidence)     if hsv_box     else 0.0))
             av = (-1.0 if not use_absdiff else (float(absdiff_box.confidence) if absdiff_box else 0.0))
             msg = Float32MultiArray()
-            msg.data = [yv, hv, av]
+            msg.data = [yv, hv, av, float(status_mode)]   # [yolo, hsv, absdiff, mode(0=FULL,1=ROI)]
             self.pub_detstatus.publish(msg)
 
         # LOCK 판단용 winner (우선순위 YOLO > HSV > ABSDIFF, allow_cv 존중)
