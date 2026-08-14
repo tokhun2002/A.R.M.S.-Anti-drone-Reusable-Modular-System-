@@ -26,6 +26,7 @@ from cv_bridge import CvBridge
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import BatteryState, Image, Joy
+from std_msgs.msg import Float32MultiArray
 
 from arms_msgs.msg import DetectionArray, MissionState
 from geometry_msgs.msg import Vector3
@@ -101,12 +102,18 @@ class ArmsUINode(Node):
         self.create_subscription(Joy, "/arms/command", self._cb_command, best_effort_qos)
         # arms_control 이 CRSF 배터리 텔레메트리를 표준 메시지로 재발행 (RELIABLE, depth 10).
         self.create_subscription(BatteryState, "/arms/battery", self._cb_battery, 10)
+        # 검출기 상태 [yolo, hsv, absdiff] — SEARCH 에서 작동여부·confidence 표시용.
+        self.create_subscription(Float32MultiArray, "/arms/detector_status",
+                                 self._cb_detstatus, 10)
 
         self._latest_detections = DetectionArray()
         self._latest_state = MissionState()
         self._latest_cmd = Vector3()
         self._latest_roi = None
         self._latest_battery = None   # /arms/battery 최신값 (None=아직 미수신)
+        self._det_status = None       # 검출기 상태 raw [yolo, hsv, absdiff]
+        # 검출기별 최근 유효(≥0) confidence 를 잠깐 유지해 깜빡임 억제: idx→(val, t)
+        self._det_hold = {}
         self._manual_mode = False   # buttons[2]==1 → 수동 모드(오버레이 끔)
         self._prev_manual = None    # 이전 mode 값 (None=아직 미수신, 첫 수신은 효과음 없음)
         self._kill = False          # buttons[0]==1 → kill 스위치 ON (모드 무관 경고 표시)
@@ -184,6 +191,14 @@ class ArmsUINode(Node):
 
     def _cb_battery(self, msg: BatteryState):
         self._latest_battery = msg
+
+    def _cb_detstatus(self, msg: Float32MultiArray):
+        vals = list(msg.data)
+        self._det_status = vals
+        now = time.monotonic()
+        for i, v in enumerate(vals):      # 유효(≥0) 값은 잠깐 유지해 깜빡임 방지
+            if v >= 0.0:
+                self._det_hold[i] = (v, now)
 
     def _cb_command(self, msg: Joy):
         if len(msg.buttons) <= MODE_BUTTON_IDX:
@@ -331,6 +346,9 @@ class ArmsUINode(Node):
         self._draw_crosshair(frame)
         # 배터리(전압/퍼센트)는 좌측 하단에 자동/수동 무관하게 항상 표시.
         self._draw_battery(frame)
+        # SEARCH 상태에서만 검출기(YOLO/HSV/ABSDIFF) 작동여부·confidence 표시.
+        if not self._manual_mode and (self._latest_state.state or "IDLE") == "SEARCH":
+            self._draw_detector_status(frame)
         # kill 스위치 ON 이면 자동/수동 무관하게 화면 중앙에 크게 경고 (최상단).
         self._draw_kill_banner(frame)
         if self._fullscreen:
@@ -493,6 +511,38 @@ class ArmsUINode(Node):
         # 배경 박스 없이 검은 외곽선 + 흰 글씨만 (영상 위 최소 가독성).
         cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
         cv2.putText(frame, text, (x, y), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
+
+    def _draw_detector_status(self, frame):
+        """SEARCH 중 YOLO/HSV/ABSDIFF 작동여부·confidence 를 좌상단에 표시."""
+        raw = self._det_status
+        if raw is None or len(raw) < 3:
+            return
+        h = frame.shape[0]
+        now = time.monotonic()
+        names = ("YOLO", "HSV", "ABSDIFF")
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = max(0.45, h / 1100.0)
+        thick = max(1, int(round(scale * 2)))
+        x = 10
+        y = int(56 * max(1.0, h / 480.0))     # 상태 라벨(10,30) 아래에서 시작
+        dy = int(cv2.getTextSize("A", font, scale, thick)[0][1] * 2.2)
+        for i, name in enumerate(names):
+            rv = raw[i]
+            held = self._det_hold.get(i)
+            fresh = held is not None and (now - held[1]) < 0.7    # 최근 0.7s 내 유효값
+            if rv == -2.0:                      # 사용불가 (YOLO OOM 등)
+                text, color = f"{name}: DEAD", (0, 0, 255)
+            elif fresh:                          # 최근 confidence 있음
+                pct = held[0] * 100.0
+                color = (0, 220, 0) if held[0] > 0.0 else (170, 170, 170)
+                text = f"{name}: {pct:2.0f}%" if held[0] > 0.0 else f"{name}: --"
+            elif rv == -1.0:                     # 꺼짐/이 프레임 미실행
+                text, color = f"{name}: off", (140, 140, 140)
+            else:                                # 실행했으나 검출 없음
+                text, color = f"{name}: --", (170, 170, 170)
+            yy = y + i * dy
+            cv2.putText(frame, text, (x, yy), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
+            cv2.putText(frame, text, (x, yy), font, scale, color, thick, cv2.LINE_AA)
 
     def _draw_overlay(self, frame):
         h, w = frame.shape[:2]

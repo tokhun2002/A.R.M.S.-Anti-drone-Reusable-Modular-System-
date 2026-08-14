@@ -48,6 +48,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
+from std_msgs.msg import Float32MultiArray
 
 from arms_msgs.msg import BoundingBox, DetectionArray
 
@@ -297,6 +298,35 @@ class ArmsDetectionNode(Node):
         self.declare_parameter("absdiff.max_blobs", 12)
         self.declare_parameter("publish_debug", True)
 
+        # --- CV 검출 confidence 게이팅 (표적 없을 때 헛-LOCK 방지) ---------------
+        # CV(HSV/ABSDIFF)는 "가장 그럴듯한 blob"을 항상 하나 잡는다. 그래서 예전엔
+        # confidence 바닥값(0.7/0.65)이 항상 임계값 이상이라 표적이 없어도 LOCK 됐다.
+        # 이제 confidence 를 표적 '크기(프레임 대비 면적비)'에 비례시켜, 충분히 큰 =
+        # 확실한 표적일 때만 임계값(state machine 의 confidence_threshold)을 넘게 한다.
+        #   min_area_ratio      : 이보다 작은 blob 은 아예 검출로 치지 않음(존재 게이트)
+        #   full_conf_area_ratio: 면적비가 이 값이면 confidence=1.0 (포화 기준)
+        #   → 더 엄격히(큰 표적만) 하려면 full_conf_area_ratio 를 키우거나
+        #     arms_control 의 mission.detection_confidence_threshold 를 올린다.
+        self.declare_parameter("hsv.min_area_ratio",          0.0010)
+        self.declare_parameter("hsv.full_conf_area_ratio",    0.0100)
+        self.declare_parameter("absdiff.min_area_ratio",      0.0010)
+        self.declare_parameter("absdiff.full_conf_area_ratio", 0.0100)
+
+        # 초기 획득(ROI 뜨기 전, 전체 프레임 탐색)은 YOLO 로만 표적을 찾는다.
+        # YOLO 는 표적이 아니면 confidence 가 낮아 헛-LOCK 이 없다. HSV/ABSDIFF 는
+        # "가장 그럴듯한 blob"을 늘 잡아 오검출하므로 획득 단계에선 배제한다.
+        #   YOLO 가 못 잡으면(표적 없음 or YOLO 죽음) = 표적이 없다는 뜻 → CV 폴백
+        #   없이 SEARCH 유지. 즉 획득은 '항상' YOLO 판단만 신뢰한다.
+        # ROI 확보 후(추적)엔 YOLO 가 크롭에서 싸게 돌아 계속 주가 되고, YOLO 가
+        # 미스/다운이어도 CV 가 보조로 표적을 유지한다(_detect_stack allow_cv 기본 True).
+        self.declare_parameter("acquire.yolo_only", True)
+
+        # SEARCH 진단용: 전체 프레임 경로에서 세 검출기(YOLO/HSV/ABSDIFF) 각각의
+        # 검출 여부·confidence 를 /arms/detector_status 로 발행해 UI 가 표시한다.
+        # LOCK 판단(acquire.yolo_only)과 무관한 '표시 전용'이라, True 여도 HSV/ABSDIFF
+        # 는 락을 만들지 않고 상태 보고만 한다. CPU 아끼려면 False.
+        self.declare_parameter("debug.detector_status", True)
+
         # --- detect-then-track (ROI + CSRT/KCF) ---
         self.declare_parameter("track.enable", True)          # false=기존 매프레임 검출
         self.declare_parameter("track.tracker_type", "CSRT")  # "CSRT" | "KCF"
@@ -352,6 +382,9 @@ class ArmsDetectionNode(Node):
         self.pub_debug   = self.create_publisher(Image,          "/arms/debug_image",   10)
         self.pub_absdiff = self.create_publisher(Image,          "/arms/debug_absdiff", 10)
         self.pub_roi     = self.create_publisher(Image,          "/arms/roi_image",     10)
+        # 검출기 상태: [yolo, hsv, absdiff] 각 값 = 0~1 confidence,
+        #   -1=off/미실행, -2=사용불가(YOLO OOM 등). UI 가 SEARCH 에서 표시.
+        self.pub_detstatus = self.create_publisher(Float32MultiArray, "/arms/detector_status", 10)
 
         if not _tracker_available():
             self.get_logger().warn(
@@ -438,18 +471,54 @@ class ArmsDetectionNode(Node):
                 return None
             return self._remap_from_crop(box, off, bgr.shape[1], bgr.shape[0])
 
+        # 초기 획득(전체 프레임)은 YOLO 전용. YOLO 가 못 잡으면(=표적 없음, 또는 YOLO
+        # 죽음) 표적이 없다는 뜻이므로 CV 폴백 없이 그대로 SEARCH 유지 → 헛-LOCK 원천
+        # 차단. (ROI 확보 후 추적 경로는 allow_cv=True 라 YOLO 꺼져도 CV 로 표적 유지)
+        yolo_only = bool(self.get_parameter("acquire.yolo_only").value)
+        allow_cv  = not yolo_only
         interval = max(1, int(self.get_parameter("yolo.acquire_interval").value))
-        return self._detect_stack(bgr, header, run_yolo=(self._frame_i % interval == 0))
+        run_yolo = (self._frame_i % interval == 0)
+        report = bool(self.get_parameter("debug.detector_status").value)
+        return self._detect_stack(bgr, header, run_yolo=run_yolo,
+                                  allow_cv=allow_cv, report_status=report)
 
-    def _detect_stack(self, img, header, run_yolo):
-        """단일 이미지에 대해 우선순위 검출 stack 실행 → best 박스(없으면 None)."""
-        use_yolo    = bool(self.get_parameter("use_yolo").value) and self._yolo is not None
+    def _detect_stack(self, img, header, run_yolo, allow_cv=True, report_status=False):
+        """단일 이미지에 대해 우선순위 검출 stack 실행 → best 박스(없으면 None).
+
+        allow_cv=False 면 YOLO 로만 판단하고 HSV/ABSDIFF 폴백을 쓰지 않는다
+        (초기 획득에서 CV 헛검출로 인한 오-LOCK 방지).
+        report_status=True 면 세 검출기 결과를 /arms/detector_status 로 발행한다
+        (표시 전용 — LOCK 판단에는 영향 없음)."""
+        yolo_on     = bool(self.get_parameter("use_yolo").value)
+        use_yolo    = yolo_on and self._yolo is not None
         use_hsv     = bool(self.get_parameter("use_hsv").value)
         use_absdiff = bool(self.get_parameter("use_absdiff").value)
-        yolo_box    = self._detect_yolo(img)            if (use_yolo and run_yolo) else None
-        hsv_box     = self._detect_hsv(img)             if use_hsv     else None
-        absdiff_box = self._detect_absdiff(img, header) if use_absdiff else None
-        return yolo_box or hsv_box or absdiff_box
+
+        yolo_box = self._detect_yolo(img) if (use_yolo and run_yolo) else None
+
+        # CV 는 락에 필요하거나(폴백) 상태표시가 필요할 때 실행한다.
+        need_cv     = report_status or (allow_cv and yolo_box is None)
+        hsv_box     = self._detect_hsv(img)             if (use_hsv     and need_cv) else None
+        absdiff_box = self._detect_absdiff(img, header) if (use_absdiff and need_cv) else None
+
+        if report_status:
+            # 값: 0~1 confidence, -1=off/미실행, -2=사용불가(YOLO OOM 등)
+            yv = (-1.0 if not yolo_on else
+                  (-2.0 if self._yolo is None else
+                   (-1.0 if not run_yolo else
+                    (float(yolo_box.confidence) if yolo_box else 0.0))))
+            hv = (-1.0 if not use_hsv     else (float(hsv_box.confidence)     if hsv_box     else 0.0))
+            av = (-1.0 if not use_absdiff else (float(absdiff_box.confidence) if absdiff_box else 0.0))
+            msg = Float32MultiArray()
+            msg.data = [yv, hv, av]
+            self.pub_detstatus.publish(msg)
+
+        # LOCK 판단용 winner (우선순위 YOLO > HSV > ABSDIFF, allow_cv 존중)
+        if yolo_box is not None:
+            return yolo_box
+        if not allow_cv:
+            return None
+        return hsv_box or absdiff_box
 
     @staticmethod
     def _crop_roi(bgr, box, margin):
@@ -566,7 +635,10 @@ class ArmsDetectionNode(Node):
             return None
         c = max(cnts, key=cv2.contourArea)
         area = cv2.contourArea(c)
-        if area < 4:
+        area_frac = area / float(w * h)                  # 프레임 대비 면적비
+        min_frac  = float(self.get_parameter("hsv.min_area_ratio").value)
+        full_frac = float(self.get_parameter("hsv.full_conf_area_ratio").value)
+        if area_frac < min_frac:                         # 너무 작은 빨강 얼룩 → 표적 아님
             return None
         x, y, bw, bh = cv2.boundingRect(c)
         box = BoundingBox()
@@ -574,7 +646,9 @@ class ArmsDetectionNode(Node):
         box.y_center  = float((y + bh / 2) / h)
         box.width     = float(bw / w)
         box.height    = float(bh / h)
-        box.confidence = float(min(0.99, 0.7 + area / (w * h) * 20.0))
+        # confidence = 표적이 클수록 1.0 에 근접(full_frac 에서 포화). 작으면 낮아
+        # state machine 의 임계값을 못 넘어 LOCK 되지 않는다.
+        box.confidence = float(min(0.99, area_frac / full_frac)) if full_frac > 0 else 0.99
         box.class_id  = 2
         box.class_name = "hsv_red"
         return box
@@ -613,11 +687,12 @@ class ArmsDetectionNode(Node):
         if max_blobs > 0 and len(cnts) > max_blobs:
             return None
 
+        min_area = float(self.get_parameter("absdiff.min_area_ratio").value) * w * h
         best, best_score = None, -1.0
         for c in cnts:
             x, y, bw, bh = cv2.boundingRect(c)
             a_px = bw * bh
-            if a_px > max_area:
+            if a_px > max_area or a_px < min_area:       # 너무 크거나(배경) 너무 작은(노이즈) 점 제외
                 continue
             patch = diff[max(0, y):y + bh, max(0, x):x + bw]
             if patch.size == 0:
@@ -636,7 +711,11 @@ class ArmsDetectionNode(Node):
         box.y_center  = float((y + bh / 2) / h)
         box.width     = float(bw / w)
         box.height    = float(bh / h)
-        box.confidence = float(min(0.99, 0.65 + contrast / 255.0))
+        # confidence = 크기·대비 둘 다 커야 높다. 작은 점/약한 대비는 낮아 LOCK 못 넘긴다.
+        full_frac = float(self.get_parameter("absdiff.full_conf_area_ratio").value)
+        size_factor = min(1.0, (bw * bh) / (full_frac * w * h)) if full_frac > 0 else 1.0
+        contrast_factor = contrast / 255.0
+        box.confidence = float(min(0.99, 0.5 * size_factor + 0.5 * contrast_factor))
         box.class_id  = 1
         box.class_name = "absdiff_spot"
         return box
