@@ -24,6 +24,10 @@ services:
       - ARMS_MODEL=${ARMS_MODEL:-/models/balloon.engine}
       - ARMS_CONF=${ARMS_CONF:-0.5}
       - ARMS_IOU=${ARMS_IOU:-0.45}
+      # YOLO(TensorRT) 추론이 이 횟수만큼 연속 실패하면 영구 비활성화하고
+      # CV(HSV/ABSDIFF)로만 동작한다. GPU OOM 등으로 엔진이 안 뜰 때 검출이
+      # 아예 멈추는 것을 막는 안전장치. (0 이하면 무한 재시도)
+      - ARMS_YOLO_MAX_FAILS=${ARMS_YOLO_MAX_FAILS:-3}
     volumes:
       - ./models:/models:ro # place .engine model file here
       - ./fastdds_udp.xml:/fastdds_udp.xml:ro

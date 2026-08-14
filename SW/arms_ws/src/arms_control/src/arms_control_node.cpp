@@ -18,6 +18,7 @@
 #include "arms_msgs/msg/mission_state.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/battery_state.hpp"
 #include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/empty.hpp"
 
@@ -85,6 +86,14 @@ class ArmsControlNode : public rclcpp::Node {
 
     declare_parameter("crsf.port", std::string("/tmp/crsf_tx"));
     declare_parameter("crsf.baud", 400000);
+
+    // ── 배터리 잔량(%) 계산 ────────────────────────────────────────────
+    // cell_count>0 이면 측정 전압으로 퍼센트를 직접 계산한다
+    //   pct = (전압 - cells·empty_v) / (cells·(full_v - empty_v)), 0~100 clamp.
+    // cell_count<=0 이면 CRSF 텔레메트리가 준 잔량값을 그대로 쓴다(기존 동작).
+    declare_parameter("battery.cell_count", 0);          // 직렬 셀 수(S). 0=CRSF 값 그대로
+    declare_parameter("battery.cell_full_v", 4.2);       // 만충 시 셀당 전압[V]
+    declare_parameter("battery.cell_empty_v", 3.5);      // 방전(0%) 셀당 전압[V]
     // 자동요격은 ACRO(각속도) 고정이다. crsf.max_angle_deg / control.acro_mode 와
     // Stabilized(각도) 출력 분기는 삭제됐다 -- 유도 출력이 각속도[deg/s]가 된 이상
     // 그 분기는 각속도를 각도로 잘못 해석할 뿐이다. 브리지 쪽 짝이던
@@ -229,6 +238,11 @@ class ArmsControlNode : public rclcpp::Node {
     servo_ = std::make_unique<ServoLock>(servo_params, log_fn);
     servo_->init();
 
+    // ---- 배터리 잔량 계산 설정 ----
+    battery_cell_count_   = static_cast<int>(get_parameter("battery.cell_count").as_int());
+    battery_cell_full_v_  = get_parameter("battery.cell_full_v").as_double();
+    battery_cell_empty_v_ = get_parameter("battery.cell_empty_v").as_double();
+
     // 런타임 파라미터 변경 콜백
     param_cb_handle_ = add_on_set_parameters_callback(
         [this](const std::vector<rclcpp::Parameter>& params) {
@@ -331,6 +345,8 @@ class ArmsControlNode : public rclcpp::Node {
     pub_dbg_  = create_publisher<geometry_msgs::msg::Vector3>("/arms/control_debug", 10);
     // looming 튜닝용: x=τ[s](미접근/무한대는 9.99로 캡), y=bbox크기(EMA), z=크기변화율 ṡ
     pub_loom_ = create_publisher<geometry_msgs::msg::Vector3>("/arms/debug_looming", 10);
+    // CRSF 배터리 텔레메트리(0x08)를 UI 등에서 쓰도록 표준 메시지로 재발행한다.
+    pub_battery_ = create_publisher<sensor_msgs::msg::BatteryState>("/arms/battery", 10);
 
     // ----------------------------------------------------------------
     // ROS subscribers
@@ -543,6 +559,24 @@ class ArmsControlNode : public rclcpp::Node {
           "CRSF battery: %.1fV %.1fA used=%dmAh remain=%d%%",
           voltage_dv / 10.0, current_da / 10.0,
           capacity_mah, remaining_pct);                            // 배터리 텔레메트리를 1초마다 보여준다.
+
+        const double voltage_v = voltage_dv / 10.0;                // 전압을 V 단위로 환산한다.
+        double pct_ratio = remaining_pct / 100.0;                  // 기본은 CRSF 잔량값(0~1)이다.
+        if (battery_cell_count_ > 0) {                             // 셀 수가 설정되면 전압으로 직접 계산한다.
+          const double empty_v = battery_cell_count_ * battery_cell_empty_v_;   // 0% 기준 전압.
+          const double full_v  = battery_cell_count_ * battery_cell_full_v_;    // 100% 기준 전압.
+          const double span = full_v - empty_v;                   // 만충-방전 전압 폭.
+          pct_ratio = (span > 1e-6) ? (voltage_v - empty_v) / span : 0.0;   // 선형 보간한다.
+          pct_ratio = std::clamp(pct_ratio, 0.0, 1.0);            // 0~1 범위로 자른다.
+        }
+
+        sensor_msgs::msg::BatteryState bat;                        // UI 표시용 표준 배터리 메시지를 만든다.
+        bat.header.stamp = now();                                  // 수신 시각을 기록한다.
+        bat.voltage = static_cast<float>(voltage_v);               // 전압을 V 단위로 채운다.
+        bat.current = static_cast<float>(current_da) / 10.0f;      // 전류를 A 단위로 채운다.
+        bat.percentage = static_cast<float>(pct_ratio);            // 잔량을 0~1 비율로 채운다(BatteryState 규약).
+        bat.present = true;                                        // 배터리 존재 플래그를 세운다.
+        pub_battery_->publish(bat);                                // 매 배터리 프레임마다 재발행한다.
       }
     }
   }
@@ -1033,6 +1067,10 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Publisher<arms_msgs::msg::MissionState>::SharedPtr pub_state_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_dbg_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;
+  rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr pub_battery_;
+  int battery_cell_count_{0};        // 직렬 셀 수(S). 0=CRSF 잔량값 그대로 사용
+  double battery_cell_full_v_{4.2};  // 만충 셀당 전압[V]
+  double battery_cell_empty_v_{3.5}; // 방전(0%) 셀당 전압[V]
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
 
   double rkp_{455.0}, rki_{0}, rkd_{0};

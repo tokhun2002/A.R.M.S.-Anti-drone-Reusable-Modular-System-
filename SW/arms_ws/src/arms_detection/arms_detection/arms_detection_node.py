@@ -329,6 +329,10 @@ class ArmsDetectionNode(Node):
         self._yolo_retry_after = 0.0   # 이 시각(monotonic)까지는 YOLO 재시도 안 함
         self._yolo_fail_count  = 0
         self._yolo_retry_cooldown = float(os.environ.get("ARMS_YOLO_RETRY_SEC", "3.0"))
+        # 이 횟수만큼 연속 실패하면 YOLO 를 영구히 포기하고 CV(HSV/ABSDIFF)로만 돈다.
+        #   → GPU OOM/엔진 불일치로 계속 실패할 때 재시도가 executor 를 블로킹해
+        #     검출이 아예 안 나가는 문제를 막는다. 0 이하면 무한 재시도(기존 동작).
+        self._yolo_max_fails = int(os.environ.get("ARMS_YOLO_MAX_FAILS", "3"))
         model_path = os.environ.get("ARMS_MODEL", "")
         if model_path:
             try:
@@ -512,15 +516,23 @@ class ArmsDetectionNode(Node):
                                      verbose=False)
         except Exception as e:
             self._yolo_fail_count += 1
-            self._yolo_retry_after = now + self._yolo_retry_cooldown
             # 반쯤 초기화된 backend/컨텍스트를 폐기 → 다음 시도에서 깨끗이 재로딩.
             try:
                 self._yolo.predictor = None
             except Exception:
                 pass
+            # 임계치 이상 연속 실패 → YOLO 영구 포기, 이후 CV(HSV/ABSDIFF)로만 동작.
+            if self._yolo_max_fails > 0 and self._yolo_fail_count >= self._yolo_max_fails:
+                self._yolo = None   # 다음 프레임부터 _detect_yolo 는 즉시 None 반환(블로킹 없음)
+                self.get_logger().error(
+                    f"YOLO {self._yolo_fail_count}회 연속 실패 — 영구 비활성화하고 "
+                    f"CV(HSV/ABSDIFF)로만 동작한다 (GPU OOM/엔진 불일치): {e}")
+                return None
+            self._yolo_retry_after = now + self._yolo_retry_cooldown
             self.get_logger().warning(
-                f"YOLO 추론/엔진로딩 실패 #{self._yolo_fail_count} (GPU OOM 등) — "
-                f"{self._yolo_retry_cooldown:.0f}s 후 재시도, 그동안 HSV/ABSDIFF 폴백: {e}")
+                f"YOLO 추론/엔진로딩 실패 #{self._yolo_fail_count}/{self._yolo_max_fails} "
+                f"(GPU OOM 등) — {self._yolo_retry_cooldown:.0f}s 후 재시도, "
+                f"그동안 HSV/ABSDIFF 폴백: {e}")
             return None
         # 이전에 실패한 적이 있으면 복구 로그 후 카운터 리셋.
         if self._yolo_fail_count:

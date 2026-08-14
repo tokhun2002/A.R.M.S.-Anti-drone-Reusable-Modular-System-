@@ -20,9 +20,10 @@ Ranger Micro USB-CRSF 테스트 + 텔레메트리 디코더 (Jetson/Linux)
 실행:   python3 ranger_usb_test.py [/dev/ttyUSB0]
 """
 
-import sys, time, glob, struct, serial
+import sys, os, time, glob, struct, serial
 
 BAUD, RATE_HZ = 115200, 100
+DEFAULT_PORT = "/dev/ttyUSB0"          # 인자 없이 실행하면 이 포트를 기본으로 쓴다.
 CRSF_SYNC, TYPE_RC = 0xC8, 0x16
 CH_MIN, CH_MID = 172, 992
 CHANNELS = [CH_MID, CH_MID, CH_MIN, CH_MID] + [CH_MIN] * 12   # R,P,T,Y + AUX
@@ -119,7 +120,7 @@ def find_port():
 
 # ---- 메인 --------------------------------------------------------------
 def main():
-    port=sys.argv[1] if len(sys.argv)>1 else find_port()
+    port=sys.argv[1] if len(sys.argv)>1 else (DEFAULT_PORT if os.path.exists(DEFAULT_PORT) else find_port())
     if not port:
         print("❌ /dev/ttyUSB* 없음. 'ls -l /dev/ttyUSB*' 확인 후 인자로 넘겨."); sys.exit(1)
     ser=open_port(port); ps=Parser(); frame=build_rc_frame(CHANNELS)

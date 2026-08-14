@@ -16,6 +16,14 @@ arms_control_node:
       port: "/dev/ttyUSB0"
       baud: 115200
 
+    # 실기체 배터리: 측정 전압으로 잔량(%)을 계산한다.
+    #   cell_count 를 실제 직렬 셀 수로 맞춰라 (예: 4S→4, 6S→6).
+    #   방전 컷오프를 보수적으로 잡고 싶으면 cell_empty_v 를 3.5~3.6 으로 올린다.
+    battery:
+      cell_count: 4
+      cell_full_v: 4.2
+      cell_empty_v: 3.5
+
     # 실기체: 발사 잠금장치 서보 활성화 (핀15 PWM1, pwmchip0 ch0).
     #   전제: jetson-io 로 핀15 PWM1 pinmux 설정 + /sys/class/pwm 쓰기 권한(99-gpio.rules).
     servo:
@@ -35,10 +43,10 @@ arms_control_node:
       #
       # 실기체 값이 확정되면 이 주석의 "미측정"을 지우고 근거(비행 날짜/로그)를 남길 것.
       roll_pid:
-        kp: 455.0
+        kp: 100.0
         ki: 0.0
         kd: 3.5
       pitch_pid:
-        kp: 455.0
+        kp: 100.0
         ki: 0.0
         kd: 3.5

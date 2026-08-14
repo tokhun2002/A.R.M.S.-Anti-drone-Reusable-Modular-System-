@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 
 import cv2
 import numpy as np
@@ -24,7 +25,7 @@ from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Image, Joy
+from sensor_msgs.msg import BatteryState, Image, Joy
 
 from arms_msgs.msg import DetectionArray, MissionState
 from geometry_msgs.msg import Vector3
@@ -77,6 +78,18 @@ class ArmsUINode(Node):
         if self._player is None:
             self.get_logger().warn("ffplay 없음 — 효과음이 재생되지 않습니다.")
 
+        # ── 탐지 비프음 (mp3 없이 ffplay lavfi 사인파로 생성) ──────────────
+        #   SEARCH: 느린 간격, LOCK/TRACK/FIRE: 빠른 간격으로 삑삑거린다.
+        #   IDLE/RTL 등에선 울리지 않고, 자동(AUTO) 모드에서만 동작한다.
+        self.declare_parameter("ui.beep_enabled", True)
+        self.declare_parameter("ui.beep_search_interval", 0.8)   # SEARCH 비프 간격[s]
+        self.declare_parameter("ui.beep_lock_interval", 0.18)    # LOCK 이후 비프 간격[s]
+        self.declare_parameter("ui.beep_freq_hz", 2000.0)        # 비프 주파수[Hz]
+        self.declare_parameter("ui.beep_duration", 0.06)         # 비프 길이[s]
+        self.declare_parameter("ui.beep_volume", 0.6)            # 비프 음량(0~1)
+        self._last_beep_t = 0.0                                  # 마지막 비프 시각(monotonic)
+        self._lock_tone_proc = None                             # LOCK 이상: 끊기지 않는 연속 톤 프로세스
+
         self.create_subscription(Image, "/arms/image_raw", self._cb_image, best_effort_qos)
         self.create_subscription(DetectionArray, "/arms/detections", self._cb_detections, 10)
         self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
@@ -86,11 +99,14 @@ class ArmsUINode(Node):
         # 메시지를 받는다. (RELIABLE 구독이면 BEST_EFFORT 발행을 하나도 못 받아 모드 전환
         # 오버레이/효과음이 동작하지 않음.)
         self.create_subscription(Joy, "/arms/command", self._cb_command, best_effort_qos)
+        # arms_control 이 CRSF 배터리 텔레메트리를 표준 메시지로 재발행 (RELIABLE, depth 10).
+        self.create_subscription(BatteryState, "/arms/battery", self._cb_battery, 10)
 
         self._latest_detections = DetectionArray()
         self._latest_state = MissionState()
         self._latest_cmd = Vector3()
         self._latest_roi = None
+        self._latest_battery = None   # /arms/battery 최신값 (None=아직 미수신)
         self._manual_mode = False   # buttons[2]==1 → 수동 모드(오버레이 끔)
         self._prev_manual = None    # 이전 mode 값 (None=아직 미수신, 첫 수신은 효과음 없음)
         self._kill = False          # buttons[0]==1 → kill 스위치 ON (모드 무관 경고 표시)
@@ -119,6 +135,9 @@ class ArmsUINode(Node):
             cv2.resizeWindow("A.R.M.S.", 960, 720)
             self._screen_w, self._screen_h = 0, 0
             self.get_logger().info("windowed mode (960x720)")
+
+        # 상태에 따라 비프 간격을 조절하려고 50ms 마다 확인한다.
+        self.create_timer(0.05, self._beep_tick)
 
         self.get_logger().info("arms_ui_node started.")
 
@@ -163,6 +182,9 @@ class ArmsUINode(Node):
     def _cb_debug(self, msg: Vector3):
         self._latest_cmd = msg
 
+    def _cb_battery(self, msg: BatteryState):
+        self._latest_battery = msg
+
     def _cb_command(self, msg: Joy):
         if len(msg.buttons) <= MODE_BUTTON_IDX:
             return
@@ -204,6 +226,78 @@ class ArmsUINode(Node):
 
         threading.Thread(target=_run, daemon=True).start()
 
+    # ------------------------------------------------------------------
+    # 탐지 비프음 (상태별 간격)
+    # ------------------------------------------------------------------
+
+    def _beep_tick(self):
+        """SEARCH=느린 간헐 비프, LOCK 이상=끊기지 않는 연속 톤. AUTO 모드 한정."""
+        if (not self.get_parameter("ui.beep_enabled").value) or self._manual_mode:
+            self._stop_lock_tone()   # 비활성/수동 모드에선 연속음도 끈다.
+            return
+        state = self._latest_state.state or "IDLE"
+        if state == "SEARCH":
+            self._stop_lock_tone()
+            interval = float(self.get_parameter("ui.beep_search_interval").value)
+            now = time.monotonic()
+            if now - self._last_beep_t >= interval:
+                self._last_beep_t = now
+                self._play_beep()
+        elif state in ("LOCK", "BOOST", "TRACK", "FIRE"):
+            self._start_lock_tone()  # LOCK 걸리면 삐이이——— 계속 울린다.
+        else:
+            self._stop_lock_tone()   # IDLE / RTL 등은 무음
+
+    def _start_lock_tone(self):
+        """LOCK 이상 상태: 연속 사인 톤을 재생 (이미 재생 중이면 그대로 둔다)."""
+        if self._player is None:
+            return
+        if self._lock_tone_proc is not None and self._lock_tone_proc.poll() is None:
+            return                   # 이미 울리는 중
+        freq = float(self.get_parameter("ui.beep_freq_hz").value)
+        vol = float(self.get_parameter("ui.beep_volume").value)
+        try:
+            # duration 없는 사인 = 무한 톤 → terminate 할 때까지 계속 울린다.
+            self._lock_tone_proc = subprocess.Popen(
+                [self._player, "-nodisp", "-autoexit", "-loglevel", "quiet",
+                 "-f", "lavfi", "-i", f"sine=frequency={freq}", "-af", f"volume={vol}"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            self.get_logger().warn(f"LOCK 연속음 재생 실패: {e}")
+            self._lock_tone_proc = None
+
+    def _stop_lock_tone(self):
+        """연속 톤을 중지한다 (재생 중이 아니면 무시)."""
+        p = self._lock_tone_proc
+        if p is None:
+            return
+        self._lock_tone_proc = None
+        try:
+            if p.poll() is None:
+                p.terminate()
+        except Exception:
+            pass
+
+    def _play_beep(self):
+        """ffplay lavfi 사인파로 짧은 비프음을 비동기 재생 (mp3 파일 불필요)."""
+        if self._player is None:
+            return
+        freq = float(self.get_parameter("ui.beep_freq_hz").value)
+        dur = float(self.get_parameter("ui.beep_duration").value)
+        vol = float(self.get_parameter("ui.beep_volume").value)
+
+        def _run():
+            try:
+                subprocess.run(
+                    [self._player, "-nodisp", "-autoexit", "-loglevel", "quiet",
+                     "-f", "lavfi", "-i", f"sine=frequency={freq}:duration={dur}",
+                     "-af", f"volume={vol}"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as e:
+                self.get_logger().warn(f"비프음 재생 실패: {e}")
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def _cb_roi(self, msg: Image):
         if msg.width == 0 or msg.height == 0 or len(msg.data) == 0:
             return
@@ -235,6 +329,8 @@ class ArmsUINode(Node):
             self._draw_prearm_banner(frame)
         # 중앙 조준 십자선은 상태·모드 무관하게 항상 표시 (IDLE 포함).
         self._draw_crosshair(frame)
+        # 배터리(전압/퍼센트)는 좌측 하단에 자동/수동 무관하게 항상 표시.
+        self._draw_battery(frame)
         # kill 스위치 ON 이면 자동/수동 무관하게 화면 중앙에 크게 경고 (최상단).
         self._draw_kill_banner(frame)
         if self._fullscreen:
@@ -373,6 +469,31 @@ class ArmsUINode(Node):
         cv2.line(frame, (cx_f, cy_f - 20), (cx_f, cy_f + 20), (0, 255, 0), 1)
         cv2.circle(frame, (cx_f, cy_f), 2, (0, 255, 0), -1)
 
+    def _draw_battery(self, frame):
+        """배터리 전압/잔량을 좌측 하단에 표시 — 자동/수동 무관, 데이터 있을 때만."""
+        bat = self._latest_battery
+        if bat is None:
+            return
+        h, w = frame.shape[:2]
+        volt = float(bat.voltage)
+        pct = float(bat.percentage) * 100.0   # BatteryState.percentage 는 0~1 규약
+        pct_valid = (pct == pct) and pct >= 0   # NaN(pct!=pct)·음수면 무효
+        if pct_valid:
+            pct = max(0.0, min(100.0, pct))
+            text = f"{volt:.1f}V  {pct:.0f}%"
+        else:
+            text = f"{volt:.1f}V"
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = max(0.5, h / 900.0)
+        thick = max(1, int(round(scale * 2)))
+        (tw, th), bl = cv2.getTextSize(text, font, scale, thick)
+        m = 12
+        x, y = w - tw - m, th + m         # 우측 상단, y=텍스트 baseline
+        # 배경 박스 없이 검은 외곽선 + 흰 글씨만 (영상 위 최소 가독성).
+        cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
+        cv2.putText(frame, text, (x, y), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
+
     def _draw_overlay(self, frame):
         h, w = frame.shape[:2]
         cx_f, cy_f = w // 2, h // 2   # 오차/명령 화살표 기준(중앙). 십자선 분리 후에도 필요.
@@ -454,6 +575,7 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        node._stop_lock_tone()   # 종료 시 연속음 프로세스 정리
         cv2.destroyAllWindows()
         node.destroy_node()
         rclpy.shutdown()
