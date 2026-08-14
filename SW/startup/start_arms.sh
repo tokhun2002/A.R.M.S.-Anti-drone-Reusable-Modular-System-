@@ -30,16 +30,22 @@ echo "[startup] $(date) — A.R.M.S. 실기체 기동 시작 (ARMS_ROOT=$ARMS_RO
 if [ ! -f /opt/ros/humble/setup.bash ]; then
   echo "[startup][ERROR] ROS 2 Humble 없음 (/opt/ros/humble)"; exit 1
 fi
+# ROS/ament 의 setup 스크립트는 nounset-clean 이 아니라(예: AMENT_TRACE_SETUP_FILES
+# 미정의 참조) `set -u` 하에서 죽는다 → 소싱 구간만 nounset 잠시 해제.
+set +u
 # shellcheck disable=SC1091
 source /opt/ros/humble/setup.bash
+set -u
 
 if [ ! -f "$WS/install/setup.bash" ]; then
   echo "[startup][ERROR] 워크스페이스 빌드 없음: $WS/install"
   echo "                 먼저: cd $WS && colcon build"
   exit 1
 fi
+set +u
 # shellcheck disable=SC1091
 source "$WS/install/setup.bash"
+set -u
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 
 # ── 도커 데몬 준비 대기 (detection 컨테이너용) ────────────────
