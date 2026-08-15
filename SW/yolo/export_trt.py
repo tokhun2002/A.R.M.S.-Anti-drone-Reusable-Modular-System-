@@ -45,15 +45,12 @@ MODEL_PATH = os.environ.get("ARMS_PT", "/models/best.pt")
 if not Path(MODEL_PATH).exists():
     MODEL_PATH = str(_default.resolve())
 
-HALF = os.environ.get("ARMS_HALF", "1") not in ("0", "false", "False")
-
-
 def main():
     print(f"[INFO] 모델 로드: {MODEL_PATH}")
     model = YOLO(MODEL_PATH)
 
-    print(f"[INFO] TensorRT 엔진 빌드 시작 (half={HALF}) — 수 분 소요...")
-    engine_path = model.export(format="engine", half=HALF, device=0)
+    print("[INFO] TensorRT 엔진 빌드 시작 (FP16 half=True 고정) — 수 분 소요...")
+    engine_path = model.export(format="engine", half=True, device=0)
 
     print(f"[INFO] 저장 완료: {engine_path}")
 
