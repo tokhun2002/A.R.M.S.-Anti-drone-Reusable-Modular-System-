@@ -229,7 +229,7 @@ stateDiagram-v2
 ```yaml
 # arms_control/config/control_params.yaml
 mission:
-  detection_confidence_threshold: 0.65
+  detection_confidence_threshold: 0.32
   detection_timeout_sec: 1.0
   lock_duration_sec: 0.3
   lock_box_tolerance: 0.5
