@@ -1,5 +1,28 @@
 # YOLO
 
+## 드론 카메라 영상 재학습
+
+`prepare_camera_dataset.py`는 `SW/camera_test` 영상을 2 FPS로 샘플링하고,
+원형 Gaussian red score로 초벌 라벨을 만든다. 전체 프레임 외에 192px proposal
+ROI와 풍선 반대편 hard-negative crop도 함께 생성한다.
+
+```bash
+python3 prepare_camera_dataset.py \
+  --videos ../camera_test \
+  --output /tmp/arms_camera_dataset \
+  --sample-fps 2
+
+python3 train_camera.py \
+  --data /tmp/arms_camera_dataset/data.yaml \
+  --model yolo11n.pt \
+  --epochs 15 --imgsz 320 --batch 16 \
+  --project /tmp/arms_yolo_runs
+```
+
+학습 결과 `weights/best.pt`를
+`arms_ws/src/arms_detection/docker/models/balloon_camera.pt`로 복사한다.
+Jetson에서는 먼저 `.pt`로 검증하고, 성능이 필요하면 아래 TensorRT 변환을 한다.
+
 ## 모델 다운로드
 
 - https://drive.google.com/file/d/1ZD6JaYdnwULNY5RCRy2HP1EUoAv17KHk/view?usp=drive_link
@@ -24,14 +47,15 @@ python test_camera.py
 `test_camera.py` 상에서 카메라 인덱스나 파라미터를 수정할 수 있음.
 
 ```python
-CAMERA = 0    # 카메라 인덱스
-CONF   = 0.5  # confidence threshold
+CAMERA = 0     # 카메라 인덱스
+CONF   = 0.32  # 재학습 모델 validation F1 최적 threshold
 IOU    = 0.45 # NMS IoU threshold
 ```
 
 ## export_trt.py — TensorRT 엔진 변환
 
-`best.pt` → FP16 양자화 → `best.engine` 변환 (ultralytics `format=engine`).
+`balloon_camera.pt` → FP16 양자화 → `balloon_camera.engine` 변환
+(ultralytics `format=engine`).
 ultralytics 로 export 하면 엔진에 메타데이터(class names / imgsz / task)가 함께
 기록되어 추론 노드의 `YOLO('...engine')` 가 그대로 로드할 수 있다.
 변환된 엔진은 Jetson Docker 컨테이너에서 고속 추론에 사용됨.
@@ -43,7 +67,7 @@ TensorRT(예: 10.3)와 컨테이너의 TensorRT(예: 10.7)가 다르면 엔진�
 않으므로, 추론이 돌아가는 것과 동일한 ultralytics jetson 이미지 안에서 빌드한다.
 
 ```bash
-cd SW/YOLO_balloon
+cd SW/yolo
 MODELS=../arms_ws/src/arms_detection/docker/models
 docker run --rm --runtime nvidia -e NVIDIA_VISIBLE_DEVICES=all -w /tmp \
     -v "$PWD/$MODELS:/models" \
@@ -52,8 +76,8 @@ docker run --rm --runtime nvidia -e NVIDIA_VISIBLE_DEVICES=all -w /tmp \
     python3 /tmp/export_trt.py
 ```
 
-완료 후 `models/best.engine` 이 생성됨. 이후 compose 의 `ARMS_MODEL` 을
-`/models/best.engine` 로 두면 노드가 엔진으로 추론한다.
+완료 후 `models/balloon_camera.engine` 이 생성됨. 이후 compose 의 `ARMS_MODEL` 을
+`/models/balloon_camera.engine` 로 두면 노드가 엔진으로 추론한다.
 
 ### 주의사항
 

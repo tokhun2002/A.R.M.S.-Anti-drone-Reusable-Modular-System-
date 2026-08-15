@@ -17,7 +17,7 @@
 | -------------- | --------------------------------------- | ---- | ------ |
 | IDLE → SEARCH  | arm 명령 수신                           | ■    | ☐      |
 | SEARCH → IDLE  | disarm 명령 수신                        | ☐    | ☐      |
-| SEARCH → LOCK  | 연속 감지 >= T_lock (confidence > 0.65) | ☐    | ☐      |
+| SEARCH → LOCK  | 연속 감지 >= T_lock (confidence > 0.32) | ☐    | ☐      |
 | LOCK → SEARCH  | 타겟 소실 (N 프레임 감지 없음)          | ☐    | ☐      |
 | LOCK → TRACK   | launch 버튼 입력 (GPIO)                 | ☐    | ☐      |
 | TRACK → SEARCH | 타겟 소실                               | ☐    | ☐      |

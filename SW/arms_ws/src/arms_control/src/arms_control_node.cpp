@@ -32,7 +32,7 @@ class ArmsControlNode : public rclcpp::Node {
     // ----------------------------------------------------------------
     // Declare & load parameters
     // ----------------------------------------------------------------
-    declare_parameter("mission.detection_confidence_threshold", 0.65);
+    declare_parameter("mission.detection_confidence_threshold", 0.32);
     declare_parameter("mission.lock_duration_sec", 0.3);
     declare_parameter("mission.detection_timeout_sec", 1.0);
     declare_parameter("mission.lock_box_tolerance", 0.5);

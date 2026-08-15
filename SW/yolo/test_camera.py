@@ -4,9 +4,9 @@ from pathlib import Path
 import cv2
 from ultralytics import YOLO
 
-MODEL = Path(__file__).parent / "../arms_ws/src/arms_detection/docker/models/best.pt"
+MODEL = Path(__file__).parent / "../arms_ws/src/arms_detection/docker/models/balloon_camera.pt"
 CAMERA = 0
-CONF = 0.5
+CONF = 0.32
 IOU = 0.45
 
 print(f"[INFO] 모델 로드 중: {MODEL.resolve()}")
