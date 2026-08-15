@@ -312,19 +312,28 @@ class ArmsDetectionNode(Node):
         self.declare_parameter("absdiff.min_area_ratio",      0.0010)
         self.declare_parameter("absdiff.full_conf_area_ratio", 0.0100)
 
-        # 초기 획득(ROI 뜨기 전, 전체 프레임 탐색)은 YOLO 로만 표적을 찾는다.
-        # YOLO 는 표적이 아니면 confidence 가 낮아 헛-LOCK 이 없다. HSV/ABSDIFF 는
-        # "가장 그럴듯한 blob"을 늘 잡아 오검출하므로 획득 단계에선 배제한다.
-        #   YOLO 가 못 잡으면(표적 없음 or YOLO 죽음) = 표적이 없다는 뜻 → CV 폴백
-        #   없이 SEARCH 유지. 즉 획득은 '항상' YOLO 판단만 신뢰한다.
-        # ROI 확보 후(추적)엔 YOLO 가 크롭에서 싸게 돌아 계속 주가 되고, YOLO 가
-        # 미스/다운이어도 CV 가 보조로 표적을 유지한다(_detect_stack allow_cv 기본 True).
-        self.declare_parameter("acquire.yolo_only", True)
+        # 초기 획득(ROI 뜨기 전) 정책: 최종 판단은 '항상' YOLO 가 한다. HSV/ABSDIFF 는
+        # "가장 그럴듯한 blob"을 늘 잡아 헛-LOCK 을 내므로 획득을 직접 만들지 못한다.
+        # 원거리 표적은 아래 acquire.hsv_propose 로 'HSV 후보 → YOLO 확대검증' 방식으로
+        # 잡는다(HSV 는 제안만, 확인은 YOLO). ROI 확보 후(추적)엔 YOLO 가 크롭에서 싸게
+        # 돌아 계속 주가 되고, YOLO 미스/다운이어도 CV 가 보조로 표적을 유지한다
+        # (_detect_stack allow_cv 기본 True).
+
+        # 원거리 획득: HSV 가 후보를 제안하고 YOLO 가 확대 크롭에서 확인한다.
+        # 원거리 풍선은 전체프레임 YOLO 가 놓치므로, HSV 로 작은 빨강까지 후보를 잡아
+        # 그 주변을 확대해 YOLO 로 '진짜 풍선인지' 검증한다. 최종 판단은 YOLO 라
+        # 헛-LOCK 이 없다. hsv_propose_min_area_ratio 는 '후보'용이라 직접-LOCK 용
+        # hsv.min_area_ratio 보다 훨씬 작게(관대하게) 둬서 원거리도 후보로 잡는다.
+        self.declare_parameter("acquire.hsv_propose", True)
+        self.declare_parameter("acquire.hsv_max_candidates", 2)     # YOLO 로 검증할 후보 수
+        self.declare_parameter("acquire.hsv_propose_min_area_ratio", 0.00005)
+        self.declare_parameter("acquire.verify_margin", 4.0)        # 후보 크롭 확장배율(확대량)
+        self.declare_parameter("acquire.verify_min_px", 64)         # 크롭 최소 한 변[px]
 
         # SEARCH 진단용: 전체 프레임 경로에서 세 검출기(YOLO/HSV/ABSDIFF) 각각의
         # 검출 여부·confidence 를 /arms/detector_status 로 발행해 UI 가 표시한다.
-        # LOCK 판단(acquire.yolo_only)과 무관한 '표시 전용'이라, True 여도 HSV/ABSDIFF
-        # 는 락을 만들지 않고 상태 보고만 한다. CPU 아끼려면 False.
+        # 획득 판단과 무관한 '표시 전용'이라, True 여도 HSV/ABSDIFF 는 락을 만들지
+        # 않고 상태 보고만 한다. CPU 아끼려면 False.
         self.declare_parameter("debug.detector_status", True)
 
         # --- detect-then-track (ROI + CSRT/KCF) ---
@@ -474,16 +483,63 @@ class ArmsDetectionNode(Node):
                 return None
             return self._remap_from_crop(box, off, bgr.shape[1], bgr.shape[0])
 
-        # 초기 획득(전체 프레임)은 YOLO 전용. YOLO 가 못 잡으면(=표적 없음, 또는 YOLO
-        # 죽음) 표적이 없다는 뜻이므로 CV 폴백 없이 그대로 SEARCH 유지 → 헛-LOCK 원천
-        # 차단. (ROI 확보 후 추적 경로는 allow_cv=True 라 YOLO 꺼져도 CV 로 표적 유지)
-        yolo_only = bool(self.get_parameter("acquire.yolo_only").value)
-        allow_cv  = not yolo_only
+        # 초기 획득(전체 프레임): 원거리 풍선은 전체프레임 YOLO 가 놓치므로
+        #   1) 전체프레임 YOLO 로 근/중거리 직접 검출
+        #   2) 놓치면 HSV 가 원거리 작은 빨강까지 '후보' 제안 (관대한 최소크기)
+        #   3) 각 후보를 확대 크롭해 YOLO 로 '진짜 풍선인지' 확인 → 확인된 것만 채택
+        # 최종 판단은 항상 YOLO 라 CV 헛검출로 LOCK 되지 않는다(원거리 탐지 + 헛-LOCK 방지).
         interval = max(1, int(self.get_parameter("yolo.acquire_interval").value))
         run_yolo = (self._frame_i % interval == 0)
-        report = bool(self.get_parameter("debug.detector_status").value)
-        return self._detect_stack(bgr, header, run_yolo=run_yolo, allow_cv=allow_cv,
-                                  report_status=report, status_mode=0.0)  # FULL
+        report   = bool(self.get_parameter("debug.detector_status").value)
+        yolo_on  = bool(self.get_parameter("use_yolo").value)
+        use_yolo = yolo_on and self._yolo is not None
+        hsv_propose = (bool(self.get_parameter("acquire.hsv_propose").value)
+                       and bool(self.get_parameter("use_hsv").value))
+
+        yolo_box = self._detect_yolo(bgr) if (use_yolo and run_yolo) else None
+
+        hsv_conf = -1.0
+        verify_box = None
+        do_verify = use_yolo and run_yolo and hsv_propose and yolo_box is None
+        if report or do_verify:
+            pm    = float(self.get_parameter("acquire.hsv_propose_min_area_ratio").value)
+            ncand = max(1, int(self.get_parameter("acquire.hsv_max_candidates").value))
+            cands = self._hsv_candidates(bgr, ncand, pm)
+            hsv_conf = cands[0].confidence if cands else 0.0
+            if do_verify and cands:
+                vmargin = float(self.get_parameter("acquire.verify_margin").value)
+                vmin    = int(self.get_parameter("acquire.verify_min_px").value)
+                for cand in cands:
+                    crop, off = self._crop_for_verify(bgr, cand, vmargin, vmin)
+                    if crop is None:
+                        continue
+                    vb = self._detect_yolo(crop)         # 확대 크롭에서 YOLO 확인
+                    if vb is not None:
+                        verify_box = self._remap_from_crop(vb, off, bgr.shape[1], bgr.shape[0])
+                        break
+
+        winner = yolo_box if yolo_box is not None else verify_box
+
+        if report:
+            yb = yolo_box if yolo_box is not None else verify_box
+            if not yolo_on:
+                yv = -1.0
+            elif self._yolo is None:
+                yv = -2.0
+            elif not run_yolo:
+                yv = -1.0
+            else:
+                yv = float(yb.confidence) if yb is not None else 0.0
+            if bool(self.get_parameter("use_absdiff").value):
+                ab = self._detect_absdiff(bgr, None)
+                av = float(ab.confidence) if ab is not None else 0.0
+            else:
+                av = -1.0
+            msg = Float32MultiArray()
+            msg.data = [yv, hsv_conf, av, 0.0]           # [yolo, hsv, absdiff, mode=FULL]
+            self.pub_detstatus.publish(msg)
+
+        return winner
 
     def _detect_stack(self, img, header, run_yolo, allow_cv=True,
                       report_status=False, status_mode=0.0):
@@ -530,6 +586,20 @@ class ArmsDetectionNode(Node):
         H, W = bgr.shape[:2]
         bw = box.width * W * margin
         bh = box.height * H * margin
+        cx, cy = box.x_center * W, box.y_center * H
+        x0 = int(max(0, cx - bw / 2)); y0 = int(max(0, cy - bh / 2))
+        x1 = int(min(W, cx + bw / 2)); y1 = int(min(H, cy + bh / 2))
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            return None, None
+        return bgr[y0:y1, x0:x1], (x0, y0, x1 - x0, y1 - y0)
+
+    @staticmethod
+    def _crop_for_verify(bgr, box, margin, min_px):
+        """HSV 후보 주변을 margin 배 확장하되 최소 한 변 min_px 를 보장해 크롭.
+        원거리 작은 후보도 YOLO 가 볼 수 있게 최소 크기를 강제한다."""
+        H, W = bgr.shape[:2]
+        bw = max(box.width * W * margin, float(min_px))
+        bh = max(box.height * H * margin, float(min_px))
         cx, cy = box.x_center * W, box.y_center * H
         x0 = int(max(0, cx - bw / 2)); y0 = int(max(0, cy - bh / 2))
         x1 = int(min(W, cx + bw / 2)); y1 = int(min(H, cy + bh / 2))
@@ -626,8 +696,12 @@ class ArmsDetectionNode(Node):
         box.class_name = str(self._yolo.names[int(best.cls[0])])
         return box
 
-    def _detect_hsv(self, bgr: np.ndarray) -> BoundingBox | None:
-        """빨간 영역 HSV 색상 분리."""
+    def _hsv_candidates(self, bgr: np.ndarray, n: int = 1,
+                        min_area_ratio: float | None = None) -> list:
+        """빨간 영역 HSV 후보들을 면적 큰 순으로 최대 n개 반환 (BoundingBox 리스트).
+
+        min_area_ratio 를 주면 그 값으로, 없으면 hsv.min_area_ratio 로 걸러낸다.
+        confidence 는 크기 비례(full_conf_area_ratio 에서 포화)."""
         h, w = bgr.shape[:2]
         hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
         mask = cv2.bitwise_or(
@@ -636,26 +710,34 @@ class ArmsDetectionNode(Node):
         )
         cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not cnts:
-            return None
-        c = max(cnts, key=cv2.contourArea)
-        area = cv2.contourArea(c)
-        area_frac = area / float(w * h)                  # 프레임 대비 면적비
-        min_frac  = float(self.get_parameter("hsv.min_area_ratio").value)
+            return []
+        min_frac = (float(self.get_parameter("hsv.min_area_ratio").value)
+                    if min_area_ratio is None else float(min_area_ratio))
         full_frac = float(self.get_parameter("hsv.full_conf_area_ratio").value)
-        if area_frac < min_frac:                         # 너무 작은 빨강 얼룩 → 표적 아님
-            return None
-        x, y, bw, bh = cv2.boundingRect(c)
-        box = BoundingBox()
-        box.x_center  = float((x + bw / 2) / w)
-        box.y_center  = float((y + bh / 2) / h)
-        box.width     = float(bw / w)
-        box.height    = float(bh / h)
-        # confidence = 표적이 클수록 1.0 에 근접(full_frac 에서 포화). 작으면 낮아
-        # state machine 의 임계값을 못 넘어 LOCK 되지 않는다.
-        box.confidence = float(min(0.99, area_frac / full_frac)) if full_frac > 0 else 0.99
-        box.class_id  = 2
-        box.class_name = "hsv_red"
-        return box
+        frame_area = float(w * h)
+        out = []
+        for c in sorted(cnts, key=cv2.contourArea, reverse=True):
+            area_frac = cv2.contourArea(c) / frame_area
+            if area_frac < min_frac:
+                break                                    # 정렬돼 있어 이후는 다 더 작음
+            x, y, bw, bh = cv2.boundingRect(c)
+            box = BoundingBox()
+            box.x_center  = float((x + bw / 2) / w)
+            box.y_center  = float((y + bh / 2) / h)
+            box.width     = float(bw / w)
+            box.height    = float(bh / h)
+            box.confidence = float(min(0.99, area_frac / full_frac)) if full_frac > 0 else 0.99
+            box.class_id  = 2
+            box.class_name = "hsv_red"
+            out.append(box)
+            if len(out) >= n:
+                break
+        return out
+
+    def _detect_hsv(self, bgr: np.ndarray) -> BoundingBox | None:
+        """빨간 영역 HSV 색상 분리 (직접-LOCK/ROI/상태표시용, 최대 후보 1개)."""
+        c = self._hsv_candidates(bgr, 1)
+        return c[0] if c else None
 
     def _detect_absdiff(self, bgr: np.ndarray, header=None) -> BoundingBox | None:
         """배경 대비 튀는 점 검출 (색·형태 무관)."""
