@@ -18,7 +18,7 @@ A.R.M.S. 의 표적(빨간 풍선) 검출 노드. `/arms/image_raw` 를 받아 �
 | 구독 | `/arms/image_raw` | `sensor_msgs/Image` | 카메라/replay 영상 (rgb8·bgr8·mono8) |
 | 발행 | `/arms/detections` | `arms_msgs/DetectionArray` | 표적 **0 또는 1개** (best 하나) |
 | 발행 | `/arms/roi_image` | `sensor_msgs/Image` | 추적 표적 확대 크롭 (bgr8) |
-| 발행 | `/arms/debug_image` | `sensor_msgs/Image` | 시각화 (bgr8) |
+| 발행 | `/arms/debug_image` | `sensor_msgs/Image` | 모든 검출기(YOLO/HSV/ABSDIFF/cv_fused) 결과 + 최종 선택 시각화 (bgr8) |
 | 발행 | `/arms/debug_absdiff` | `sensor_msgs/Image` | absdiff 이진 마스크 (mono8) |
 | 발행 | `/arms/detector_status` | `std_msgs/Float32MultiArray` | `[yolo, hsv, absdiff, mode]` — UI 표시용 |
 
@@ -115,6 +115,28 @@ GPU 메모리 부족 등으로 실패할 수 있다. 그때:
 ---
 
 ## 4. CV 융합 & YOLO proposal (원거리 표적 살리기)
+
+획득(FULL) 프레임에서의 winner 선정 흐름:
+
+```mermaid
+flowchart TB
+    Y["전체프레임 YOLO<br/>(YOLO 프레임에서만)"] --> Yq{"검출됨?"}
+    Yq -- 예 --> WY(["winner: YOLO<br/>실측 confidence, cap 없음"])
+    Yq -- 아니오 --> CV["HSV · ABSDIFF 실행"]
+    CV --> Fq{"HSV·ABSDIFF<br/>같은 위치 합의?"}
+    Fq -- 아니오 --> SG(["winner: 단일 CV<br/>hsv_red or absdiff_spot"])
+    Fq -- 예 --> FUSE["cv_fused 생성"]
+    FUSE --> Pq{"YOLO 프레임?"}
+    Pq -- 예 --> PC["융합 위치 192px 크롭<br/>→ YOLO 재추론"]
+    Pq -- 아니오 --> WF(["winner: cv_fused<br/>≤0.60, 시간확인 승격 필요"])
+    PC --> PCq{"검출됨?"}
+    PCq -- 예 --> WY
+    PCq -- 아니오 --> WF
+```
+
+> YOLO 로 확인된 winner 는 CV 가 아니라(`_is_cv_detection` False) **cap/승격 블록을
+> 건너뛰어 실측 confidence 를 그대로** 갖는다 → 빠른·신뢰 LOCK. 반면 cv_fused winner 는
+> 0.60 상한 + 여러 프레임 시간확인 후에야 승격된다(§6.1) → 보수적·느린 LOCK.
 
 ### 4.1 `_fuse_cv` — HSV+ABSDIFF 합의
 

@@ -15,7 +15,7 @@ arms_detection_node — A.R.M.S. 다중 검출기 (우선순위 기반)
   구독 : /arms/image_raw        sensor_msgs/Image
   발행 : /arms/detections       arms_msgs/DetectionArray
   발행 : /arms/roi_image        sensor_msgs/Image  (bgr8, 추적 표적 확대 크롭)
-  발행 : /arms/debug_image      sensor_msgs/Image  (bgr8, 시각화)
+  발행 : /arms/debug_image      sensor_msgs/Image  (bgr8, 모든 검출기 결과+최종 시각화)
   발행 : /arms/debug_absdiff    sensor_msgs/Image  (mono8, absdiff 이진 마스크)
 
 파라미터 (ros2 param set /arms_detection_node ...)
@@ -432,6 +432,9 @@ class ArmsDetectionNode(Node):
 
         self._tracker = _TargetTracker()
         self._frame_i = 0   # YOLO ACQUIRE 스로틀용 프레임 카운터
+        # 디버그 영상용: 이번 프레임 전체탐색(FULL)에서 각 검출기 원시 결과 보관
+        #   {"yolo","hsv","absdiff","cv_fused"} → BoundingBox|None. _publish_debug 가 전부 그림.
+        self._dbg_boxes = {}
 
         # YOLO: 같은 프로세스에서 직접 추론. ultralytics/모델이 없으면(호스트/SITL)
         # 조용히 비활성화하고 HSV/ABSDIFF 로만 동작 (graceful degradation).
@@ -490,6 +493,7 @@ class ArmsDetectionNode(Node):
         if msg.width == 0 or msg.height == 0 or len(msg.data) == 0:
             return   # 빈 프레임(image_publisher 루프 경계 등) → 스킵
         self._frame_i += 1
+        self._dbg_boxes = {}   # 이번 프레임 검출기 결과 초기화(전체탐색 시 채워짐)
         try:
             bgr_full = imgmsg_to_bgr(msg)
         except Exception as e:
@@ -617,6 +621,13 @@ class ArmsDetectionNode(Node):
             msg = Float32MultiArray()
             msg.data = [yv, hv, av, float(status_mode)]   # [yolo, hsv, absdiff, mode(0=FULL,1=ROI)]
             self.pub_detstatus.publish(msg)
+
+        # 디버그 영상용: 전체탐색(FULL) 경로의 각 검출기 원시 결과를 보관(좌표가 proc
+        # 프레임 정규화라 _publish_debug 가 그대로 그릴 수 있다). ROI 크롭 경로는 좌표계가
+        # 달라 저장하지 않는다.
+        if status_mode == 0.0:
+            self._dbg_boxes = {"yolo": yolo_box, "hsv": hsv_box,
+                               "absdiff": absdiff_box, "cv_fused": fused_box}
 
         # LOCK 판단용 winner. CV끼리는 같은 위치를 가리킬 때만 융합 후보로 승격한다.
         if yolo_box is not None:
@@ -946,30 +957,65 @@ class ArmsDetectionNode(Node):
     # Debug visualization
     # ------------------------------------------------------------------
 
+    # 검출기별 색 (BGR)
+    _DBG_PALETTE = {
+        "yolo":     (255, 200, 0),   # 하늘색
+        "hsv":      (0, 0, 255),     # 빨강
+        "absdiff":  (0, 220, 0),     # 초록
+        "cv_fused": (255, 0, 255),   # 자홍
+    }
+
+    @staticmethod
+    def _draw_dbg_box(img, box, color, thick):
+        """정규화 box 를 img 에 사각형으로 그린다(너무 작으면 최소 크기 보장)."""
+        h, w = img.shape[:2]
+        cx, cy = box.x_center * w, box.y_center * h
+        bw, bh = box.width * w, box.height * h
+        x1, y1 = int(cx - bw / 2), int(cy - bh / 2)
+        x2, y2 = int(cx + bw / 2), int(cy + bh / 2)
+        if x2 - x1 < 6:
+            x1, x2 = int(cx - 8), int(cx + 8)
+        if y2 - y1 < 6:
+            y1, y2 = int(cy - 8), int(cy + 8)
+        cv2.rectangle(img, (x1, y1), (x2, y2), color, thick)
+
     def _publish_debug(self, bgr, header, target, state):
+        """모든 검출기(YOLO/HSV/ABSDIFF/cv_fused) 결과를 색상별로 전부 그리고,
+        최종 선택(winner)은 흰 굵은 박스로 강조한다. 우상단에 범례 표시."""
         img = bgr.copy()
         h, w = img.shape[:2]
-        # 트래커 상태별 색: TRACK=초록, 그 외(ACQUIRE/LOST)=주황
-        color = (0, 220, 0) if state == _TargetTracker.TRACK else (0, 165, 255)
+        dbg = self._dbg_boxes or {}
 
+        # 개별 검출기 원시 결과(얇게, 색상별)
+        for key in ("yolo", "hsv", "absdiff", "cv_fused"):
+            box = dbg.get(key)
+            if box is not None:
+                self._draw_dbg_box(img, box, self._DBG_PALETTE[key], 1)
+
+        # 최종 선택 박스: 흰 굵은 테두리로 강조
         if target is not None:
-            cx, cy = target.x_center * w, target.y_center * h
-            bw, bh = target.width * w, target.height * h
-            x1, y1 = int(cx - bw / 2), int(cy - bh / 2)
-            x2, y2 = int(cx + bw / 2), int(cy + bh / 2)
-            if x2 - x1 < 6:
-                x1, x2 = int(cx - 8), int(cx + 8)
-            if y2 - y1 < 6:
-                y1, y2 = int(cy - 8), int(cy + 8)
-            cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(img, f"{target.class_name} {target.confidence:.2f}",
-                        (x1, max(12, y1 - 5)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+            self._draw_dbg_box(img, target, (255, 255, 255), 2)
 
+        # 우상단 범례: 각 검출기 confidence + 최종 선택
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        yy = 20
+        for key in ("yolo", "hsv", "absdiff", "cv_fused"):
+            box = dbg.get(key)
+            txt = f"{key}: {box.confidence:.2f}" if box is not None else f"{key}: -"
+            col = self._DBG_PALETTE[key] if box is not None else (120, 120, 120)
+            cv2.putText(img, txt, (w - 200, yy), font, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(img, txt, (w - 200, yy), font, 0.5, col, 1, cv2.LINE_AA)
+            yy += 20
+        if target is not None:
+            t = f"FINAL {target.class_name} {target.confidence:.2f}"
+            cv2.putText(img, t, (w - 260, yy), font, 0.55, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(img, t, (w - 260, yy), font, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+
+        # 중앙 마커 + 트래커 상태 (TRACK=초록, 그 외=주황)
+        state_col = (0, 220, 0) if state == _TargetTracker.TRACK else (0, 165, 255)
         cv2.drawMarker(img, (w // 2, h // 2), (180, 180, 180),
                        cv2.MARKER_TILTED_CROSS, 16, 1)
-        cv2.putText(img, state, (10, 24),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+        cv2.putText(img, state, (10, 24), font, 0.7, state_col, 2, cv2.LINE_AA)
 
         self.pub_debug.publish(bgr_to_imgmsg(img, header))
 
