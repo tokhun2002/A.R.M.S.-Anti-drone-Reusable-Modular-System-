@@ -23,7 +23,8 @@ services:
       - ARMS_MODEL=${ARMS_MODEL:-/models/balloon_camera.pt}
       - ARMS_CONF=${ARMS_CONF:-0.32}
       - ARMS_IOU=${ARMS_IOU:-0.45}
-      - ARMS_IMGSZ=${ARMS_IMGSZ:-320}
+      - ARMS_FULL_IMGSZ=${ARMS_FULL_IMGSZ:-512}
+      - ARMS_ROI_IMGSZ=${ARMS_ROI_IMGSZ:-320}
       - ARMS_CLASSES=${ARMS_CLASSES:-balloon}
     volumes:
       - ./models:/models:ro    # place .pt model file here

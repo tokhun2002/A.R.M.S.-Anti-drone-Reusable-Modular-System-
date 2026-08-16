@@ -5,7 +5,7 @@ panel.py — A.R.M.S. SITL 튜닝/심판 콘솔 (tkinter GUI)  [arms_sim]
 SITL 전용 개발 콘솔. /arms/command 는 발행하지 않는다 (그건 가상 조종기 =
 arms_command 노드 담당). 여기서 하는 일은 전부 파라미터/서비스 세팅뿐:
   - 미션 상태 표시 (IDLE/SEARCH/LOCK/TRACK/FIRE/RTL) — 읽기전용 구독
-  - 검출 모드(YOLO/HSV/ABSDIFF) 토글 → arms_detection_node 파라미터
+  - 검출 모드(YOLO/HSV proposal) 토글 → arms_detection_node 파라미터
   - Roll/Pitch 부호, PID, τ, 추력, PN 게인 등 → arms_control_node 파라미터
   - 표적(풍선/드론) 비행·정지·고도·속도 → referee 파라미터
   - RESET(추후 디벨롭) → gz 서비스 + /arms/reset_cmd
@@ -158,14 +158,13 @@ class PanelGUI:
         g_det = group(left, "검출  ·  arms_detection")
         mfrm = tk.Frame(g_det, bg="#1e1e1e")
         mfrm.pack()
-        # 노드 쪽 declare_parameter 기본값과 일치시킨다 (셋 다 True). 예전엔 여기서만
+        # 노드 쪽 declare_parameter 기본값과 일치시킨다. 예전엔 여기서만
         # yolo=False 라 패널은 OFF 로 그려놓고 노드는 켜져 있었고, YOLO 버튼을 처음
         # 누르면 켜지는 게 아니라 꺼졌다. _push_defaults 가 시작할 때 실제로 밀어준다.
-        self.det_on = {"hsv": True, "yolo": True, "absdiff": True}
+        self.det_on = {"hsv": True, "yolo": True}
         self.det_btns = {}
-        for key, label, col in [("hsv", "HSV", "#2e7d32"),
-                                 ("yolo", "YOLO", "#6a1b9a"),
-                                 ("absdiff", "ABSDIFF", "#0277bd")]:
+        for key, label, col in [("hsv", "HSV 후보", "#2e7d32"),
+                                 ("yolo", "YOLO", "#6a1b9a")]:
             b = tk.Button(mfrm, text=label, width=9, font=("Arial", 9, "bold"),
                           command=lambda k=key: self.toggle_det(k))
             b.grid(row=0, column=len(self.det_btns), padx=2)
@@ -176,7 +175,7 @@ class PanelGUI:
                         lambda v, k=key: (self.det_on.__setitem__(
                             k, str(v).strip().lower() == "true"),
                             self._refresh_det_btns()))
-        tk.Label(g_det, text="눌린 것 = ON. 여러 개 켜면 융합 검출.",
+        tk.Label(g_det, text="HSV 후보를 YOLO가 확인해야 검출됩니다.",
                  fg="#777777", bg="#1e1e1e", font=("Arial", 8)).pack()
 
         # ── [제어] 축 부호 + PID ────────────────────────────────────────────

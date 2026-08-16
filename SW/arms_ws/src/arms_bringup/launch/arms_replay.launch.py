@@ -29,10 +29,17 @@ from ament_index_python.packages import get_package_share_directory
 
 
 def _find_detection_compose():
-    """detection 컨테이너 compose 경로 탐색 (arms.launch.py 와 동일).
+    """현재 장비에 맞는 detection compose 경로 탐색.
+
+    Jetson은 전용 런타임을 쓰고, 일반 x86 노트북은 CPU/CUDA 공용 laptop
+    이미지를 사용한다. ARMS_DETECTION_PLATFORM=jetson|laptop 으로 강제할 수 있다.
+
     compose 의 build context 가 소스트리 기준(../..)이라 반드시 '소스' 위치에서 실행해야
     하므로, ARMS_SW 환경변수 → 설치 share 에서 워크스페이스 역산 순으로 소스 경로를 찾는다."""
-    rel_src = "src/arms_detection/docker/docker-compose.jetson.yml"
+    platform = os.environ.get("ARMS_DETECTION_PLATFORM", "").strip().lower()
+    if platform not in {"jetson", "laptop"}:
+        platform = "jetson" if Path("/etc/nv_tegra_release").exists() else "laptop"
+    rel_src = f"src/arms_detection/docker/docker-compose.{platform}.yml"
     sw = os.environ.get("ARMS_SW")
     if sw:
         p = Path(sw) / "arms_ws" / rel_src

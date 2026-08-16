@@ -244,7 +244,8 @@ def main(args=None):
     try:
         root.mainloop()
     finally:
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-arms_detection_node — A.R.M.S. 다중 검출기 (우선순위 기반)
+arms_detection_node — A.R.M.S. 빨간 풍선 검출기
 
-검출기 우선순위: YOLO > HSV > ABSDIFF
-  - YOLO    : 같은 프로세스에서 직접 추론(ultralytics). 모델/GPU 없으면 자동 비활성.
-  - HSV     : 빨간색 영역 색상 분리 (근거리, 색이 선명할 때 강력)
-  - ABSDIFF : 배경 대비 튀는 점 검출 (색·형태 무관, 원거리 소형 표적에 유리)
+검출 구조: HSV proposal → ROI YOLO verification
+  - HSV     : Gaussian red score로 붉은 원형 후보를 최대 2개 제안.
+  - ROI YOLO: 후보 crop들을 한 번의 batch 추론으로 확인. YOLO 승인 결과만 발행.
+  - Full YOLO: HSV가 놓치는 경우를 위해 5프레임마다 전체 화면 fallback.
 
 검출이 어느 정도 연속되면 CSRT/KCF 트래커로 전환(detect-then-track)해 TRACK
 구간에선 ROI 만 추적한다(싸고 매끄러움). control 엔 완전히 투명 — 더 연속적인
@@ -16,25 +16,18 @@ arms_detection_node — A.R.M.S. 다중 검출기 (우선순위 기반)
   발행 : /arms/detections       arms_msgs/DetectionArray
   발행 : /arms/roi_image        sensor_msgs/Image  (bgr8, 추적 표적 확대 크롭)
   발행 : /arms/debug_image      sensor_msgs/Image  (bgr8, 모든 검출기 결과+최종 시각화)
-  발행 : /arms/debug_absdiff    sensor_msgs/Image  (mono8, absdiff 이진 마스크)
+  발행 : /arms/hsv_debug_image  sensor_msgs/Image  (bgr8, HSV 마스크와 후보 시각화)
+  발행 : /arms/detector_status  std_msgs/Float32MultiArray (검출·처리시간 진단값)
 
 파라미터 (ros2 param set /arms_detection_node ...)
-  use_yolo/use_hsv/use_absdiff : bool  검출기 on/off (기본 true)
-  yolo.acquire_interval : int   ACQUIRE/LOST 중 YOLO 를 N프레임마다만 실행 (기본 2).
-                                TRACK 재검출은 항상 실행. 모델 환경변수 ARMS_MODEL/
-                                ARMS_CONF/ARMS_IOU 로 설정(없으면 YOLO 비활성).
+  use_yolo/use_hsv             : bool  검출/후보 제안 on/off (기본 true)
+  yolo.full_fallback_interval  : int   전체 화면 YOLO fallback 주기 (기본 5)
   proc_width            : int   검출 처리 가로 해상도, 0=원본 (기본 640)
-  absdiff.diff_thresh   : int   배경 대비 임계값 (기본 25)
-  absdiff.bg_blur       : int   배경 추정 Gaussian 커널, 홀수 (기본 15)
-  absdiff.pre_blur      : int   노이즈 제거 Gaussian 커널, 홀수 (기본 1=끔)
-  absdiff.max_area_ratio: float blob 최대 면적비 (기본 0.05)
-  absdiff.max_blobs     : int   프레임 blob 수가 이보다 많으면 어수선한 장면(지상 등)
-                                으로 보고 absdiff 결과 억제. 0=게이팅 끔 (기본 100)
   publish_debug         : bool  디버그 영상 발행 (기본 true)
   track.enable          : bool  detect-then-track on/off (기본 true, false=매프레임 검출)
   track.tracker_type    : str   "CSRT" | "KCF" (기본 CSRT)
   track.confirm_frames  : int   트래킹 시작 연속 검출 수 (기본 3)
-  track.redetect_interval: int  TRACK 중 전체검출 보정 주기 (기본 10)
+  track.redetect_interval: int  TRACK 중 ROI YOLO 확인 주기 (기본 5)
   track.reacquire_frames: int   LOST 재획득 창 (기본 8)
   roi.margin            : float ROI 크롭 확장 배율 (기본 1.8)
 """
@@ -58,13 +51,6 @@ from arms_msgs.msg import BoundingBox, DetectionArray
 # ---------------------------------------------------------------------------
 
 _MORPH_KERNEL = np.ones((3, 3), np.uint8)
-
-
-def _is_cv_detection(box) -> bool:
-    """학습 모델이 아닌 고전 CV 검출 결과인지 판별한다."""
-    return box is not None and box.class_name in {
-        "hsv_red", "absdiff_spot", "cv_fused"
-    }
 
 
 class _CenterKalman:
@@ -118,17 +104,6 @@ def bgr_to_imgmsg(bgr: np.ndarray, header) -> Image:
     msg.is_bigendian = 0
     msg.step = bgr.shape[1] * 3
     msg.data = bgr.tobytes()
-    return msg
-
-
-def mono_to_imgmsg(gray: np.ndarray, header) -> Image:
-    msg = Image()
-    msg.header = header
-    msg.height, msg.width = gray.shape[:2]
-    msg.encoding = "mono8"
-    msg.is_bigendian = 0
-    msg.step = gray.shape[1]
-    msg.data = gray.tobytes()
     return msg
 
 
@@ -281,21 +256,8 @@ class _TargetTracker:
         self._prev_center = c
         target = self._smooth_center(target)
 
-        # 고전 CV 후보는 크기가 작을수록 confidence가 낮아지는 특성 때문에 제어기의
-        # 제어 임계값을 영원히 넘지 못했다. HSV와 고주파 점 검출이 합의한
-        # cv_fused 후보만 여러 프레임 같은 위치에 있을 때 승격한다. 단일 CV 후보는
-        # 상태표시/추적 단서로만 남겨 빨간 건물·조명에 즉시 LOCK 되는 것을 막는다.
-        if _is_cv_detection(target):
-            if (target.class_name == "cv_fused" and
-                    self.hit_streak >= cfg["cv_confirm_frames"]):
-                target.confidence = max(target.confidence, cfg["cv_confirm_conf"])
-            elif (target.class_name == "hsv_red" and
-                  self.hit_streak >= cfg["hsv_confirm_frames"]):
-                target.confidence = max(target.confidence, cfg["hsv_confirm_conf"])
-            else:
-                target.confidence = min(target.confidence, 0.60)
-        # 승격/제한을 적용한 confidence를 트래커에도 넘겨야 TRACK 상태에서 다시
-        # 원래의 낮은 CV 점수로 떨어지지 않는다.
+        # detect_fn은 YOLO가 확인한 결과만 반환한다. HSV 후보나 시간 연속성만으로
+        # confidence를 승격하지 않는다.
         self._last_conf = target.confidence
         if self.hit_streak >= cfg["confirm_frames"] and self._init_cv(bgr, target, cfg):
             self.state = self.TRACK
@@ -357,30 +319,18 @@ class ArmsDetectionNode(Node):
 
         self.declare_parameter("use_yolo",   True)
         self.declare_parameter("use_hsv",    True)
-        self.declare_parameter("use_absdiff", True)
-        # ACQUIRE/LOST(매프레임 전체탐색)에서 YOLO 를 N프레임마다만 실행해 레이트 유지.
-        # TRACK 재검출은 드물게 일어나므로 항상 실행. (동기 추론)
-        self.declare_parameter("yolo.acquire_interval", 2)
+        # HSV→ROI YOLO가 기본 경로다. HSV가 놓치는 색 변화에 대비해 전체 화면
+        # YOLO를 낮은 주기로 실행한다. 0 이하면 full fallback을 끈다.
+        self.declare_parameter("yolo.full_fallback_interval", 5)
         self.declare_parameter("yolo.proposal_crop_px", 192)
         # 검출 처리 해상도(가로 px). 0=원본. 출력은 비율이라 정확도 무관, CV 비용만 절감.
         self.declare_parameter("proc_width", 640)
-        self.declare_parameter("absdiff.diff_thresh",    25)
-        self.declare_parameter("absdiff.bg_blur",        15)
-        self.declare_parameter("absdiff.pre_blur",        1)
-        self.declare_parameter("absdiff.max_area_ratio", 0.05)
-        # blob 수가 이보다 많으면 어수선한 장면(지상 등)으로 보고 absdiff 억제. 0=끔.
-        self.declare_parameter("absdiff.max_blobs", 100)
         self.declare_parameter("publish_debug", True)
 
-        # --- CV 검출 confidence 게이팅 (표적 없을 때 헛-LOCK 방지) ---------------
-        # CV(HSV/ABSDIFF)는 "가장 그럴듯한 blob"을 항상 하나 잡는다. 그래서 예전엔
-        # confidence 바닥값(0.7/0.65)이 항상 임계값 이상이라 표적이 없어도 LOCK 됐다.
-        # 이제 confidence 를 표적 '크기(프레임 대비 면적비)'에 비례시켜, 충분히 큰 =
-        # 확실한 표적일 때만 임계값(state machine 의 confidence_threshold)을 넘게 한다.
-        #   min_area_ratio      : 이보다 작은 blob 은 아예 검출로 치지 않음(존재 게이트)
-        #   full_conf_area_ratio: 면적비가 이 값이면 confidence=1.0 (포화 기준)
-        #   → 더 엄격히(큰 표적만) 하려면 full_conf_area_ratio 를 키우거나
-        #     arms_control 의 mission.detection_confidence_threshold 를 올린다.
+        # --- HSV proposal (단독 LOCK 금지) ------------------------------------
+        self.declare_parameter("hsv.max_candidates",            2)
+        # 질감 계산은 비교적 비싸므로 기본 형상/색 점수 상위 후보에만 적용한다.
+        self.declare_parameter("hsv.texture_shortlist",          8)
         self.declare_parameter("hsv.min_area_ratio",          0.00003)
         self.declare_parameter("hsv.full_conf_area_ratio",    0.0100)
         self.declare_parameter("hsv.max_area_ratio",          0.0200)
@@ -395,23 +345,10 @@ class ArmsDetectionNode(Node):
         self.declare_parameter("hsv.val_scale",               18.0)
         self.declare_parameter("hsv.min_circularity",         0.20)
         self.declare_parameter("hsv.texture_scale",           120.0)
-        self.declare_parameter("absdiff.min_area_ratio",      0.00003)
-        self.declare_parameter("absdiff.full_conf_area_ratio", 0.0100)
-        self.declare_parameter("fusion.max_center_dist",      0.035)
-
-        # 초기 획득도 CV를 쓰되, 여러 프레임의 위치 일치와 HSV/고주파 융합을 확인한
-        # 뒤에만 제어 임계값 이상으로 승격한다. 원거리에서 YOLO가 놓친 표적을 위한
-        # proposal을 만들면서 순간적인 빨간 조명에는 바로 LOCK하지 않게 한다.
-        self.declare_parameter("acquire.yolo_only", False)
-        self.declare_parameter("acquire.cv_confirm_frames", 5)
-        self.declare_parameter("acquire.cv_confirm_conf", 0.72)
-        self.declare_parameter("acquire.hsv_confirm_frames", 8)
-        self.declare_parameter("acquire.hsv_confirm_conf", 0.68)
-
-        # SEARCH 진단용: 전체 프레임 경로에서 세 검출기(YOLO/HSV/ABSDIFF) 각각의
+        # SEARCH 진단용: YOLO/HSV 각각의
         # 검출 여부·confidence 를 /arms/detector_status 로 발행해 UI 가 표시한다.
-        # LOCK 판단(acquire.yolo_only)과 무관한 '표시 전용'이라, True 여도 HSV/ABSDIFF
-        # 는 락을 만들지 않고 상태 보고만 한다. CPU 아끼려면 False.
+        # HSV 값은 후보 품질일 뿐 LOCK 판단에는 쓰지 않는다. 메시지 호환을 위해
+        # 세 번째(과거 ABSDIFF) 값은 항상 -1로 보낸다.
         self.declare_parameter("debug.detector_status", True)
 
         # --- detect-then-track (ROI + CSRT/KCF) ---
@@ -419,11 +356,11 @@ class ArmsDetectionNode(Node):
         self.declare_parameter("track.tracker_type", "CSRT")  # "CSRT" | "KCF"
         self.declare_parameter("track.confirm_frames", 3)     # 트래킹 시작 연속 검출 수
         self.declare_parameter("track.confirm_dist", 0.035)   # 연속 판정 중심거리(norm)
-        self.declare_parameter("track.redetect_interval", 10) # TRACK 중 재검출 주기
+        self.declare_parameter("track.redetect_interval", 5)  # TRACK 중 ROI YOLO 확인 주기
         self.declare_parameter("track.redetect_margin", 2.0)  # TRACK 재검출 ROI 크롭 확장배율
         self.declare_parameter("track.match_dist", 0.1)       # 재획득 예측 게이팅 거리
         self.declare_parameter("track.reacquire_frames", 8)   # LOST 재획득 창
-        self.declare_parameter("track.max_unconfirmed", 3)    # TRACK 미확인 허용(드리프트 안전장치)
+        self.declare_parameter("track.max_unconfirmed", 2)    # ROI YOLO 연속 실패 허용 횟수
         self.declare_parameter("track.min_box_px", 4)         # 트래커 init 최소 박스
         self.declare_parameter("roi.margin", 1.8)             # ROI 크롭 확장 배율
 
@@ -432,30 +369,40 @@ class ArmsDetectionNode(Node):
 
         self._tracker = _TargetTracker()
         self._frame_i = 0   # YOLO ACQUIRE 스로틀용 프레임 카운터
-        # 디버그 영상용: 이번 프레임 전체탐색(FULL)에서 각 검출기 원시 결과 보관
-        #   {"yolo","hsv","absdiff","cv_fused"} → BoundingBox|None. _publish_debug 가 전부 그림.
+        self._last_frame_started = None
+        self._diag = None
+        self._diag_hsv_mask = None
+        self._diag_hsv_proposals = []
+        # 원격 브랜치의 통합 디버그 영상 기능과 성능 진단을 함께 유지한다.
         self._dbg_boxes = {}
 
         # YOLO: 같은 프로세스에서 직접 추론. ultralytics/모델이 없으면(호스트/SITL)
-        # 조용히 비활성화하고 HSV/ABSDIFF 로만 동작 (graceful degradation).
+        # 조용히 비활성화한다. HSV 단독 후보는 안전상 검출로 발행하지 않는다.
         # 모델 경로/파라미터는 환경변수로 (컨테이너 compose 가 주입).
         self._yolo = None
         # 카메라 재학습 모델의 validation F1 최적점은 약 0.32다.
         self._yolo_conf = float(os.environ.get("ARMS_CONF", "0.32"))
         self._yolo_iou  = float(os.environ.get("ARMS_IOU",  "0.45"))
-        self._yolo_imgsz = int(os.environ.get("ARMS_IMGSZ", "320"))
+        legacy_imgsz = os.environ.get("ARMS_IMGSZ")
+        self._yolo_full_imgsz = int(os.environ.get(
+            "ARMS_FULL_IMGSZ", legacy_imgsz or "512"))
+        self._yolo_roi_imgsz = int(os.environ.get(
+            "ARMS_ROI_IMGSZ", legacy_imgsz or "320"))
         # TensorRT 엔진은 첫 predict() 에서 지연 로딩된다. GPU OOM/버전불일치로 실패하면
         # 예외를 그대로 두면 노드가 죽고 재시작→CUDA 컨텍스트 미해제로 'device busy'
         # 폭주가 난다. 아래 상태로 "실패 시 크래시 대신 쿨다운 후 재시도"(그동안
-        # HSV/ABSDIFF 폴백)하게 만든다.
+        # 이번 프레임 검출을 보류하고 나중에 재시도하게 만든다.
         self._yolo_retry_after = 0.0   # 이 시각(monotonic)까지는 YOLO 재시도 안 함
         self._yolo_fail_count  = 0
         self._yolo_retry_cooldown = float(os.environ.get("ARMS_YOLO_RETRY_SEC", "3.0"))
-        # 이 횟수만큼 연속 실패하면 YOLO 를 영구히 포기하고 CV(HSV/ABSDIFF)로만 돈다.
+        # 이 횟수만큼 연속 실패하면 YOLO를 영구히 비활성화한다.
         #   → GPU OOM/엔진 불일치로 계속 실패할 때 재시도가 executor 를 블로킹해
         #     검출이 아예 안 나가는 문제를 막는다. 0 이하면 무한 재시도(기존 동작).
         self._yolo_max_fails = int(os.environ.get("ARMS_YOLO_MAX_FAILS", "3"))
         model_path = os.environ.get("ARMS_MODEL", "")
+        # 고정 batch TensorRT engine은 여러 ndarray 입력을 받지 못할 수 있다.
+        # .pt 모델은 batch 1회, .engine은 호환성을 위해 후보별 순차 추론한다.
+        self._yolo_batch_enabled = not model_path.lower().endswith(".engine")
         if model_path:
             try:
                 from ultralytics import YOLO
@@ -464,18 +411,18 @@ class ArmsDetectionNode(Node):
                 self.get_logger().info("YOLO loaded (in-process).")
             except Exception as e:
                 self.get_logger().warn(
-                    f"YOLO disabled (load failed: {e}) → HSV/ABSDIFF only.")
+                    f"YOLO disabled (load failed: {e}); HSV proposals cannot LOCK.")
         else:
-            self.get_logger().info("ARMS_MODEL unset → YOLO disabled (HSV/ABSDIFF only).")
+            self.get_logger().info("ARMS_MODEL unset → detection disabled (HSV proposal only).")
 
         self.create_subscription(Image, "/arms/image_raw", self._cb_image, qos)
 
         self.pub_det     = self.create_publisher(DetectionArray, "/arms/detections",    10)
         self.pub_debug   = self.create_publisher(Image,          "/arms/debug_image",   10)
-        self.pub_absdiff = self.create_publisher(Image,          "/arms/debug_absdiff", 10)
         self.pub_roi     = self.create_publisher(Image,          "/arms/roi_image",     10)
-        # 검출기 상태: [yolo, hsv, absdiff] 각 값 = 0~1 confidence,
-        #   -1=off/미실행, -2=사용불가(YOLO OOM 등). UI 가 SEARCH 에서 표시.
+        self.pub_hsv_debug = self.create_publisher(
+            Image, "/arms/hsv_debug_image", 10)
+        # 상태 배열: [yolo, hsv proposal, legacy slot, mode]. legacy slot은 -1 고정.
         self.pub_detstatus = self.create_publisher(Float32MultiArray, "/arms/detector_status", 10)
 
         if not _tracker_available():
@@ -483,7 +430,8 @@ class ArmsDetectionNode(Node):
                 "cv2 트래커(CSRT/KCF) 없음 — opencv-contrib 미설치. "
                 "detect-then-track 비활성 → 매프레임 검출로 폴백(기능은 정상).")
 
-        self.get_logger().info("arms_detection_node ready  [priority: YOLO > HSV > ABSDIFF, detect-then-track]")
+        self.get_logger().info(
+            "arms_detection_node ready [HSV proposals → batched ROI YOLO + full fallback]")
 
     # ------------------------------------------------------------------
     # Subscriptions
@@ -492,8 +440,22 @@ class ArmsDetectionNode(Node):
     def _cb_image(self, msg: Image):
         if msg.width == 0 or msg.height == 0 or len(msg.data) == 0:
             return   # 빈 프레임(image_publisher 루프 경계 등) → 스킵
+        frame_started = time.perf_counter()
+        frame_interval_ms = (0.0 if self._last_frame_started is None else
+                             (frame_started - self._last_frame_started) * 1000.0)
+        self._last_frame_started = frame_started
         self._frame_i += 1
-        self._dbg_boxes = {}   # 이번 프레임 검출기 결과 초기화(전체탐색 시 채워짐)
+        self._diag = {
+            "frame_interval_ms": frame_interval_ms,
+            "resize_ms": 0.0, "hsv_ms": 0.0, "yolo_ms": 0.0,
+            "tracker_ms": 0.0, "total_ms": 0.0,
+            "hsv_count": 0, "yolo_inputs": 0, "yolo_accepted": 0,
+            "yolo_ran": False, "full_frame": False, "mode": 0.0,
+            "yolo_box": None, "hsv_box": None,
+        }
+        self._diag_hsv_mask = None
+        self._diag_hsv_proposals = []
+        self._dbg_boxes = {}
         try:
             bgr_full = imgmsg_to_bgr(msg)
         except Exception as e:
@@ -503,19 +465,31 @@ class ArmsDetectionNode(Node):
             return
 
         # 검출 처리용 다운스케일. 원본(bgr_full)은 ROI 크롭용으로 보관.
+        resize_started = time.perf_counter()
         proc_w = int(self.get_parameter("proc_width").value)
         if proc_w > 0 and bgr_full.shape[1] > proc_w:
             ph = int(bgr_full.shape[0] * proc_w / bgr_full.shape[1])
             bgr = cv2.resize(bgr_full, (proc_w, ph), interpolation=cv2.INTER_AREA)
         else:
             bgr = bgr_full
+        self._diag["resize_ms"] = (time.perf_counter() - resize_started) * 1000.0
 
         # detect-then-track: FSM 이 검출/추적을 결정해 발행할 박스를 반환
         cfg = self._track_cfg()
+        tracker_started = time.perf_counter()
         target = self._tracker.update(
             bgr,
             lambda img, roi=None: self._run_detectors(img, msg.header, roi),
             cfg)
+        update_ms = (time.perf_counter() - tracker_started) * 1000.0
+        self._diag["tracker_ms"] = max(
+            0.0, update_ms - self._diag["hsv_ms"] - self._diag["yolo_ms"])
+        self._diag["total_ms"] = (time.perf_counter() - frame_started) * 1000.0
+        self._publish_detector_status()
+
+        if (self._diag_hsv_mask is not None and
+                self.pub_hsv_debug.get_subscription_count() > 0):
+            self._publish_hsv_debug(bgr, msg.header)
 
         out = DetectionArray()
         out.header = msg.header
@@ -545,140 +519,115 @@ class ArmsDetectionNode(Node):
             "reacquire_frames":  int(g("track.reacquire_frames").value),
             "max_unconfirmed":   int(g("track.max_unconfirmed").value),
             "min_box_px":        int(g("track.min_box_px").value),
-            "cv_confirm_frames": int(g("acquire.cv_confirm_frames").value),
-            "cv_confirm_conf":   float(g("acquire.cv_confirm_conf").value),
-            "hsv_confirm_frames": int(g("acquire.hsv_confirm_frames").value),
-            "hsv_confirm_conf":   float(g("acquire.hsv_confirm_conf").value),
         }
 
     def _run_detectors(self, bgr, header=None, roi_box=None):
-        """YOLO > HSV > ABSDIFF 우선순위로 best 박스 하나를 반환 (없으면 None).
-        roi_box 가 주어지면(TRACK 재검출) 그 주변만 크롭해 검출 후 full-frame 좌표로
-        역변환한다 — 크롭이 작아 YOLO 가 싸고 소형 표적에 유리. YOLO 는 in-process 동기.
-        전체 프레임 경로(ACQUIRE/LOST)에선 yolo.acquire_interval 마다만 YOLO 실행."""
+        """획득은 HSV→ROI YOLO, 추적 재검증은 ROI YOLO로 실행한다."""
         if roi_box is not None:
+            self._diag["mode"] = 1.0
             margin = float(self.get_parameter("track.redetect_margin").value)
             crop, off = self._crop_roi(bgr, roi_box, margin)
             if crop is None:
                 return None
-            # ROI 재검출은 YOLO 항상 실행. absdiff 는 배경 문맥이 없어 무의미하므로
-            # header=None(디버그 마스크 미발행). 우선순위 stack 은 동일.
-            # LOCK/추적 모드(status_mode=1)로 상태 발행 → UI 가 ROI 안 confidence 를 본다.
-            report = bool(self.get_parameter("debug.detector_status").value)
-            box = self._detect_stack(crop, None, run_yolo=True, allow_cv=True,
-                                     report_status=report, status_mode=1.0)
-            if box is None:
+            crop_box = self._detect_yolo(crop, imgsz=self._yolo_roi_imgsz)
+            if crop_box is None:
                 return None
-            return self._remap_from_crop(box, off, bgr.shape[1], bgr.shape[0])
+            box = self._remap_from_crop(
+                crop_box, off, bgr.shape[1], bgr.shape[0])
+            self._diag["yolo_box"] = box
+            self._dbg_boxes = {"yolo": box, "hsv": None}
+            return box
 
-        # 초기 획득은 기본적으로 CV 후보도 함께 사용한다. HSV+고주파가 여러 프레임
-        # 같은 위치에서 합의해야 confidence가 승격되므로 작은 원거리 풍선을 살리면서
-        # 붉은 건물/조명의 순간 오검출은 억제한다. 필요하면 yolo_only로 되돌릴 수 있다.
-        yolo_only = bool(self.get_parameter("acquire.yolo_only").value)
-        allow_cv  = not yolo_only
-        interval = max(1, int(self.get_parameter("yolo.acquire_interval").value))
-        run_yolo = (self._frame_i % interval == 0)
-        report = bool(self.get_parameter("debug.detector_status").value)
-        return self._detect_stack(bgr, header, run_yolo=run_yolo, allow_cv=allow_cv,
-                                  report_status=report, status_mode=0.0)  # FULL
+        return self._detect_acquire(bgr)
 
-    def _detect_stack(self, img, header, run_yolo, allow_cv=True,
-                      report_status=False, status_mode=0.0):
-        """단일 이미지에 대해 우선순위 검출 stack 실행 → best 박스(없으면 None).
+    def _detect_acquire(self, bgr):
+        """HSV 후보를 먼저 만들고 ROI들을 한 번의 YOLO batch로 검증한다."""
+        self._diag["mode"] = 0.0
+        yolo_on = bool(self.get_parameter("use_yolo").value)
+        use_yolo = yolo_on and self._yolo is not None
+        use_hsv = bool(self.get_parameter("use_hsv").value)
+        hsv_started = time.perf_counter()
+        proposals = self._detect_hsv_candidates(bgr) if use_hsv else []
+        self._diag["hsv_ms"] += (time.perf_counter() - hsv_started) * 1000.0
+        self._diag["hsv_count"] = len(proposals)
+        self._diag_hsv_proposals = proposals
+        hsv_box = proposals[0] if proposals else None
+        self._diag["hsv_box"] = hsv_box
 
-        allow_cv=False 면 YOLO 로만 판단하고 HSV/ABSDIFF 폴백을 쓰지 않는다
-        (초기 획득에서 CV 헛검출로 인한 오-LOCK 방지).
-        report_status=True 면 세 검출기 결과를 /arms/detector_status 로 발행한다
-        (표시 전용 — LOCK 판단에는 영향 없음). status_mode: 0=FULL(획득), 1=ROI(추적)."""
-        yolo_on     = bool(self.get_parameter("use_yolo").value)
-        use_yolo    = yolo_on and self._yolo is not None
-        use_hsv     = bool(self.get_parameter("use_hsv").value)
-        use_absdiff = bool(self.get_parameter("use_absdiff").value)
+        yolo_ran = False
+        verified = []
+        if use_yolo and proposals:
+            yolo_ran = True
+            verified = self._detect_yolo_proposals_batch(bgr, proposals)
 
-        yolo_box = self._detect_yolo(img) if (use_yolo and run_yolo) else None
+        winner = (max(verified, key=lambda box: float(box.confidence))
+                  if verified else None)
 
-        # CV 는 락에 필요하거나(폴백) 상태표시가 필요할 때 실행한다.
-        need_cv     = report_status or (allow_cv and yolo_box is None)
-        hsv_box     = self._detect_hsv(img)             if (use_hsv     and need_cv) else None
-        absdiff_box = self._detect_absdiff(img, header, hsv_box) if (use_absdiff and need_cv) else None
-        fused_box = self._fuse_cv(hsv_box, absdiff_box) if allow_cv else None
+        # HSV가 색 변화로 후보를 놓치거나 ROI YOLO가 거부한 경우를 위한 저주기
+        # 전체 화면 fallback. ROI가 성공한 프레임에는 중복 추론하지 않는다.
+        interval = int(self.get_parameter("yolo.full_fallback_interval").value)
+        full_due = interval > 0 and self._frame_i % interval == 0
+        if winner is None and use_yolo and full_due:
+            yolo_ran = True
+            self._diag["full_frame"] = True
+            winner = self._detect_yolo(bgr, imgsz=self._yolo_full_imgsz)
 
-        # 전체 화면 YOLO가 놓친 작은 표적은 CV 융합 위치 주변의 고정 크기 ROI를
-        # 잘라 다시 추론한다. ultralytics가 작은 crop을 입력 크기로 확대하므로
-        # 원본에서 수 픽셀인 풍선도 학습 때의 ROI 샘플과 비슷한 크기로 보인다.
-        if (yolo_box is None and use_yolo and run_yolo and fused_box is not None and
-                status_mode == 0.0):
-            yolo_box = self._detect_yolo_proposal(img, fused_box)
+        self._diag["yolo_box"] = winner
+        self._dbg_boxes = {"yolo": winner, "hsv": hsv_box}
+        return winner
 
-        if report_status:
-            # 값: 0~1 confidence, -1=off/미실행, -2=사용불가(YOLO OOM 등)
-            yv = (-1.0 if not yolo_on else
-                  (-2.0 if self._yolo is None else
-                   (-1.0 if not run_yolo else
-                    (float(yolo_box.confidence) if yolo_box else 0.0))))
-            hv = (-1.0 if not use_hsv     else (float(hsv_box.confidence)     if hsv_box     else 0.0))
-            av = (-1.0 if not use_absdiff else (float(absdiff_box.confidence) if absdiff_box else 0.0))
-            msg = Float32MultiArray()
-            msg.data = [yv, hv, av, float(status_mode)]   # [yolo, hsv, absdiff, mode(0=FULL,1=ROI)]
-            self.pub_detstatus.publish(msg)
-
-        # 디버그 영상용: 전체탐색(FULL) 경로의 각 검출기 원시 결과를 보관(좌표가 proc
-        # 프레임 정규화라 _publish_debug 가 그대로 그릴 수 있다). ROI 크롭 경로는 좌표계가
-        # 달라 저장하지 않는다.
-        if status_mode == 0.0:
-            self._dbg_boxes = {"yolo": yolo_box, "hsv": hsv_box,
-                               "absdiff": absdiff_box, "cv_fused": fused_box}
-
-        # LOCK 판단용 winner. CV끼리는 같은 위치를 가리킬 때만 융합 후보로 승격한다.
-        if yolo_box is not None:
-            return yolo_box
-        if not allow_cv:
-            return None
-        if fused_box is not None:
-            return fused_box
-        return hsv_box or absdiff_box
-
-    def _detect_yolo_proposal(self, bgr, proposal):
+    def _detect_yolo_proposals_batch(self, bgr, proposals):
+        """상위 HSV 후보 crop을 YOLO batch 1회로 검증해 원본 좌표로 돌린다."""
         h, w = bgr.shape[:2]
         side = max(32, int(self.get_parameter("yolo.proposal_crop_px").value))
-        cx, cy = int(proposal.x_center * w), int(proposal.y_center * h)
-        half = side // 2
-        x0, y0 = max(0, cx - half), max(0, cy - half)
-        x1, y1 = min(w, x0 + side), min(h, y0 + side)
-        x0, y0 = max(0, x1 - side), max(0, y1 - side)
-        crop = bgr[y0:y1, x0:x1]
-        if crop.size == 0:
-            return None
-        box = self._detect_yolo(crop)
-        if box is None:
-            return None
-        return self._remap_from_crop(box, (x0, y0, x1 - x0, y1 - y0), w, h)
+        max_candidates = max(1, int(
+            self.get_parameter("hsv.max_candidates").value))
+        crops, offsets = [], []
+        for proposal in proposals[:max_candidates]:
+            cx, cy = int(proposal.x_center * w), int(proposal.y_center * h)
+            half = side // 2
+            x0, y0 = max(0, cx - half), max(0, cy - half)
+            x1, y1 = min(w, x0 + side), min(h, y0 + side)
+            x0, y0 = max(0, x1 - side), max(0, y1 - side)
+            crop = bgr[y0:y1, x0:x1]
+            if crop.size:
+                crops.append(np.ascontiguousarray(crop))
+                offsets.append((x0, y0, x1 - x0, y1 - y0))
+        boxes = self._detect_yolo_batch(crops, imgsz=self._yolo_roi_imgsz)
+        return [
+            self._remap_from_crop(box, off, w, h)
+            for box, off in zip(boxes, offsets) if box is not None
+        ]
 
-    def _fuse_cv(self, hsv_box, absdiff_box):
-        if hsv_box is None or absdiff_box is None:
-            return None
-        dist = _center_dist((hsv_box.x_center, hsv_box.y_center),
-                            (absdiff_box.x_center, absdiff_box.y_center))
-        max_dist = float(self.get_parameter("fusion.max_center_dist").value)
-        # 박스가 큰 경우에는 중심 허용거리도 박스 크기에 비례해 늘린다.
-        adaptive = max(max_dist, 0.75 * max(hsv_box.width, hsv_box.height,
-                                             absdiff_box.width, absdiff_box.height))
-        if dist > adaptive:
-            return None
-        wh = max(0.1, float(hsv_box.confidence))
-        wa = max(0.1, float(absdiff_box.confidence))
-        den = wh + wa
-        box = BoundingBox()
-        box.x_center = float((wh * hsv_box.x_center + wa * absdiff_box.x_center) / den)
-        box.y_center = float((wh * hsv_box.y_center + wa * absdiff_box.y_center) / den)
-        box.width = float(max(hsv_box.width, absdiff_box.width))
-        box.height = float(max(hsv_box.height, absdiff_box.height))
-        # 이 값 자체로는 LOCK 임계값을 넘지 않는다. _TargetTracker가 시간 연속성을
-        # 확인한 뒤 acquire.cv_confirm_conf로 승격한다.
-        box.confidence = float(min(0.60, 0.5 * (wh + wa)))
-        box.class_id = 3
-        box.class_name = "cv_fused"
-        return box
+    def _publish_detector_status(self):
+        if not bool(self.get_parameter("debug.detector_status").value):
+            return
+        diag = self._diag
+        yolo_box = diag["yolo_box"]
+        hsv_box = diag["hsv_box"]
+        yolo_ran = bool(diag["yolo_ran"])
+        yolo_on = bool(self.get_parameter("use_yolo").value)
+        use_hsv = bool(self.get_parameter("use_hsv").value)
+        yv = (-1.0 if not yolo_on else
+              (-2.0 if self._yolo is None else
+               (-1.0 if not yolo_ran else
+                (float(yolo_box.confidence) if yolo_box else 0.0))))
+        hv = (-1.0 if not use_hsv else
+              (float(hsv_box.confidence) if hsv_box else 0.0))
+        msg = Float32MultiArray()
+        state_code = {"ACQUIRE": 0.0, "TRACK": 1.0, "LOST": 2.0}.get(
+            self._tracker.state, -1.0)
+        # 0~3은 기존 UI와 호환. 4 이후는 실시간 성능 진단용이다.
+        msg.data = [
+            yv, hv, -1.0, float(diag["mode"]),
+            float(diag["hsv_count"]), float(diag["yolo_inputs"]),
+            float(diag["yolo_accepted"]), float(diag["frame_interval_ms"]),
+            float(diag["resize_ms"]), float(diag["hsv_ms"]),
+            float(diag["yolo_ms"]), float(diag["tracker_ms"]),
+            float(diag["total_ms"]), state_code, float(self._frame_i),
+            1.0 if diag["full_frame"] else 0.0,
+        ]
+        self.pub_detstatus.publish(msg)
 
     @staticmethod
     def _crop_roi(bgr, box, margin):
@@ -725,64 +674,98 @@ class ArmsDetectionNode(Node):
     # Detectors
     # ------------------------------------------------------------------
 
-    def _detect_yolo(self, bgr: np.ndarray) -> BoundingBox | None:
-        """같은 프로세스에서 YOLO 추론 → 최고 confidence 박스 하나 (normalized).
+    def _detect_yolo(self, bgr: np.ndarray,
+                     imgsz: int | None = None) -> BoundingBox | None:
+        """단일 이미지 YOLO 추론 결과의 최고 confidence 박스를 반환한다."""
+        boxes = self._detect_yolo_batch([bgr], imgsz=imgsz)
+        return boxes[0] if boxes else None
+
+    def _detect_yolo_batch(self, images: list[np.ndarray],
+                           imgsz: int | None = None) -> list[BoundingBox | None]:
+        """여러 ROI를 한 번의 YOLO predict 호출로 검증한다.
 
         엔진 로딩/추론이 GPU OOM 등으로 실패해도 노드를 죽이지 않는다. 실패하면
-        쿨다운을 걸고 None(=이번 프레임 YOLO 스킵, HSV/ABSDIFF 폴백)을 반환하며,
+        쿨다운을 걸고 해당 batch를 모두 miss로 처리하며,
         쿨다운 후 자동으로 다시 시도한다. 같은 프로세스 안에서 재시도하므로 재시작
         시 발생하던 'CUDA device busy(error 46)' 폭주가 생기지 않는다.
         """
+        if not images:
+            return []
         if self._yolo is None:
-            return None
+            return [None] * len(images)
         now = time.monotonic()
         if now < self._yolo_retry_after:
-            return None   # 최근 실패 → 쿨다운 동안 YOLO 건너뜀
-        h, w = bgr.shape[:2]
-        # Ultralytics의 ndarray 입력 규약은 OpenCV BGR이며 predictor 내부에서 RGB로
-        # 변환한다. 여기서 미리 뒤집으면 R/B가 두 번 바뀌어 빨간 풍선 성능이 급락한다.
-        source = np.ascontiguousarray(bgr)
+            return [None] * len(images)
+
+        # TensorRT 고정 batch 엔진은 batch 입력 대신 순차 실행한다. 기본 .pt 경로는
+        # 아래 list 입력으로 ROI 1~2개를 단일 batch 추론한다.
+        if len(images) > 1 and not self._yolo_batch_enabled:
+            return [self._detect_yolo(image, imgsz=imgsz) for image in images]
+
+        sources = [np.ascontiguousarray(image) for image in images]
+        input_size = int(imgsz or self._yolo_roi_imgsz)
+        if self._diag is not None:
+            self._diag["yolo_ran"] = True
+            self._diag["yolo_inputs"] += len(sources)
+        yolo_started = time.perf_counter()
         try:
-            res = self._yolo.predict(source, conf=self._yolo_conf, iou=self._yolo_iou,
-                                     imgsz=self._yolo_imgsz, verbose=False)
+            results = self._yolo.predict(
+                sources, conf=self._yolo_conf, iou=self._yolo_iou,
+                imgsz=input_size, verbose=False)
         except Exception as e:
+            if self._diag is not None:
+                self._diag["yolo_ms"] += (
+                    time.perf_counter() - yolo_started) * 1000.0
             self._yolo_fail_count += 1
             # 반쯤 초기화된 backend/컨텍스트를 폐기 → 다음 시도에서 깨끗이 재로딩.
             try:
                 self._yolo.predictor = None
             except Exception:
                 pass
-            # 임계치 이상 연속 실패 → YOLO 영구 포기, 이후 CV(HSV/ABSDIFF)로만 동작.
+            # 임계치 이상 연속 실패 → YOLO 영구 비활성화. HSV는 proposal-only라
+            # 안전상 검출 결과를 단독 발행하지 않는다.
             if self._yolo_max_fails > 0 and self._yolo_fail_count >= self._yolo_max_fails:
-                self._yolo = None   # 다음 프레임부터 _detect_yolo 는 즉시 None 반환(블로킹 없음)
+                self._yolo = None
                 self.get_logger().error(
-                    f"YOLO {self._yolo_fail_count}회 연속 실패 — 영구 비활성화하고 "
-                    f"CV(HSV/ABSDIFF)로만 동작한다 (GPU OOM/엔진 불일치): {e}")
-                return None
+                    f"YOLO {self._yolo_fail_count}회 연속 실패 — 검출을 영구 "
+                    f"비활성화한다 (GPU OOM/엔진 불일치): {e}")
+                return [None] * len(images)
             self._yolo_retry_after = now + self._yolo_retry_cooldown
             self.get_logger().warning(
                 f"YOLO 추론/엔진로딩 실패 #{self._yolo_fail_count}/{self._yolo_max_fails} "
                 f"(GPU OOM 등) — {self._yolo_retry_cooldown:.0f}s 후 재시도, "
-                f"그동안 HSV/ABSDIFF 폴백: {e}")
-            return None
+                f"그동안 검출 보류: {e}")
+            return [None] * len(images)
+        if self._diag is not None:
+            self._diag["yolo_ms"] += (
+                time.perf_counter() - yolo_started) * 1000.0
         # 이전에 실패한 적이 있으면 복구 로그 후 카운터 리셋.
         if self._yolo_fail_count:
             self.get_logger().info(
                 f"YOLO 추론 복구됨 (실패 {self._yolo_fail_count}회 후 정상).")
             self._yolo_fail_count = 0
-        if not res or len(res[0].boxes) == 0:
-            return None
-        best = max(res[0].boxes, key=lambda b: float(b.conf[0]))
-        x1, y1, x2, y2 = best.xyxy[0].tolist()
-        box = BoundingBox()
-        box.x_center  = float((x1 + x2) / 2 / w)
-        box.y_center  = float((y1 + y2) / 2 / h)
-        box.width     = float((x2 - x1) / w)
-        box.height    = float((y2 - y1) / h)
-        box.confidence = float(best.conf[0])
-        box.class_id   = int(best.cls[0])
-        box.class_name = str(self._yolo.names[int(best.cls[0])])
-        return box
+        output = []
+        for image, result in zip(images, results):
+            h, w = image.shape[:2]
+            if len(result.boxes) == 0:
+                output.append(None)
+                continue
+            best = max(result.boxes, key=lambda box: float(box.conf[0]))
+            x1, y1, x2, y2 = best.xyxy[0].tolist()
+            box = BoundingBox()
+            box.x_center = float((x1 + x2) / 2 / w)
+            box.y_center = float((y1 + y2) / 2 / h)
+            box.width = float((x2 - x1) / w)
+            box.height = float((y2 - y1) / h)
+            box.confidence = float(best.conf[0])
+            box.class_id = int(best.cls[0])
+            box.class_name = str(self._yolo.names[int(best.cls[0])])
+            output.append(box)
+        if self._diag is not None:
+            self._diag["yolo_accepted"] += sum(box is not None for box in output)
+        # 비정상적으로 result 수가 적어도 호출자 zip 좌표가 어긋나지 않게 채운다.
+        output.extend([None] * (len(images) - len(output)))
+        return output
 
     def _red_probability(self, bgr: np.ndarray) -> np.ndarray:
         """빨강에 대한 0..1 soft score. Hue는 원형 Gaussian으로 계산한다."""
@@ -802,23 +785,23 @@ class ArmsDetectionNode(Node):
         val_high_score = 1.0 / (1.0 + np.exp((val - val_max) / val_scale))
         return (hue_score * sat_score * val_low_score * val_high_score).astype(np.float32)
 
-    def _detect_hsv(self, bgr: np.ndarray) -> BoundingBox | None:
-        """Gaussian red score + 형태 점수로 붉은 원형 후보를 검출한다."""
+    def _detect_hsv_candidates(self, bgr: np.ndarray) -> list[BoundingBox]:
+        """붉은 원형 후보를 점수순으로 반환한다. 후보 자체는 검출이 아니다."""
         h, w = bgr.shape[:2]
         red_prob = self._red_probability(bgr)
         threshold = float(self.get_parameter("hsv.prob_threshold").value)
         mask = (red_prob >= threshold).astype(np.uint8) * 255
         # close는 작은 풍선 내부의 압축 노이즈 구멍만 메우며 작은 점을 지우지 않는다.
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, _MORPH_KERNEL)
+        self._diag_hsv_mask = mask
         cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not cnts:
-            return None
+            return []
         min_frac  = float(self.get_parameter("hsv.min_area_ratio").value)
         max_frac  = float(self.get_parameter("hsv.max_area_ratio").value)
         full_frac = float(self.get_parameter("hsv.full_conf_area_ratio").value)
         min_circ = float(self.get_parameter("hsv.min_circularity").value)
-        best = None
-        best_score = -1.0
+        preliminary = []
         for c in cnts:
             x, y, bw, bh = cv2.boundingRect(c)
             area_px = float(bw * bh)
@@ -835,6 +818,21 @@ class ArmsDetectionNode(Node):
             if shape_score < min_circ:
                 continue
             color_score = float(red_prob[y:y + bh, x:x + bw].mean())
+            # 비싼 Laplacian 계산 전에 색·형상만으로 shortlist를 만든다.
+            base_score = (color_score * (0.35 + 0.65 * shape_score) *
+                          (0.5 + 0.5 * aspect))
+            preliminary.append((base_score, x, y, bw, bh, area_frac,
+                                color_score, shape_score, aspect))
+
+        if not preliminary:
+            return []
+        preliminary.sort(key=lambda item: item[0], reverse=True)
+        shortlist = max(
+            int(self.get_parameter("hsv.texture_shortlist").value),
+            int(self.get_parameter("hsv.max_candidates").value))
+        candidates = []
+        for (base_score, x, y, bw, bh, area_frac,
+             color_score, shape_score, aspect) in preliminary[:max(1, shortlist)]:
             margin = max(12, 2 * max(bw, bh))
             px0, py0 = max(0, x - margin), max(0, y - margin)
             px1, py1 = min(w, x + bw + margin), min(h, y + bh + margin)
@@ -842,116 +840,56 @@ class ArmsDetectionNode(Node):
             texture = float(cv2.Laplacian(context, cv2.CV_32F).var()) if context.size else 1e6
             texture_scale = max(1.0, float(self.get_parameter("hsv.texture_scale").value))
             smooth_score = 1.0 / (1.0 + texture / texture_scale)
-            score = (color_score * (0.35 + 0.65 * shape_score) *
-                     (0.5 + 0.5 * aspect) * (0.15 + 0.85 * smooth_score))
-            if score > best_score:
-                best_score = score
-                best = (x, y, bw, bh, area_frac, color_score, shape_score, smooth_score)
-        if best is None:
-            return None
-        x, y, bw, bh, area_frac, color_score, shape_score, smooth_score = best
-        box = BoundingBox()
-        box.x_center  = float((x + bw / 2) / w)
-        box.y_center  = float((y + bh / 2) / h)
-        box.width     = float(bw / w)
-        box.height    = float(bh / h)
-        # confidence = 표적이 클수록 1.0 에 근접(full_frac 에서 포화). 작으면 낮아
-        # state machine 의 임계값을 못 넘어 LOCK 되지 않는다.
-        size_score = min(1.0, area_frac / full_frac) if full_frac > 0 else 1.0
-        box.confidence = float(min(0.60,
-                                   0.45 * color_score + 0.35 * shape_score +
-                                   0.10 * size_score + 0.10 * smooth_score))
-        box.class_id  = 2
-        box.class_name = "hsv_red"
-        return box
+            score = base_score * (0.15 + 0.85 * smooth_score)
+            box = BoundingBox()
+            box.x_center = float((x + bw / 2) / w)
+            box.y_center = float((y + bh / 2) / h)
+            box.width = float(bw / w)
+            box.height = float(bh / h)
+            size_score = min(1.0, area_frac / full_frac) if full_frac > 0 else 1.0
+            box.confidence = float(min(
+                0.60, 0.45 * color_score + 0.35 * shape_score +
+                0.10 * size_score + 0.10 * smooth_score))
+            box.class_id = 2
+            box.class_name = "hsv_proposal"
+            candidates.append((score, box))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        max_candidates = max(1, int(
+            self.get_parameter("hsv.max_candidates").value))
+        return [box for _, box in candidates[:max_candidates]]
 
-    def _detect_absdiff(self, bgr: np.ndarray, header=None,
-                        hint: BoundingBox | None = None) -> BoundingBox | None:
-        """배경 대비 튀는 점 검출 (색·형태 무관)."""
-        h, w = bgr.shape[:2]
+    def _publish_hsv_debug(self, bgr, header):
+        """HSV 확률 마스크와 후보 박스를 작은 진단 영상으로 발행한다."""
+        mask = self._diag_hsv_mask
+        if mask is None:
+            return
+        img = bgr.copy()
+        red_overlay = np.zeros_like(img)
+        red_overlay[:, :, 2] = mask
+        img = cv2.addWeighted(img, 0.75, red_overlay, 0.35, 0.0)
+        h, w = img.shape[:2]
+        for index, box in enumerate(self._diag_hsv_proposals, start=1):
+            cx, cy = int(box.x_center * w), int(box.y_center * h)
+            bw, bh = int(box.width * w), int(box.height * h)
+            x1, y1 = cx - bw // 2, cy - bh // 2
+            x2, y2 = cx + bw // 2, cy + bh // 2
+            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 255), 2)
+            cv2.putText(img, f"H{index}", (x1, max(14, y1 - 3)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                        (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(img, f"HSV candidates: {len(self._diag_hsv_proposals)}",
+                    (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                    (255, 255, 255), 2, cv2.LINE_AA)
+        # 진단 패널용이므로 전송량을 제한한다.
+        if w > 480:
+            out_h = max(1, int(h * 480 / w))
+            img = cv2.resize(img, (480, out_h), interpolation=cv2.INTER_AREA)
+        self.pub_hsv_debug.publish(bgr_to_imgmsg(np.ascontiguousarray(img), header))
 
-        diff_thresh = int(self.get_parameter("absdiff.diff_thresh").value)
-        max_area    = float(self.get_parameter("absdiff.max_area_ratio").value) * w * h
-        bg_k = int(self.get_parameter("absdiff.bg_blur").value)
-        pre  = int(self.get_parameter("absdiff.pre_blur").value)
-        if bg_k % 2 == 0:
-            bg_k += 1
-        if pre % 2 == 0:
-            pre += 1
-
-        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (pre, pre), 0)
-        # 배경 추정: GaussianBlur (medianBlur(15)는 ~85ms 로 너무 느림 → ~6ms)
-        bg   = cv2.GaussianBlur(gray, (bg_k, bg_k), 0)
-        diff = cv2.absdiff(gray, bg)
-        _, mask = cv2.threshold(diff, diff_thresh, 255, cv2.THRESH_BINARY)
-        # 원거리 풍선은 수 픽셀뿐이라 MORPH_OPEN을 하면 표적 자체가 사라진다.
-        # 작은 구멍만 닫고 아래 면적/클러터/색상 점수로 노이즈를 억제한다.
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, _MORPH_KERNEL)
-
-        if header is not None and self.pub_absdiff.get_subscription_count() > 0:
-            self.pub_absdiff.publish(mono_to_imgmsg(mask, header))
-
-        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        # 장면 클러터 게이팅: blob 이 너무 많으면 하늘이 아니라 어수선한 지상 장면으로
-        # 보고 absdiff 결과를 통째로 버린다(빨간풍선 데모 등에서 오검출 억제).
-        # YOLO/HSV 는 이 게이팅과 무관하게 우선 처리되므로 영향 없음.
-        max_blobs = int(self.get_parameter("absdiff.max_blobs").value)
-        if max_blobs > 0 and len(cnts) > max_blobs:
-            return None
-
-        min_area = float(self.get_parameter("absdiff.min_area_ratio").value) * w * h
-        red_prob = self._red_probability(bgr)
-        best, best_score = None, -1.0
-        for c in cnts:
-            x, y, bw, bh = cv2.boundingRect(c)
-            a_px = bw * bh
-            if a_px > max_area or a_px < min_area:       # 너무 크거나(배경) 너무 작은(노이즈) 점 제외
-                continue
-            patch = diff[max(0, y):y + bh, max(0, x):x + bw]
-            if patch.size == 0:
-                continue
-            contrast = float(patch.max())
-            red_score = float(red_prob[y:y + bh, x:x + bw].mean())
-            aspect = min(bw, bh) / max(1.0, float(max(bw, bh)))
-            perimeter = cv2.arcLength(c, True)
-            contour_area = cv2.contourArea(c)
-            circularity = (4.0 * np.pi * contour_area / (perimeter * perimeter)
-                           if perimeter > 0 else 1.0)
-            shape_score = max(float(circularity), float(aspect) * 0.65)
-            # 색을 완전 필수로 하지는 않되, 붉고 둥근 고대비 점을 강하게 우선한다.
-            score = (contrast * (a_px ** 0.3) *
-                     (0.15 + 0.85 * red_score) *
-                     (0.35 + 0.65 * shape_score))
-            if hint is not None:
-                cx = (x + bw / 2.0) / w
-                cy = (y + bh / 2.0) / h
-                dist = _center_dist((cx, cy), (hint.x_center, hint.y_center))
-                proximity = float(np.exp(-0.5 * (dist / 0.06) ** 2))
-                score *= 0.10 + 0.90 * proximity
-            if score > best_score:
-                best_score = score
-                best = (x, y, bw, bh, contrast, red_score, shape_score)
-
-        if best is None:
-            return None
-        x, y, bw, bh, contrast, red_score, shape_score = best
-        box = BoundingBox()
-        box.x_center  = float((x + bw / 2) / w)
-        box.y_center  = float((y + bh / 2) / h)
-        box.width     = float(bw / w)
-        box.height    = float(bh / h)
-        # confidence = 크기·대비 둘 다 커야 높다. 작은 점/약한 대비는 낮아 LOCK 못 넘긴다.
-        full_frac = float(self.get_parameter("absdiff.full_conf_area_ratio").value)
-        size_factor = min(1.0, (bw * bh) / (full_frac * w * h)) if full_frac > 0 else 1.0
-        contrast_factor = contrast / 255.0
-        box.confidence = float(min(0.60,
-                                   0.35 * size_factor + 0.30 * contrast_factor +
-                                   0.20 * red_score + 0.15 * shape_score))
-        box.class_id  = 1
-        box.class_name = "absdiff_spot"
-        return box
+    def _detect_hsv(self, bgr: np.ndarray) -> BoundingBox | None:
+        """진단/UI 호환용 최고 HSV proposal 하나를 반환한다."""
+        candidates = self._detect_hsv_candidates(bgr)
+        return candidates[0] if candidates else None
 
     # ------------------------------------------------------------------
     # Debug visualization
@@ -961,8 +899,6 @@ class ArmsDetectionNode(Node):
     _DBG_PALETTE = {
         "yolo":     (255, 200, 0),   # 하늘색
         "hsv":      (0, 0, 255),     # 빨강
-        "absdiff":  (0, 220, 0),     # 초록
-        "cv_fused": (255, 0, 255),   # 자홍
     }
 
     @staticmethod
@@ -980,14 +916,13 @@ class ArmsDetectionNode(Node):
         cv2.rectangle(img, (x1, y1), (x2, y2), color, thick)
 
     def _publish_debug(self, bgr, header, target, state):
-        """모든 검출기(YOLO/HSV/ABSDIFF/cv_fused) 결과를 색상별로 전부 그리고,
-        최종 선택(winner)은 흰 굵은 박스로 강조한다. 우상단에 범례 표시."""
+        """YOLO/HSV 결과와 최종 선택을 함께 표시한다."""
         img = bgr.copy()
         h, w = img.shape[:2]
         dbg = self._dbg_boxes or {}
 
         # 개별 검출기 원시 결과(얇게, 색상별)
-        for key in ("yolo", "hsv", "absdiff", "cv_fused"):
+        for key in ("yolo", "hsv"):
             box = dbg.get(key)
             if box is not None:
                 self._draw_dbg_box(img, box, self._DBG_PALETTE[key], 1)
@@ -999,7 +934,7 @@ class ArmsDetectionNode(Node):
         # 우상단 범례: 각 검출기 confidence + 최종 선택
         font = cv2.FONT_HERSHEY_SIMPLEX
         yy = 20
-        for key in ("yolo", "hsv", "absdiff", "cv_fused"):
+        for key in ("yolo", "hsv"):
             box = dbg.get(key)
             txt = f"{key}: {box.confidence:.2f}" if box is not None else f"{key}: -"
             col = self._DBG_PALETTE[key] if box is not None else (120, 120, 120)

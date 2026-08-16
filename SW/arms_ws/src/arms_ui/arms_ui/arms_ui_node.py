@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import threading
 import time
+from collections import deque
 
 import cv2
 import numpy as np
@@ -60,6 +61,8 @@ class ArmsUINode(Node):
 
         # PiP 크기 (프레임 폭 대비 ROI 표시 폭 비율)
         self.declare_parameter("ui.roi_pip_frac", 0.25)
+        self.declare_parameter("ui.diagnostics_panel", True)
+        self.declare_parameter("ui.diagnostics_history", 180)
 
         # 모드 전환 효과음 (MP3). 기본값 = 패키지 share/sounds 설치 경로.
         try:
@@ -97,13 +100,15 @@ class ArmsUINode(Node):
         self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
         self.create_subscription(Vector3, "/arms/control_debug", self._cb_debug, 10)
         self.create_subscription(Image, "/arms/roi_image", self._cb_roi, best_effort_qos)
+        self.create_subscription(Image, "/arms/hsv_debug_image",
+                                 self._cb_hsv_debug, best_effort_qos)
         # 실기체 command 퍼블리셔(arms_command_hw_node)가 BEST_EFFORT 라서 구독도 맞춰야
         # 메시지를 받는다. (RELIABLE 구독이면 BEST_EFFORT 발행을 하나도 못 받아 모드 전환
         # 오버레이/효과음이 동작하지 않음.)
         self.create_subscription(Joy, "/arms/command", self._cb_command, best_effort_qos)
         # arms_control 이 CRSF 배터리 텔레메트리를 표준 메시지로 재발행 (RELIABLE, depth 10).
         self.create_subscription(BatteryState, "/arms/battery", self._cb_battery, 10)
-        # 검출기 상태 [yolo, hsv, absdiff] — SEARCH 에서 작동여부·confidence 표시용.
+        # 검출기 상태 [yolo, hsv proposal, legacy slot] — SEARCH 표시용.
         self.create_subscription(Float32MultiArray, "/arms/detector_status",
                                  self._cb_detstatus, 10)
 
@@ -111,8 +116,15 @@ class ArmsUINode(Node):
         self._latest_state = MissionState()
         self._latest_cmd = Vector3()
         self._latest_roi = None
+        self._latest_hsv_debug = None
         self._latest_battery = None   # /arms/battery 최신값 (None=아직 미수신)
-        self._det_status = None       # 검출기 상태 raw [yolo, hsv, absdiff]
+        self._det_status = None       # raw [yolo, hsv proposal, legacy slot]
+        history = max(30, int(self.get_parameter("ui.diagnostics_history").value))
+        self._diag_history = {
+            name: deque(maxlen=history) for name in (
+                "sample", "resize", "hsv", "yolo", "tracker", "total",
+                "hsv_count", "yolo_inputs", "yolo_accepted")
+        }
         # 검출기별 최근 유효(≥0) confidence 를 잠깐 유지해 깜빡임 억제: idx→(val, t)
         self._det_hold = {}
         self._manual_mode = False   # buttons[2]==1 → 수동 모드(오버레이 끔)
@@ -210,6 +222,11 @@ class ArmsUINode(Node):
         for i, v in enumerate(vals):      # 유효(≥0) 값은 잠깐 유지해 깜빡임 방지
             if v >= 0.0:
                 self._det_hold[i] = (v, now)
+        if len(vals) >= 16:
+            names = ("hsv_count", "yolo_inputs", "yolo_accepted", "sample",
+                     "resize", "hsv", "yolo", "tracker", "total")
+            for name, value in zip(names, vals[4:13]):
+                self._diag_history[name].append(float(value))
 
     def _cb_command(self, msg: Joy):
         if len(msg.buttons) <= MODE_BUTTON_IDX:
@@ -353,6 +370,15 @@ class ArmsUINode(Node):
         except Exception as e:
             self.get_logger().warn(f"roi cv_bridge error: {e}")
 
+    def _cb_hsv_debug(self, msg: Image):
+        if msg.width == 0 or msg.height == 0 or len(msg.data) == 0:
+            return
+        try:
+            self._latest_hsv_debug = self._bridge.imgmsg_to_cv2(
+                msg, desired_encoding="bgr8")
+        except Exception as e:
+            self.get_logger().warn(f"hsv debug cv_bridge error: {e}")
+
     def _cb_image(self, msg: Image):
         if msg.width == 0 or msg.height == 0 or len(msg.data) == 0:
             return   # 빈 프레임(image_publisher 루프 경계 등) → 스킵
@@ -387,12 +413,116 @@ class ArmsUINode(Node):
         self._draw_kill_banner(frame)
         # 전원 버튼(+확인 다이얼로그)은 최상단에 그린다(원본 좌표계, 터치 히트박스 기록).
         self._draw_power_ui(frame)
+        if self.get_parameter("ui.diagnostics_panel").value:
+            frame = self._compose_diagnostics_panel(frame)
         if self._fullscreen:
             frame = self._fit_to_window(frame)
         else:
             self._fit_xform = (0.0, 0.0, 1.0, 1.0)   # 창 모드: 표시=원본 좌표(항등)
         cv2.imshow("A.R.M.S.", frame)
         cv2.waitKey(1)
+
+    def _compose_diagnostics_panel(self, frame):
+        """영상 오른쪽에 HSV 후보 미리보기와 실시간 성능 그래프를 붙인다."""
+        h, w = frame.shape[:2]
+        panel_w = max(320, int(w * 0.40))
+        panel = np.full((h, panel_w, 3), 22, dtype=np.uint8)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.putText(panel, "DETECTION DIAGNOSTICS", (12, 25), font, 0.58,
+                    (240, 240, 240), 1, cv2.LINE_AA)
+
+        raw = self._det_status or []
+        frame_no = int(raw[14]) if len(raw) >= 15 else 0
+        tracker_names = {0: "ACQUIRE", 1: "TRACK", 2: "LOST"}
+        tracker = tracker_names.get(int(raw[13]), "--") if len(raw) >= 14 else "--"
+        mode = ("FULL-FALLBACK" if len(raw) >= 16 and raw[15] >= 0.5 else
+                ("ROI" if len(raw) >= 4 and raw[3] >= 0.5 else "HSV->YOLO"))
+        cv2.putText(panel, f"frame {frame_no}  {tracker}  {mode}", (12, 47),
+                    font, 0.46, (0, 210, 255), 1, cv2.LINE_AA)
+
+        # 같은 실시간 스트림에서 만들어진 HSV probability overlay + 후보 박스.
+        preview_y = 58
+        preview_h = max(105, int(h * 0.24))
+        cv2.rectangle(panel, (10, preview_y),
+                      (panel_w - 10, preview_y + preview_h), (65, 65, 65), 1)
+        preview = self._latest_hsv_debug
+        if preview is not None and preview.size:
+            ph, pw = preview.shape[:2]
+            scale = min((panel_w - 22) / pw, (preview_h - 2) / ph)
+            nw, nh = max(1, int(pw * scale)), max(1, int(ph * scale))
+            small = cv2.resize(preview, (nw, nh), interpolation=cv2.INTER_AREA)
+            x0 = (panel_w - nw) // 2
+            y0 = preview_y + (preview_h - nh) // 2
+            panel[y0:y0 + nh, x0:x0 + nw] = small
+        else:
+            cv2.putText(panel, "waiting for HSV candidates", (20, preview_y + preview_h // 2),
+                        font, 0.44, (140, 140, 140), 1, cv2.LINE_AA)
+
+        timing_y = preview_y + preview_h + 20
+        graph_h = max(105, int(h * 0.25))
+        timing_series = [
+            ("sample", (180, 180, 180)), ("total", (0, 220, 255)),
+            ("yolo", (0, 90, 255)), ("hsv", (255, 180, 0)),
+            ("tracker", (100, 220, 100)),
+        ]
+        self._draw_history_graph(panel, (10, timing_y, panel_w - 10,
+                                         min(h - 130, timing_y + graph_h)),
+                                 "TIME (ms)", timing_series, minimum_scale=33.3)
+
+        count_y = min(h - 120, timing_y + graph_h + 18)
+        self._draw_history_graph(
+            panel, (10, count_y, panel_w - 10, h - 54), "COUNTS",
+            [("hsv_count", (255, 180, 0)),
+             ("yolo_inputs", (0, 130, 255)),
+             ("yolo_accepted", (0, 220, 0))], minimum_scale=2.0,
+            integer_scale=True)
+
+        def latest(name):
+            values = self._diag_history[name]
+            return values[-1] if values else 0.0
+
+        footer = (f"HSV {latest('hsv_count'):.0f}  YOLO in/ok "
+                  f"{latest('yolo_inputs'):.0f}/{latest('yolo_accepted'):.0f}   "
+                  f"total {latest('total'):.1f} ms")
+        cv2.putText(panel, footer, (10, h - 18), font, 0.42,
+                    (230, 230, 230), 1, cv2.LINE_AA)
+        cv2.line(panel, (0, 0), (0, h - 1), (90, 90, 90), 2)
+        return np.hstack((frame, panel))
+
+    def _draw_history_graph(self, canvas, rect, title, series,
+                            minimum_scale=1.0, integer_scale=False):
+        """외부 plotting 라이브러리 없이 가벼운 rolling line graph를 그린다."""
+        x1, y1, x2, y2 = rect
+        if x2 - x1 < 40 or y2 - y1 < 45:
+            return
+        cv2.rectangle(canvas, (x1, y1), (x2, y2), (48, 48, 48), -1)
+        cv2.rectangle(canvas, (x1, y1), (x2, y2), (85, 85, 85), 1)
+        values = [v for name, _ in series for v in self._diag_history[name]]
+        scale_max = max(minimum_scale, float(np.percentile(values, 95)) * 1.25
+                        if values else minimum_scale)
+        if integer_scale:
+            scale_max = max(minimum_scale, float(np.ceil(scale_max)))
+        cv2.putText(canvas, f"{title}  max {scale_max:.0f}", (x1 + 5, y1 + 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1,
+                    cv2.LINE_AA)
+        plot_y1, plot_y2 = y1 + 22, y2 - 18
+        for frac in (0.0, 0.5, 1.0):
+            yy = int(plot_y2 - frac * (plot_y2 - plot_y1))
+            cv2.line(canvas, (x1 + 4, yy), (x2 - 4, yy), (58, 58, 58), 1)
+        legend_x = x1 + 5
+        for name, color in series:
+            data = list(self._diag_history[name])
+            if len(data) >= 2:
+                xs = np.linspace(x1 + 4, x2 - 4, len(data)).astype(np.int32)
+                ys = np.array([
+                    int(plot_y2 - min(scale_max, max(0.0, value)) /
+                        scale_max * (plot_y2 - plot_y1)) for value in data
+                ], dtype=np.int32)
+                points = np.column_stack((xs, ys)).reshape((-1, 1, 2))
+                cv2.polylines(canvas, [points], False, color, 1, cv2.LINE_AA)
+            cv2.putText(canvas, name, (legend_x, y2 - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.30, color, 1, cv2.LINE_AA)
+            legend_x += max(42, 7 * len(name))
 
     def _detect_screen_size(self):
         """실제 모니터 해상도 감지. xrandr 우선, 실패 시 창 rect/기본값."""
@@ -655,13 +785,13 @@ class ArmsUINode(Node):
         cv2.putText(frame, text, (x, y), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
 
     def _draw_detector_status(self, frame):
-        """YOLO/HSV/ABSDIFF 작동여부·confidence 와 검출 모드(FULL/ROI)를 좌상단에 표시."""
+        """YOLO/HSV proposal 상태와 검출 모드(FULL/ROI)를 좌상단에 표시."""
         raw = self._det_status
         if raw is None or len(raw) < 3:
             return
         h = frame.shape[0]
         now = time.monotonic()
-        names = ("YOLO", "HSV", "ABSDIFF")
+        names = ("YOLO", "HSV proposal")
         font = cv2.FONT_HERSHEY_SIMPLEX
         scale = max(0.45, h / 1100.0)
         thick = max(1, int(round(scale * 2)))
@@ -779,7 +909,8 @@ def main(args=None):
         node._stop_lock_tone()   # 종료 시 연속음 프로세스 정리
         cv2.destroyAllWindows()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

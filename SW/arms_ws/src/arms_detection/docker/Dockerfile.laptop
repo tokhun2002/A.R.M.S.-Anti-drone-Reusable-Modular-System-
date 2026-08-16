@@ -1,37 +1,46 @@
 # ============================================================
 # A.R.M.S. Detection Container — Laptop (x86, CPU or CUDA)
-# Base: ros:humble (Ubuntu 22.04 Jammy)
+# Base: ros:jazzy (Ubuntu 24.04 Noble) — laptop host와 DDS 직렬화 버전을 맞춘다.
 # Model: YOLOv11 .pt (PyTorch)
 #
 # Build context: arms_ws/src/
 #   docker compose -f docker-compose.laptop.yml up --build
 # ============================================================
-FROM ros:humble
+FROM ros:jazzy
+
+# Ubuntu 24.04의 PEP 668 보호는 격리된 컨테이너 안에서만 해제한다.
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 # ---- ROS2 추가 패키지 ----
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ros-humble-sensor-msgs \
-        ros-humble-rosidl-default-generators \
-        ros-humble-rosidl-default-runtime \
+        ros-jazzy-sensor-msgs \
+        ros-jazzy-rosidl-default-generators \
+        ros-jazzy-rosidl-default-runtime \
         python3-colcon-common-extensions \
         python3-rosdep \
         python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 # ---- ML 패키지 (pip) ----
-# ultralytics: YOLO 추론 (.pt 파일을 PyTorch로 직접 실행)
-# opencv-python-headless: GUI 없는 컨테이너용 opencv
+# GPU가 없는 노트북에서 PyPI 기본 torch를 설치하면 CUDA/Triton까지 수 GB가
+# 따라온다. CPU 전용 index를 먼저 사용해 이미지 크기와 최초 빌드 시간을 줄인다.
 RUN pip3 install --no-cache-dir \
-        ultralytics \
- && pip3 install --no-cache-dir --force-reinstall \
-        opencv-python-headless
+        --index-url https://download.pytorch.org/whl/cpu \
+        torch==2.5.1 torchvision==0.20.1
+
+# Noble의 Debian NumPy 위에 컨테이너 전용 wheel만 먼저 덮어 쓴다.
+# 이후 일반 설치는 이미 설치된 CPU torch를 인식하므로 CUDA torch를 받지 않는다.
+RUN pip3 install --no-cache-dir --ignore-installed numpy==2.2.6
+RUN pip3 install --no-cache-dir ultralytics
+
+RUN pip3 install --no-cache-dir --force-reinstall opencv-python-headless
 
 # ---- Build arms_msgs inside the container ----
 WORKDIR /ros_ws/src
 COPY arms_msgs/ arms_msgs/
 
 WORKDIR /ros_ws
-RUN bash -c "source /opt/ros/humble/setup.bash && \
+RUN bash -c "source /opt/ros/jazzy/setup.bash && \
     colcon build --packages-select arms_msgs --cmake-args -DCMAKE_BUILD_TYPE=Release"
 
 # ---- opencv tracking(contrib) 모듈 ----
@@ -49,12 +58,12 @@ RUN CV_VER="$(python3 -c 'import cv2; print(cv2.__version__)' 2>/dev/null | cut 
     fi \
     && python3 -c "import cv2; assert hasattr(cv2,'TrackerCSRT_create') or (hasattr(cv2,'legacy') and hasattr(cv2.legacy,'TrackerCSRT_create')), 'no tracking module'; print('opencv tracking OK', cv2.__version__)"
 
-# ---- Copy merged detection node (YOLO + HSV/ABSDIFF fusion + detect-then-track) ----
+# ---- Copy detection node (HSV proposals + ROI YOLO + detect-then-track) ----
 # YOLO 는 in-process (ARMS_MODEL 로 로드).
 COPY arms_detection/arms_detection/arms_detection_node.py /ros_ws/arms_detection_node.py
 
 # ---- Entry point ----
 CMD ["bash", "-c", \
-    "source /opt/ros/humble/setup.bash && \
+    "source /opt/ros/jazzy/setup.bash && \
      source /ros_ws/install/setup.bash && \
      python3 /ros_ws/arms_detection_node.py"]
