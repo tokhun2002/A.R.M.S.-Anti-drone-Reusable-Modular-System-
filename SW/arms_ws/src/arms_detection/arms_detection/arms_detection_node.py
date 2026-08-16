@@ -23,13 +23,13 @@ arms_detection_node — A.R.M.S. 다중 검출기 (우선순위 기반)
   yolo.acquire_interval : int   ACQUIRE/LOST 중 YOLO 를 N프레임마다만 실행 (기본 2).
                                 TRACK 재검출은 항상 실행. 모델 환경변수 ARMS_MODEL/
                                 ARMS_CONF/ARMS_IOU 로 설정(없으면 YOLO 비활성).
-  proc_width            : int   검출 처리 가로 해상도, 0=원본 (기본 480)
+  proc_width            : int   검출 처리 가로 해상도, 0=원본 (기본 640)
   absdiff.diff_thresh   : int   배경 대비 임계값 (기본 25)
   absdiff.bg_blur       : int   배경 추정 Gaussian 커널, 홀수 (기본 15)
-  absdiff.pre_blur      : int   노이즈 제거 Gaussian 커널, 홀수 (기본 3)
+  absdiff.pre_blur      : int   노이즈 제거 Gaussian 커널, 홀수 (기본 1=끔)
   absdiff.max_area_ratio: float blob 최대 면적비 (기본 0.05)
   absdiff.max_blobs     : int   프레임 blob 수가 이보다 많으면 어수선한 장면(지상 등)
-                                으로 보고 absdiff 결과 억제. 0=게이팅 끔 (기본 12)
+                                으로 보고 absdiff 결과 억제. 0=게이팅 끔 (기본 100)
   publish_debug         : bool  디버그 영상 발행 (기본 true)
   track.enable          : bool  detect-then-track on/off (기본 true, false=매프레임 검출)
   track.tracker_type    : str   "CSRT" | "KCF" (기본 CSRT)
@@ -57,7 +57,49 @@ from arms_msgs.msg import BoundingBox, DetectionArray
 # Image conversion helpers (cv_bridge 없이)
 # ---------------------------------------------------------------------------
 
-_OPEN_KERNEL = np.ones((3, 3), np.uint8)   # absdiff 마스크 노이즈 제거용
+_MORPH_KERNEL = np.ones((3, 3), np.uint8)
+
+
+def _is_cv_detection(box) -> bool:
+    """학습 모델이 아닌 고전 CV 검출 결과인지 판별한다."""
+    return box is not None and box.class_name in {
+        "hsv_red", "absdiff_spot", "cv_fused"
+    }
+
+
+class _CenterKalman:
+    """정규화 영상 좌표에서 동작하는 등속도 Kalman 필터."""
+
+    def __init__(self):
+        self._kf = None
+
+    def reset(self):
+        self._kf = None
+
+    def update(self, x: float, y: float):
+        if self._kf is None:
+            kf = cv2.KalmanFilter(4, 2)
+            kf.transitionMatrix = np.array(
+                [[1, 0, 1, 0], [0, 1, 0, 1],
+                 [0, 0, 1, 0], [0, 0, 0, 1]], np.float32)
+            kf.measurementMatrix = np.array(
+                [[1, 0, 0, 0], [0, 1, 0, 0]], np.float32)
+            kf.processNoiseCov = np.diag([2e-5, 2e-5, 8e-5, 8e-5]).astype(np.float32)
+            kf.measurementNoiseCov = np.diag([3e-4, 3e-4]).astype(np.float32)
+            kf.errorCovPost = np.eye(4, dtype=np.float32) * 1e-3
+            kf.statePost = np.array([[x], [y], [0], [0]], np.float32)
+            self._kf = kf
+            return float(x), float(y)
+        self._kf.predict()
+        state = self._kf.correct(np.array([[x], [y]], np.float32))
+        return float(state[0, 0]), float(state[1, 0])
+
+    def predicted_center(self):
+        if self._kf is None:
+            return None
+        state = self._kf.statePost
+        return (float(state[0, 0] + state[2, 0]),
+                float(state[1, 0] + state[3, 0]))
 
 
 def imgmsg_to_bgr(msg: Image) -> np.ndarray:
@@ -135,6 +177,7 @@ class _TargetTracker:
         self._unconfirmed = 0
         self._lost_count = 0
         self._last_conf = 0.0
+        self._kalman = _CenterKalman()
 
     # ---- geometry (normalized <-> pixel) ----
     @staticmethod
@@ -183,18 +226,29 @@ class _TargetTracker:
         self._last_center = c
 
     def _near_prediction(self, det, cfg) -> bool:
-        if self._last_center is None:
+        predicted = self._kalman.predicted_center()
+        if predicted is None and self._last_center is None:
             return True
-        px = self._last_center[0] + self._vel[0] * self._lost_count
-        py = self._last_center[1] + self._vel[1] * self._lost_count
+        if predicted is not None:
+            px, py = predicted
+        else:
+            px = self._last_center[0] + self._vel[0] * self._lost_count
+            py = self._last_center[1] + self._vel[1] * self._lost_count
         radius = max(cfg["match_dist"] * 3.0, 0.15)
         return _center_dist((det.x_center, det.y_center), (px, py)) < radius
+
+    def _smooth_center(self, box):
+        sx, sy = self._kalman.update(box.x_center, box.y_center)
+        box.x_center = float(np.clip(sx, 0.0, 1.0))
+        box.y_center = float(np.clip(sy, 0.0, 1.0))
+        return box
 
     def _to_acquire(self):
         self.state = self.ACQUIRE
         self._cv = None
         self.hit_streak = 0
         self._prev_center = None
+        self._kalman.reset()
 
     def _to_lost(self):
         self.state = self.LOST
@@ -225,6 +279,23 @@ class _TargetTracker:
         else:
             self.hit_streak = 1
         self._prev_center = c
+        target = self._smooth_center(target)
+
+        # 고전 CV 후보는 크기가 작을수록 confidence가 낮아지는 특성 때문에 제어기의
+        # 제어 임계값을 영원히 넘지 못했다. HSV와 고주파 점 검출이 합의한
+        # cv_fused 후보만 여러 프레임 같은 위치에 있을 때 승격한다. 단일 CV 후보는
+        # 상태표시/추적 단서로만 남겨 빨간 건물·조명에 즉시 LOCK 되는 것을 막는다.
+        if _is_cv_detection(target):
+            if (target.class_name == "cv_fused" and
+                    self.hit_streak >= cfg["cv_confirm_frames"]):
+                target.confidence = max(target.confidence, cfg["cv_confirm_conf"])
+            elif (target.class_name == "hsv_red" and
+                  self.hit_streak >= cfg["hsv_confirm_frames"]):
+                target.confidence = max(target.confidence, cfg["hsv_confirm_conf"])
+            else:
+                target.confidence = min(target.confidence, 0.60)
+        # 승격/제한을 적용한 confidence를 트래커에도 넘겨야 TRACK 상태에서 다시
+        # 원래의 낮은 CV 점수로 떨어지지 않는다.
         self._last_conf = target.confidence
         if self.hit_streak >= cfg["confirm_frames"] and self._init_cv(bgr, target, cfg):
             self.state = self.TRACK
@@ -241,6 +312,7 @@ class _TargetTracker:
             return None
         tracked = self._rect_to_box(rect, W, H, self._last_conf,
                                     self._box.class_id, self._box.class_name)
+        tracked = self._smooth_center(tracked)
         self._update_motion((tracked.x_center, tracked.y_center))
         self._box = tracked
         self._since_redetect += 1
@@ -264,6 +336,7 @@ class _TargetTracker:
         self._lost_count += 1
         det = detect_fn(bgr)                 # 매프레임 재획득 시도
         if det is not None and self._near_prediction(det, cfg):
+            det = self._smooth_center(det)
             self._last_conf = det.confidence
             if self._init_cv(bgr, det, cfg):
                 self.state = self.TRACK
@@ -288,14 +361,15 @@ class ArmsDetectionNode(Node):
         # ACQUIRE/LOST(매프레임 전체탐색)에서 YOLO 를 N프레임마다만 실행해 레이트 유지.
         # TRACK 재검출은 드물게 일어나므로 항상 실행. (동기 추론)
         self.declare_parameter("yolo.acquire_interval", 2)
+        self.declare_parameter("yolo.proposal_crop_px", 192)
         # 검출 처리 해상도(가로 px). 0=원본. 출력은 비율이라 정확도 무관, CV 비용만 절감.
-        self.declare_parameter("proc_width", 480)
+        self.declare_parameter("proc_width", 640)
         self.declare_parameter("absdiff.diff_thresh",    25)
         self.declare_parameter("absdiff.bg_blur",        15)
-        self.declare_parameter("absdiff.pre_blur",        3)
+        self.declare_parameter("absdiff.pre_blur",        1)
         self.declare_parameter("absdiff.max_area_ratio", 0.05)
         # blob 수가 이보다 많으면 어수선한 장면(지상 등)으로 보고 absdiff 억제. 0=끔.
-        self.declare_parameter("absdiff.max_blobs", 12)
+        self.declare_parameter("absdiff.max_blobs", 100)
         self.declare_parameter("publish_debug", True)
 
         # --- CV 검출 confidence 게이팅 (표적 없을 때 헛-LOCK 방지) ---------------
@@ -307,55 +381,50 @@ class ArmsDetectionNode(Node):
         #   full_conf_area_ratio: 면적비가 이 값이면 confidence=1.0 (포화 기준)
         #   → 더 엄격히(큰 표적만) 하려면 full_conf_area_ratio 를 키우거나
         #     arms_control 의 mission.detection_confidence_threshold 를 올린다.
-        self.declare_parameter("hsv.min_area_ratio",          0.0010)
+        self.declare_parameter("hsv.min_area_ratio",          0.00003)
         self.declare_parameter("hsv.full_conf_area_ratio",    0.0100)
-        self.declare_parameter("absdiff.min_area_ratio",      0.0010)
+        self.declare_parameter("hsv.max_area_ratio",          0.0200)
+        # OpenCV hue(0..179)는 빨강이 0/179 경계에 걸쳐 있다. 경계 두 구간을
+        # hard threshold로 자르는 대신 원형 hue 거리의 Gaussian 확률로 평가한다.
+        self.declare_parameter("hsv.hue_sigma",               12.0)
+        self.declare_parameter("hsv.prob_threshold",          0.20)
+        self.declare_parameter("hsv.sat_center",              75.0)
+        self.declare_parameter("hsv.sat_scale",               22.0)
+        self.declare_parameter("hsv.val_min",                 30.0)
+        self.declare_parameter("hsv.val_max_center",          225.0)
+        self.declare_parameter("hsv.val_scale",               18.0)
+        self.declare_parameter("hsv.min_circularity",         0.20)
+        self.declare_parameter("hsv.texture_scale",           120.0)
+        self.declare_parameter("absdiff.min_area_ratio",      0.00003)
         self.declare_parameter("absdiff.full_conf_area_ratio", 0.0100)
+        self.declare_parameter("fusion.max_center_dist",      0.035)
 
-        # 초기 획득(ROI 뜨기 전) 정책: 최종 판단은 '항상' YOLO 가 한다. HSV/ABSDIFF 는
-        # "가장 그럴듯한 blob"을 늘 잡아 헛-LOCK 을 내므로 획득을 직접 만들지 못한다.
-        # 원거리 표적은 아래 acquire.hsv_propose 로 'HSV 후보 → YOLO 확대검증' 방식으로
-        # 잡는다(HSV 는 제안만, 확인은 YOLO). ROI 확보 후(추적)엔 YOLO 가 크롭에서 싸게
-        # 돌아 계속 주가 되고, YOLO 미스/다운이어도 CV 가 보조로 표적을 유지한다
-        # (_detect_stack allow_cv 기본 True).
-
-        # 원거리 획득: HSV 가 후보를 제안하고 YOLO 가 확대 크롭에서 확인한다.
-        # 원거리 풍선은 전체프레임 YOLO 가 놓치므로, HSV 로 작은 빨강까지 후보를 잡아
-        # 그 주변을 확대해 YOLO 로 '진짜 풍선인지' 검증한다. 최종 판단은 YOLO 라
-        # 헛-LOCK 이 없다. hsv_propose_min_area_ratio 는 '후보'용이라 직접-LOCK 용
-        # hsv.min_area_ratio 보다 훨씬 작게(관대하게) 둬서 원거리도 후보로 잡는다.
-        self.declare_parameter("acquire.hsv_propose", True)
-        self.declare_parameter("acquire.hsv_max_candidates", 1)     # YOLO 로 검증할 HSV 후보 수
-        self.declare_parameter("acquire.hsv_propose_min_area_ratio", 0.00005)
-        # absdiff 제안: 실외에서 HSV/전체YOLO 가 놓치는 원거리 풍선을 '배경과 다른 점'으로
-        # 잡아 후보로 낸다(주력). YOLO 가 확대 크롭에서 확인. 후보를 먼저 검증한다.
-        self.declare_parameter("acquire.absdiff_propose", True)
-        self.declare_parameter("acquire.absdiff_max_candidates", 2)  # YOLO 로 검증할 absdiff 후보 수
-        self.declare_parameter("acquire.absdiff_propose_min_area_ratio", 0.00005)
-        self.declare_parameter("acquire.verify_margin", 4.0)        # 후보 크롭 확장배율(확대량)
-        self.declare_parameter("acquire.verify_min_px", 64)         # 크롭 최소 한 변[px]
-        # 확대검증 YOLO conf 임계값(기본 추론보다 낮게 → 낮은 확률 표적도 확인).
-        # 단 최종 LOCK 은 arms_control 의 detection_confidence_threshold 도 넘어야 하므로
-        # 그 값도 이 수준으로 낮춰야 실제로 락이 걸린다.
-        self.declare_parameter("acquire.verify_conf", 0.30)
+        # 초기 획득도 CV를 쓰되, 여러 프레임의 위치 일치와 HSV/고주파 융합을 확인한
+        # 뒤에만 제어 임계값 이상으로 승격한다. 원거리에서 YOLO가 놓친 표적을 위한
+        # proposal을 만들면서 순간적인 빨간 조명에는 바로 LOCK하지 않게 한다.
+        self.declare_parameter("acquire.yolo_only", False)
+        self.declare_parameter("acquire.cv_confirm_frames", 5)
+        self.declare_parameter("acquire.cv_confirm_conf", 0.72)
+        self.declare_parameter("acquire.hsv_confirm_frames", 8)
+        self.declare_parameter("acquire.hsv_confirm_conf", 0.68)
 
         # SEARCH 진단용: 전체 프레임 경로에서 세 검출기(YOLO/HSV/ABSDIFF) 각각의
         # 검출 여부·confidence 를 /arms/detector_status 로 발행해 UI 가 표시한다.
-        # 획득 판단과 무관한 '표시 전용'이라, True 여도 HSV/ABSDIFF 는 락을 만들지
-        # 않고 상태 보고만 한다. CPU 아끼려면 False.
+        # LOCK 판단(acquire.yolo_only)과 무관한 '표시 전용'이라, True 여도 HSV/ABSDIFF
+        # 는 락을 만들지 않고 상태 보고만 한다. CPU 아끼려면 False.
         self.declare_parameter("debug.detector_status", True)
 
         # --- detect-then-track (ROI + CSRT/KCF) ---
         self.declare_parameter("track.enable", True)          # false=기존 매프레임 검출
         self.declare_parameter("track.tracker_type", "CSRT")  # "CSRT" | "KCF"
         self.declare_parameter("track.confirm_frames", 3)     # 트래킹 시작 연속 검출 수
-        self.declare_parameter("track.confirm_dist", 0.08)    # 연속 판정 중심거리(norm)
+        self.declare_parameter("track.confirm_dist", 0.035)   # 연속 판정 중심거리(norm)
         self.declare_parameter("track.redetect_interval", 10) # TRACK 중 재검출 주기
         self.declare_parameter("track.redetect_margin", 2.0)  # TRACK 재검출 ROI 크롭 확장배율
         self.declare_parameter("track.match_dist", 0.1)       # 재획득 예측 게이팅 거리
         self.declare_parameter("track.reacquire_frames", 8)   # LOST 재획득 창
         self.declare_parameter("track.max_unconfirmed", 3)    # TRACK 미확인 허용(드리프트 안전장치)
-        self.declare_parameter("track.min_box_px", 8)         # 트래커 init 최소 박스
+        self.declare_parameter("track.min_box_px", 4)         # 트래커 init 최소 박스
         self.declare_parameter("roi.margin", 1.8)             # ROI 크롭 확장 배율
 
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -368,8 +437,10 @@ class ArmsDetectionNode(Node):
         # 조용히 비활성화하고 HSV/ABSDIFF 로만 동작 (graceful degradation).
         # 모델 경로/파라미터는 환경변수로 (컨테이너 compose 가 주입).
         self._yolo = None
-        self._yolo_conf = float(os.environ.get("ARMS_CONF", "0.5"))
+        # 카메라 재학습 모델의 validation F1 최적점은 약 0.32다.
+        self._yolo_conf = float(os.environ.get("ARMS_CONF", "0.32"))
         self._yolo_iou  = float(os.environ.get("ARMS_IOU",  "0.45"))
+        self._yolo_imgsz = int(os.environ.get("ARMS_IMGSZ", "320"))
         # TensorRT 엔진은 첫 predict() 에서 지연 로딩된다. GPU OOM/버전불일치로 실패하면
         # 예외를 그대로 두면 노드가 죽고 재시작→CUDA 컨텍스트 미해제로 'device busy'
         # 폭주가 난다. 아래 상태로 "실패 시 크래시 대신 쿨다운 후 재시도"(그동안
@@ -470,6 +541,10 @@ class ArmsDetectionNode(Node):
             "reacquire_frames":  int(g("track.reacquire_frames").value),
             "max_unconfirmed":   int(g("track.max_unconfirmed").value),
             "min_box_px":        int(g("track.min_box_px").value),
+            "cv_confirm_frames": int(g("acquire.cv_confirm_frames").value),
+            "cv_confirm_conf":   float(g("acquire.cv_confirm_conf").value),
+            "hsv_confirm_frames": int(g("acquire.hsv_confirm_frames").value),
+            "hsv_confirm_conf":   float(g("acquire.hsv_confirm_conf").value),
         }
 
     def _run_detectors(self, bgr, header=None, roi_box=None):
@@ -492,80 +567,16 @@ class ArmsDetectionNode(Node):
                 return None
             return self._remap_from_crop(box, off, bgr.shape[1], bgr.shape[0])
 
-        # 초기 획득(전체 프레임): 원거리 풍선은 전체프레임 YOLO 가 놓치므로
-        #   1) 전체프레임 YOLO 로 근/중거리 직접 검출
-        #   2) 놓치면 ABSDIFF(주력)·HSV 가 '배경과 다른 점/빨강'을 후보로 제안
-        #   3) 각 후보를 확대 크롭해 낮은 conf 로 YOLO 확인 → 확인된 것만 채택
-        # 최종 판단은 항상 YOLO 라 CV 헛검출로 LOCK 되지 않는다(원거리 탐지 + 헛-LOCK 방지).
+        # 초기 획득은 기본적으로 CV 후보도 함께 사용한다. HSV+고주파가 여러 프레임
+        # 같은 위치에서 합의해야 confidence가 승격되므로 작은 원거리 풍선을 살리면서
+        # 붉은 건물/조명의 순간 오검출은 억제한다. 필요하면 yolo_only로 되돌릴 수 있다.
+        yolo_only = bool(self.get_parameter("acquire.yolo_only").value)
+        allow_cv  = not yolo_only
         interval = max(1, int(self.get_parameter("yolo.acquire_interval").value))
         run_yolo = (self._frame_i % interval == 0)
-        report   = bool(self.get_parameter("debug.detector_status").value)
-        yolo_on  = bool(self.get_parameter("use_yolo").value)
-        use_yolo = yolo_on and self._yolo is not None
-        use_hsv     = bool(self.get_parameter("use_hsv").value)
-        use_absdiff = bool(self.get_parameter("use_absdiff").value)
-        hsv_propose = use_hsv and bool(self.get_parameter("acquire.hsv_propose").value)
-        abs_propose = use_absdiff and bool(self.get_parameter("acquire.absdiff_propose").value)
-
-        yolo_box = self._detect_yolo(bgr) if (use_yolo and run_yolo) else None
-
-        hsv_conf = -1.0
-        abs_conf = -1.0
-        verify_box = None
-        do_verify = (use_yolo and run_yolo and yolo_box is None
-                     and (hsv_propose or abs_propose))
-
-        if report or do_verify:
-            cands = []
-            # ABSDIFF 후보 먼저(실외 주력) — 검증 우선순위도 앞선다.
-            if abs_propose or (report and use_absdiff):
-                amin = float(self.get_parameter("acquire.absdiff_propose_min_area_ratio").value)
-                an   = max(1, int(self.get_parameter("acquire.absdiff_max_candidates").value))
-                ac = self._absdiff_candidates(bgr, an, None, amin)
-                abs_conf = ac[0].confidence if ac else 0.0
-                if abs_propose:
-                    cands += ac
-            # HSV 후보(빨강).
-            if hsv_propose or (report and use_hsv):
-                hmin = float(self.get_parameter("acquire.hsv_propose_min_area_ratio").value)
-                hn   = max(1, int(self.get_parameter("acquire.hsv_max_candidates").value))
-                hc = self._hsv_candidates(bgr, hn, hmin)
-                hsv_conf = hc[0].confidence if hc else 0.0
-                if hsv_propose:
-                    cands += hc
-
-            if do_verify and cands:
-                vconf   = float(self.get_parameter("acquire.verify_conf").value)
-                vmargin = float(self.get_parameter("acquire.verify_margin").value)
-                vmin    = int(self.get_parameter("acquire.verify_min_px").value)
-                for cand in cands:
-                    crop, off = self._crop_for_verify(bgr, cand, vmargin, vmin)
-                    if crop is None:
-                        continue
-                    vb = self._detect_yolo(crop, conf=vconf)   # 확대 크롭에서 낮은 conf 로 YOLO 확인
-                    if vb is not None:
-                        verify_box = self._remap_from_crop(vb, off, bgr.shape[1], bgr.shape[0])
-                        break
-
-        winner = yolo_box if yolo_box is not None else verify_box
-
-        if report:
-            yb = yolo_box if yolo_box is not None else verify_box
-            if not yolo_on:
-                yv = -1.0
-            elif self._yolo is None:
-                yv = -2.0
-            elif not run_yolo:
-                yv = -1.0
-            else:
-                yv = float(yb.confidence) if yb is not None else 0.0
-            hv = hsv_conf if use_hsv else -1.0
-            av = abs_conf if use_absdiff else -1.0
-            msg = Float32MultiArray()
-            msg.data = [yv, hv, av, 0.0]                  # [yolo, hsv, absdiff, mode=FULL]
-            self.pub_detstatus.publish(msg)
-
-        return winner
+        report = bool(self.get_parameter("debug.detector_status").value)
+        return self._detect_stack(bgr, header, run_yolo=run_yolo, allow_cv=allow_cv,
+                                  report_status=report, status_mode=0.0)  # FULL
 
     def _detect_stack(self, img, header, run_yolo, allow_cv=True,
                       report_status=False, status_mode=0.0):
@@ -585,7 +596,15 @@ class ArmsDetectionNode(Node):
         # CV 는 락에 필요하거나(폴백) 상태표시가 필요할 때 실행한다.
         need_cv     = report_status or (allow_cv and yolo_box is None)
         hsv_box     = self._detect_hsv(img)             if (use_hsv     and need_cv) else None
-        absdiff_box = self._detect_absdiff(img, header) if (use_absdiff and need_cv) else None
+        absdiff_box = self._detect_absdiff(img, header, hsv_box) if (use_absdiff and need_cv) else None
+        fused_box = self._fuse_cv(hsv_box, absdiff_box) if allow_cv else None
+
+        # 전체 화면 YOLO가 놓친 작은 표적은 CV 융합 위치 주변의 고정 크기 ROI를
+        # 잘라 다시 추론한다. ultralytics가 작은 crop을 입력 크기로 확대하므로
+        # 원본에서 수 픽셀인 풍선도 학습 때의 ROI 샘플과 비슷한 크기로 보인다.
+        if (yolo_box is None and use_yolo and run_yolo and fused_box is not None and
+                status_mode == 0.0):
+            yolo_box = self._detect_yolo_proposal(img, fused_box)
 
         if report_status:
             # 값: 0~1 confidence, -1=off/미실행, -2=사용불가(YOLO OOM 등)
@@ -599,12 +618,56 @@ class ArmsDetectionNode(Node):
             msg.data = [yv, hv, av, float(status_mode)]   # [yolo, hsv, absdiff, mode(0=FULL,1=ROI)]
             self.pub_detstatus.publish(msg)
 
-        # LOCK 판단용 winner (우선순위 YOLO > HSV > ABSDIFF, allow_cv 존중)
+        # LOCK 판단용 winner. CV끼리는 같은 위치를 가리킬 때만 융합 후보로 승격한다.
         if yolo_box is not None:
             return yolo_box
         if not allow_cv:
             return None
+        if fused_box is not None:
+            return fused_box
         return hsv_box or absdiff_box
+
+    def _detect_yolo_proposal(self, bgr, proposal):
+        h, w = bgr.shape[:2]
+        side = max(32, int(self.get_parameter("yolo.proposal_crop_px").value))
+        cx, cy = int(proposal.x_center * w), int(proposal.y_center * h)
+        half = side // 2
+        x0, y0 = max(0, cx - half), max(0, cy - half)
+        x1, y1 = min(w, x0 + side), min(h, y0 + side)
+        x0, y0 = max(0, x1 - side), max(0, y1 - side)
+        crop = bgr[y0:y1, x0:x1]
+        if crop.size == 0:
+            return None
+        box = self._detect_yolo(crop)
+        if box is None:
+            return None
+        return self._remap_from_crop(box, (x0, y0, x1 - x0, y1 - y0), w, h)
+
+    def _fuse_cv(self, hsv_box, absdiff_box):
+        if hsv_box is None or absdiff_box is None:
+            return None
+        dist = _center_dist((hsv_box.x_center, hsv_box.y_center),
+                            (absdiff_box.x_center, absdiff_box.y_center))
+        max_dist = float(self.get_parameter("fusion.max_center_dist").value)
+        # 박스가 큰 경우에는 중심 허용거리도 박스 크기에 비례해 늘린다.
+        adaptive = max(max_dist, 0.75 * max(hsv_box.width, hsv_box.height,
+                                             absdiff_box.width, absdiff_box.height))
+        if dist > adaptive:
+            return None
+        wh = max(0.1, float(hsv_box.confidence))
+        wa = max(0.1, float(absdiff_box.confidence))
+        den = wh + wa
+        box = BoundingBox()
+        box.x_center = float((wh * hsv_box.x_center + wa * absdiff_box.x_center) / den)
+        box.y_center = float((wh * hsv_box.y_center + wa * absdiff_box.y_center) / den)
+        box.width = float(max(hsv_box.width, absdiff_box.width))
+        box.height = float(max(hsv_box.height, absdiff_box.height))
+        # 이 값 자체로는 LOCK 임계값을 넘지 않는다. _TargetTracker가 시간 연속성을
+        # 확인한 뒤 acquire.cv_confirm_conf로 승격한다.
+        box.confidence = float(min(0.60, 0.5 * (wh + wa)))
+        box.class_id = 3
+        box.class_name = "cv_fused"
+        return box
 
     @staticmethod
     def _crop_roi(bgr, box, margin):
@@ -612,20 +675,6 @@ class ArmsDetectionNode(Node):
         H, W = bgr.shape[:2]
         bw = box.width * W * margin
         bh = box.height * H * margin
-        cx, cy = box.x_center * W, box.y_center * H
-        x0 = int(max(0, cx - bw / 2)); y0 = int(max(0, cy - bh / 2))
-        x1 = int(min(W, cx + bw / 2)); y1 = int(min(H, cy + bh / 2))
-        if x1 - x0 < 8 or y1 - y0 < 8:
-            return None, None
-        return bgr[y0:y1, x0:x1], (x0, y0, x1 - x0, y1 - y0)
-
-    @staticmethod
-    def _crop_for_verify(bgr, box, margin, min_px):
-        """HSV 후보 주변을 margin 배 확장하되 최소 한 변 min_px 를 보장해 크롭.
-        원거리 작은 후보도 YOLO 가 볼 수 있게 최소 크기를 강제한다."""
-        H, W = bgr.shape[:2]
-        bw = max(box.width * W * margin, float(min_px))
-        bh = max(box.height * H * margin, float(min_px))
         cx, cy = box.x_center * W, box.y_center * H
         x0 = int(max(0, cx - bw / 2)); y0 = int(max(0, cy - bh / 2))
         x1 = int(min(W, cx + bw / 2)); y1 = int(min(H, cy + bh / 2))
@@ -665,11 +714,9 @@ class ArmsDetectionNode(Node):
     # Detectors
     # ------------------------------------------------------------------
 
-    def _detect_yolo(self, bgr: np.ndarray, conf: float | None = None) -> BoundingBox | None:
+    def _detect_yolo(self, bgr: np.ndarray) -> BoundingBox | None:
         """같은 프로세스에서 YOLO 추론 → 최고 confidence 박스 하나 (normalized).
 
-        conf 를 주면 그 confidence 임계값으로 추론한다(없으면 기본 self._yolo_conf).
-        확대검증(verify)에선 낮은 conf 로 호출해 낮은 확률의 표적도 확인한다.
         엔진 로딩/추론이 GPU OOM 등으로 실패해도 노드를 죽이지 않는다. 실패하면
         쿨다운을 걸고 None(=이번 프레임 YOLO 스킵, HSV/ABSDIFF 폴백)을 반환하며,
         쿨다운 후 자동으로 다시 시도한다. 같은 프로세스 안에서 재시도하므로 재시작
@@ -680,12 +727,13 @@ class ArmsDetectionNode(Node):
         now = time.monotonic()
         if now < self._yolo_retry_after:
             return None   # 최근 실패 → 쿨다운 동안 YOLO 건너뜀
-        conf_th = self._yolo_conf if conf is None else float(conf)
         h, w = bgr.shape[:2]
-        rgb = np.ascontiguousarray(bgr[:, :, ::-1])   # 모델은 RGB 기대
+        # Ultralytics의 ndarray 입력 규약은 OpenCV BGR이며 predictor 내부에서 RGB로
+        # 변환한다. 여기서 미리 뒤집으면 R/B가 두 번 바뀌어 빨간 풍선 성능이 급락한다.
+        source = np.ascontiguousarray(bgr)
         try:
-            res = self._yolo.predict(rgb, conf=conf_th, iou=self._yolo_iou,
-                                     verbose=False)
+            res = self._yolo.predict(source, conf=self._yolo_conf, iou=self._yolo_iou,
+                                     imgsz=self._yolo_imgsz, verbose=False)
         except Exception as e:
             self._yolo_fail_count += 1
             # 반쯤 초기화된 backend/컨텍스트를 폐기 → 다음 시도에서 깨끗이 재로딩.
@@ -725,54 +773,90 @@ class ArmsDetectionNode(Node):
         box.class_name = str(self._yolo.names[int(best.cls[0])])
         return box
 
-    def _hsv_candidates(self, bgr: np.ndarray, n: int = 1,
-                        min_area_ratio: float | None = None) -> list:
-        """빨간 영역 HSV 후보들을 면적 큰 순으로 최대 n개 반환 (BoundingBox 리스트).
-
-        min_area_ratio 를 주면 그 값으로, 없으면 hsv.min_area_ratio 로 걸러낸다.
-        confidence 는 크기 비례(full_conf_area_ratio 에서 포화)."""
-        h, w = bgr.shape[:2]
-        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-        mask = cv2.bitwise_or(
-            cv2.inRange(hsv, (  0, 90, 60), ( 10, 255, 255)),
-            cv2.inRange(hsv, (170, 90, 60), (180, 255, 255)),
-        )
-        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not cnts:
-            return []
-        min_frac = (float(self.get_parameter("hsv.min_area_ratio").value)
-                    if min_area_ratio is None else float(min_area_ratio))
-        full_frac = float(self.get_parameter("hsv.full_conf_area_ratio").value)
-        frame_area = float(w * h)
-        out = []
-        for c in sorted(cnts, key=cv2.contourArea, reverse=True):
-            area_frac = cv2.contourArea(c) / frame_area
-            if area_frac < min_frac:
-                break                                    # 정렬돼 있어 이후는 다 더 작음
-            x, y, bw, bh = cv2.boundingRect(c)
-            box = BoundingBox()
-            box.x_center  = float((x + bw / 2) / w)
-            box.y_center  = float((y + bh / 2) / h)
-            box.width     = float(bw / w)
-            box.height    = float(bh / h)
-            box.confidence = float(min(0.99, area_frac / full_frac)) if full_frac > 0 else 0.99
-            box.class_id  = 2
-            box.class_name = "hsv_red"
-            out.append(box)
-            if len(out) >= n:
-                break
-        return out
+    def _red_probability(self, bgr: np.ndarray) -> np.ndarray:
+        """빨강에 대한 0..1 soft score. Hue는 원형 Gaussian으로 계산한다."""
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
+        hue, sat, val = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+        hue_dist = np.minimum(hue, 180.0 - hue)
+        sigma = max(1.0, float(self.get_parameter("hsv.hue_sigma").value))
+        hue_score = np.exp(-0.5 * (hue_dist / sigma) ** 2)
+        sat_center = float(self.get_parameter("hsv.sat_center").value)
+        sat_scale = max(1.0, float(self.get_parameter("hsv.sat_scale").value))
+        sat_score = 1.0 / (1.0 + np.exp(-(sat - sat_center) / sat_scale))
+        val_min = float(self.get_parameter("hsv.val_min").value)
+        val_max = float(self.get_parameter("hsv.val_max_center").value)
+        val_scale = max(1.0, float(self.get_parameter("hsv.val_scale").value))
+        val_low_score = 1.0 / (1.0 + np.exp(-(val - val_min) / 12.0))
+        # 완전히 포화된 LED/건물 조명은 풍선보다 약하게 평가하되 hard cut은 하지 않는다.
+        val_high_score = 1.0 / (1.0 + np.exp((val - val_max) / val_scale))
+        return (hue_score * sat_score * val_low_score * val_high_score).astype(np.float32)
 
     def _detect_hsv(self, bgr: np.ndarray) -> BoundingBox | None:
-        """빨간 영역 HSV 색상 분리 (직접-LOCK/ROI/상태표시용, 최대 후보 1개)."""
-        c = self._hsv_candidates(bgr, 1)
-        return c[0] if c else None
+        """Gaussian red score + 형태 점수로 붉은 원형 후보를 검출한다."""
+        h, w = bgr.shape[:2]
+        red_prob = self._red_probability(bgr)
+        threshold = float(self.get_parameter("hsv.prob_threshold").value)
+        mask = (red_prob >= threshold).astype(np.uint8) * 255
+        # close는 작은 풍선 내부의 압축 노이즈 구멍만 메우며 작은 점을 지우지 않는다.
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, _MORPH_KERNEL)
+        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            return None
+        min_frac  = float(self.get_parameter("hsv.min_area_ratio").value)
+        max_frac  = float(self.get_parameter("hsv.max_area_ratio").value)
+        full_frac = float(self.get_parameter("hsv.full_conf_area_ratio").value)
+        min_circ = float(self.get_parameter("hsv.min_circularity").value)
+        best = None
+        best_score = -1.0
+        for c in cnts:
+            x, y, bw, bh = cv2.boundingRect(c)
+            area_px = float(bw * bh)
+            area_frac = area_px / float(w * h)
+            if area_frac < min_frac or area_frac > max_frac:
+                continue
+            aspect = min(bw, bh) / max(1.0, float(max(bw, bh)))
+            perimeter = cv2.arcLength(c, True)
+            contour_area = cv2.contourArea(c)
+            circularity = (4.0 * np.pi * contour_area / (perimeter * perimeter)
+                           if perimeter > 0 else 1.0)
+            # 1~2px 원거리 점은 contourArea가 0이 될 수 있어 aspect로 대신 평가한다.
+            shape_score = max(float(circularity), float(aspect) * 0.65)
+            if shape_score < min_circ:
+                continue
+            color_score = float(red_prob[y:y + bh, x:x + bw].mean())
+            margin = max(12, 2 * max(bw, bh))
+            px0, py0 = max(0, x - margin), max(0, y - margin)
+            px1, py1 = min(w, x + bw + margin), min(h, y + bh + margin)
+            context = cv2.cvtColor(bgr[py0:py1, px0:px1], cv2.COLOR_BGR2GRAY)
+            texture = float(cv2.Laplacian(context, cv2.CV_32F).var()) if context.size else 1e6
+            texture_scale = max(1.0, float(self.get_parameter("hsv.texture_scale").value))
+            smooth_score = 1.0 / (1.0 + texture / texture_scale)
+            score = (color_score * (0.35 + 0.65 * shape_score) *
+                     (0.5 + 0.5 * aspect) * (0.15 + 0.85 * smooth_score))
+            if score > best_score:
+                best_score = score
+                best = (x, y, bw, bh, area_frac, color_score, shape_score, smooth_score)
+        if best is None:
+            return None
+        x, y, bw, bh, area_frac, color_score, shape_score, smooth_score = best
+        box = BoundingBox()
+        box.x_center  = float((x + bw / 2) / w)
+        box.y_center  = float((y + bh / 2) / h)
+        box.width     = float(bw / w)
+        box.height    = float(bh / h)
+        # confidence = 표적이 클수록 1.0 에 근접(full_frac 에서 포화). 작으면 낮아
+        # state machine 의 임계값을 못 넘어 LOCK 되지 않는다.
+        size_score = min(1.0, area_frac / full_frac) if full_frac > 0 else 1.0
+        box.confidence = float(min(0.60,
+                                   0.45 * color_score + 0.35 * shape_score +
+                                   0.10 * size_score + 0.10 * smooth_score))
+        box.class_id  = 2
+        box.class_name = "hsv_red"
+        return box
 
-    def _absdiff_candidates(self, bgr: np.ndarray, n: int = 1, header=None,
-                            min_area_ratio: float | None = None) -> list:
-        """배경 대비 튀는 점 후보들을 score(대비×크기) 큰 순으로 최대 n개 반환.
-
-        min_area_ratio 를 주면 그 값으로, 없으면 absdiff.min_area_ratio 로 거른다."""
+    def _detect_absdiff(self, bgr: np.ndarray, header=None,
+                        hint: BoundingBox | None = None) -> BoundingBox | None:
+        """배경 대비 튀는 점 검출 (색·형태 무관)."""
         h, w = bgr.shape[:2]
 
         diff_thresh = int(self.get_parameter("absdiff.diff_thresh").value)
@@ -790,8 +874,9 @@ class ArmsDetectionNode(Node):
         bg   = cv2.GaussianBlur(gray, (bg_k, bg_k), 0)
         diff = cv2.absdiff(gray, bg)
         _, mask = cv2.threshold(diff, diff_thresh, 255, cv2.THRESH_BINARY)
-        # 잔점(엣지 노이즈) 제거 → contour 수 급감 → 아래 루프 대폭 가속 + 노이즈 정리
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, _OPEN_KERNEL)
+        # 원거리 풍선은 수 픽셀뿐이라 MORPH_OPEN을 하면 표적 자체가 사라진다.
+        # 작은 구멍만 닫고 아래 면적/클러터/색상 점수로 노이즈를 억제한다.
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, _MORPH_KERNEL)
 
         if header is not None and self.pub_absdiff.get_subscription_count() > 0:
             self.pub_absdiff.publish(mono_to_imgmsg(mask, header))
@@ -800,15 +885,14 @@ class ArmsDetectionNode(Node):
 
         # 장면 클러터 게이팅: blob 이 너무 많으면 하늘이 아니라 어수선한 지상 장면으로
         # 보고 absdiff 결과를 통째로 버린다(빨간풍선 데모 등에서 오검출 억제).
+        # YOLO/HSV 는 이 게이팅과 무관하게 우선 처리되므로 영향 없음.
         max_blobs = int(self.get_parameter("absdiff.max_blobs").value)
         if max_blobs > 0 and len(cnts) > max_blobs:
-            return []
+            return None
 
-        min_frac = (float(self.get_parameter("absdiff.min_area_ratio").value)
-                    if min_area_ratio is None else float(min_area_ratio))
-        min_area = min_frac * w * h
-        full_frac = float(self.get_parameter("absdiff.full_conf_area_ratio").value)
-        scored = []
+        min_area = float(self.get_parameter("absdiff.min_area_ratio").value) * w * h
+        red_prob = self._red_probability(bgr)
+        best, best_score = None, -1.0
         for c in cnts:
             x, y, bw, bh = cv2.boundingRect(c)
             a_px = bw * bh
@@ -818,30 +902,45 @@ class ArmsDetectionNode(Node):
             if patch.size == 0:
                 continue
             contrast = float(patch.max())
-            score = contrast * (a_px ** 0.3)
-            scored.append((score, x, y, bw, bh, contrast))
+            red_score = float(red_prob[y:y + bh, x:x + bw].mean())
+            aspect = min(bw, bh) / max(1.0, float(max(bw, bh)))
+            perimeter = cv2.arcLength(c, True)
+            contour_area = cv2.contourArea(c)
+            circularity = (4.0 * np.pi * contour_area / (perimeter * perimeter)
+                           if perimeter > 0 else 1.0)
+            shape_score = max(float(circularity), float(aspect) * 0.65)
+            # 색을 완전 필수로 하지는 않되, 붉고 둥근 고대비 점을 강하게 우선한다.
+            score = (contrast * (a_px ** 0.3) *
+                     (0.15 + 0.85 * red_score) *
+                     (0.35 + 0.65 * shape_score))
+            if hint is not None:
+                cx = (x + bw / 2.0) / w
+                cy = (y + bh / 2.0) / h
+                dist = _center_dist((cx, cy), (hint.x_center, hint.y_center))
+                proximity = float(np.exp(-0.5 * (dist / 0.06) ** 2))
+                score *= 0.10 + 0.90 * proximity
+            if score > best_score:
+                best_score = score
+                best = (x, y, bw, bh, contrast, red_score, shape_score)
 
-        scored.sort(key=lambda t: t[0], reverse=True)
-        out = []
-        for _score, x, y, bw, bh, contrast in scored[:max(1, n)]:
-            box = BoundingBox()
-            box.x_center  = float((x + bw / 2) / w)
-            box.y_center  = float((y + bh / 2) / h)
-            box.width     = float(bw / w)
-            box.height    = float(bh / h)
-            # confidence = 크기·대비 둘 다 커야 높다.
-            size_factor = min(1.0, (bw * bh) / (full_frac * w * h)) if full_frac > 0 else 1.0
-            contrast_factor = contrast / 255.0
-            box.confidence = float(min(0.99, 0.5 * size_factor + 0.5 * contrast_factor))
-            box.class_id  = 1
-            box.class_name = "absdiff_spot"
-            out.append(box)
-        return out
-
-    def _detect_absdiff(self, bgr: np.ndarray, header=None) -> BoundingBox | None:
-        """배경 대비 튀는 점 검출 (색·형태 무관, 최고 score 1개)."""
-        c = self._absdiff_candidates(bgr, 1, header)
-        return c[0] if c else None
+        if best is None:
+            return None
+        x, y, bw, bh, contrast, red_score, shape_score = best
+        box = BoundingBox()
+        box.x_center  = float((x + bw / 2) / w)
+        box.y_center  = float((y + bh / 2) / h)
+        box.width     = float(bw / w)
+        box.height    = float(bh / h)
+        # confidence = 크기·대비 둘 다 커야 높다. 작은 점/약한 대비는 낮아 LOCK 못 넘긴다.
+        full_frac = float(self.get_parameter("absdiff.full_conf_area_ratio").value)
+        size_factor = min(1.0, (bw * bh) / (full_frac * w * h)) if full_frac > 0 else 1.0
+        contrast_factor = contrast / 255.0
+        box.confidence = float(min(0.60,
+                                   0.35 * size_factor + 0.30 * contrast_factor +
+                                   0.20 * red_score + 0.15 * shape_score))
+        box.class_id  = 1
+        box.class_name = "absdiff_spot"
+        return box
 
     # ------------------------------------------------------------------
     # Debug visualization

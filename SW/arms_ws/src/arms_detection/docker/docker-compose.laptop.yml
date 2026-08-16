@@ -20,9 +20,10 @@ services:
       # and host because FastDDS SHM requires FD passing via Unix socket, which
       # does not work across the container boundary even with ipc: host.
       - FASTRTPS_DEFAULT_PROFILES_FILE=/fastdds_udp.xml
-      - ARMS_MODEL=${ARMS_MODEL:-/models/best.pt}
-      - ARMS_CONF=${ARMS_CONF:-0.5}
+      - ARMS_MODEL=${ARMS_MODEL:-/models/balloon_camera.pt}
+      - ARMS_CONF=${ARMS_CONF:-0.32}
       - ARMS_IOU=${ARMS_IOU:-0.45}
+      - ARMS_IMGSZ=${ARMS_IMGSZ:-320}
       - ARMS_CLASSES=${ARMS_CLASSES:-balloon}
     volumes:
       - ./models:/models:ro    # place .pt model file here

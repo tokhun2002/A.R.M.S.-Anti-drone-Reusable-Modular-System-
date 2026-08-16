@@ -1,12 +1,12 @@
 """
-best.pt → TensorRT FP16 엔진 변환 (ultralytics 방식)
+balloon_camera.pt → TensorRT FP16 엔진 변환 (ultralytics 방식)
 
 ultralytics 의 export 를 쓰면 엔진 파일에 메타데이터(class names / imgsz / task)가
 함께 기록되어, 추론 노드의 `YOLO('...engine')` 가 그대로 로드할 수 있다.
 (raw TensorRT 로 만든 엔진은 이 메타데이터가 없어 ultralytics 가 로드하지 못한다.)
 
-입력 : <models>/best.pt
-출력 : <models>/best.engine   (FP16 양자화)
+입력 : <models>/balloon_camera.pt
+출력 : <models>/balloon_camera.engine   (FP16 양자화)
 
 주의:
   * .engine 은 빌드한 GPU 아키텍처 + TensorRT 버전에 종속된다.
@@ -25,7 +25,7 @@ ultralytics 의 export 를 쓰면 엔진 파일에 메타데이터(class names /
         python3 /tmp/export_trt.py
 
 또는 ultralytics CLI 한 줄로도 동일하다:
-    yolo export model=/models/best.pt format=engine half=True device=0
+    yolo export model=/models/balloon_camera.pt format=engine half=True device=0 imgsz=320
 """
 
 import os
@@ -39,9 +39,10 @@ from pathlib import Path
 
 from ultralytics import YOLO
 
-# 컨테이너에서는 /models/best.pt, 호스트에서 직접 돌릴 땐 repo 경로를 기본값으로.
-_default = Path(__file__).parent / "../arms_ws/src/arms_detection/docker/models/best.pt"
-MODEL_PATH = os.environ.get("ARMS_PT", "/models/best.pt")
+# 컨테이너에서는 /models/balloon_camera.pt, 호스트에서는 repo 모델을 기본값으로.
+_default = Path(__file__).parent / "../arms_ws/src/arms_detection/docker/models/balloon_camera.pt"
+MODEL_PATH = os.environ.get("ARMS_PT", "/models/balloon_camera.pt")
+IMGSZ = int(os.environ.get("ARMS_IMGSZ", "320"))
 if not Path(MODEL_PATH).exists():
     MODEL_PATH = str(_default.resolve())
 
@@ -50,7 +51,7 @@ def main():
     model = YOLO(MODEL_PATH)
 
     print("[INFO] TensorRT 엔진 빌드 시작 (FP16 half=True 고정) — 수 분 소요...")
-    engine_path = model.export(format="engine", half=True, device=0)
+    engine_path = model.export(format="engine", half=True, device=0, imgsz=IMGSZ)
 
     print(f"[INFO] 저장 완료: {engine_path}")
 
