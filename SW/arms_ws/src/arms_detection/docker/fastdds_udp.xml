@@ -14,6 +14,12 @@
     <transport_descriptor>
       <transport_id>udp_transport</transport_id>
       <type>UDPv4</type>
+      <!-- 큰 이미지(image_raw ~1MB)가 UDP 조각으로 올 때 수신/송신 소켓 버퍼가
+           작으면(리눅스 기본 208KB) 조각이 넘쳐 드롭된다 → detection 입력률 급락.
+           버퍼를 16MB로 키운다. ★ 커널 상한도 같이 올려야 실제 반영됨:
+             sudo sysctl -w net.core.rmem_max=16777216 net.core.wmem_max=16777216 -->
+      <sendBufferSize>16777216</sendBufferSize>
+      <receiveBufferSize>16777216</receiveBufferSize>
     </transport_descriptor>
   </transport_descriptors>
 

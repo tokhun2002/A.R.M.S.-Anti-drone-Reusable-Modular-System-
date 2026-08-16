@@ -40,7 +40,7 @@ import cv2
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import Float32MultiArray
 
 from arms_msgs.msg import BoundingBox, DetectionArray
@@ -324,7 +324,7 @@ class ArmsDetectionNode(Node):
         self.declare_parameter("yolo.full_fallback_interval", 5)
         self.declare_parameter("yolo.proposal_crop_px", 192)
         # 검출 처리 해상도(가로 px). 0=원본. 출력은 비율이라 정확도 무관, CV 비용만 절감.
-        self.declare_parameter("proc_width", 640)
+        self.declare_parameter("proc_width", 320)
         self.declare_parameter("publish_debug", True)
 
         # --- HSV proposal (단독 LOCK 금지) ------------------------------------
@@ -352,7 +352,10 @@ class ArmsDetectionNode(Node):
         self.declare_parameter("debug.detector_status", True)
 
         # --- detect-then-track (ROI + CSRT/KCF) ---
-        self.declare_parameter("track.enable", True)          # false=기존 매프레임 검출
+        # False = CSRT/KCF 추적 안 쓰고 TRACK 구간에서도 매 프레임 풀프레임 검출 방식
+        #   (HSV proposal→ROI YOLO + full fallback)으로 표적을 다시 찾는다. 추적기
+        #   드리프트로 표적을 "놓치는(락 풀리는)" 문제를 없앤다. True 로 되돌리면 복원.
+        self.declare_parameter("track.enable", False)         # false=매프레임 풀프레임 검출(추적기 미사용)
         self.declare_parameter("track.tracker_type", "CSRT")  # "CSRT" | "KCF"
         self.declare_parameter("track.confirm_frames", 3)     # 트래킹 시작 연속 검출 수
         self.declare_parameter("track.confirm_dist", 0.035)   # 연속 판정 중심거리(norm)
@@ -415,7 +418,14 @@ class ArmsDetectionNode(Node):
         else:
             self.get_logger().info("ARMS_MODEL unset → detection disabled (HSV proposal only).")
 
-        self.create_subscription(Image, "/arms/image_raw", self._cb_image, qos)
+        # 입력 전송: ARMS_INPUT_COMPRESSED=1 이면 압축(CompressedImage)을 구독·디코드
+        # → 컨테이너로 오는 UDP 데이터량 급감(조각 드롭↓). 아니면 raw Image.
+        if os.environ.get("ARMS_INPUT_COMPRESSED", "0") == "1":
+            self.create_subscription(CompressedImage, "/arms/image_raw/compressed",
+                                     self._cb_compressed, qos)
+            self.get_logger().info("입력: 압축(/arms/image_raw/compressed)")
+        else:
+            self.create_subscription(Image, "/arms/image_raw", self._cb_image, qos)
 
         self.pub_det     = self.create_publisher(DetectionArray, "/arms/detections",    10)
         self.pub_debug   = self.create_publisher(Image,          "/arms/debug_image",   10)
@@ -440,6 +450,30 @@ class ArmsDetectionNode(Node):
     def _cb_image(self, msg: Image):
         if msg.width == 0 or msg.height == 0 or len(msg.data) == 0:
             return   # 빈 프레임(image_publisher 루프 경계 등) → 스킵
+        try:
+            bgr_full = imgmsg_to_bgr(msg)
+        except Exception as e:
+            self.get_logger().warn(f"image convert failed: {e}")
+            return
+        self._process(bgr_full, msg.header)
+
+    def _cb_compressed(self, msg):
+        # 압축(JPEG/PNG) 입력 → BGR 디코드. 컨테이너로 오는 UDP 데이터량을 크게 줄여
+        # image_raw(~1MB) 대비 조각 드롭이 거의 사라진다.
+        if not msg.data:
+            return
+        try:
+            arr = np.frombuffer(msg.data, np.uint8)
+            bgr_full = cv2.imdecode(arr, cv2.IMREAD_COLOR)   # → BGR
+        except Exception as e:
+            self.get_logger().warn(f"compressed decode failed: {e}")
+            return
+        if bgr_full is None:
+            return
+        self._process(bgr_full, msg.header)
+
+    def _process(self, bgr_full, header):
+        """raw/압축 공통 처리 경로. bgr_full(BGR ndarray)와 header 를 받는다."""
         frame_started = time.perf_counter()
         frame_interval_ms = (0.0 if self._last_frame_started is None else
                              (frame_started - self._last_frame_started) * 1000.0)
@@ -456,11 +490,6 @@ class ArmsDetectionNode(Node):
         self._diag_hsv_mask = None
         self._diag_hsv_proposals = []
         self._dbg_boxes = {}
-        try:
-            bgr_full = imgmsg_to_bgr(msg)
-        except Exception as e:
-            self.get_logger().warn(f"image convert failed: {e}")
-            return
         if bgr_full is None or bgr_full.size == 0:
             return
 
@@ -479,7 +508,7 @@ class ArmsDetectionNode(Node):
         tracker_started = time.perf_counter()
         target = self._tracker.update(
             bgr,
-            lambda img, roi=None: self._run_detectors(img, msg.header, roi),
+            lambda img, roi=None: self._run_detectors(img, header, roi),
             cfg)
         update_ms = (time.perf_counter() - tracker_started) * 1000.0
         self._diag["tracker_ms"] = max(
@@ -489,23 +518,23 @@ class ArmsDetectionNode(Node):
 
         if (self._diag_hsv_mask is not None and
                 self.pub_hsv_debug.get_subscription_count() > 0):
-            self._publish_hsv_debug(bgr, msg.header)
+            self._publish_hsv_debug(bgr, header)
 
         out = DetectionArray()
-        out.header = msg.header
+        out.header = header
         if target is not None:
             out.detections.append(target)
         self.pub_det.publish(out)
 
         # ROI 확대 뷰 (유효 타깃 + 구독자 있을 때만) — full-res 에서 크롭
         if target is not None and self.pub_roi.get_subscription_count() > 0:
-            self._publish_roi(bgr_full, target, msg.header,
+            self._publish_roi(bgr_full, target, header,
                               float(self.get_parameter("roi.margin").value))
 
         # 디버그 이미지는 구독자가 있을 때만 그려서 발행 (없으면 발행 비용 전부 절감)
         if bool(self.get_parameter("publish_debug").value) \
                 and self.pub_debug.get_subscription_count() > 0:
-            self._publish_debug(bgr, msg.header, target, self._tracker.state)
+            self._publish_debug(bgr, header, target, self._tracker.state)
 
     def _track_cfg(self) -> dict:
         g = self.get_parameter

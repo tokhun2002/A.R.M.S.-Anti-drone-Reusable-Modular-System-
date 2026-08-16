@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  호스트(비-컨테이너) 노드용 FastDDS 프로파일.
+
+  목적: 큰 이미지(image_raw ~1MB)를 컨테이너(detection)로 UDP 전송할 때 발행 측
+  소켓 버퍼도 키워 조각 드롭을 줄인다. host↔host 통신은 SHM(빠름)을 유지하고,
+  host↔container 통신만 UDP 로 나가되 그 UDP 버퍼를 16MB 로 키운다.
+
+  적용: 호스트에서 노드 실행 전 아래 환경변수 지정.
+    export FASTRTPS_DEFAULT_PROFILES_FILE=<이 파일 절대경로>
+    export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+  ★ 커널 상한도 필요:
+    sudo sysctl -w net.core.rmem_max=16777216 net.core.wmem_max=16777216
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>shm_host</transport_id>
+      <type>SHM</type>
+    </transport_descriptor>
+    <transport_descriptor>
+      <transport_id>udp_host_large</transport_id>
+      <type>UDPv4</type>
+      <sendBufferSize>16777216</sendBufferSize>
+      <receiveBufferSize>16777216</receiveBufferSize>
+    </transport_descriptor>
+  </transport_descriptors>
+
+  <participant profile_name="host_profile" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>shm_host</transport_id>
+        <transport_id>udp_host_large</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

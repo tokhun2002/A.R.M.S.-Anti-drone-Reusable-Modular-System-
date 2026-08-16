@@ -1,309 +1,189 @@
 # arms_detection_node 동작 상세
 
-A.R.M.S. 의 표적(빨간 풍선) 검출 노드. `/arms/image_raw` 를 받아 표적 하나를
-`/arms/detections` 로 발행한다. 한 프로세스 안에서 **YOLO + 고전 CV(HSV·ABSDIFF)**
-를 함께 돌리고, **detect-then-track FSM** 으로 추적 구간 비용을 줄이며, **시간 연속성**
-을 확인해 헛-LOCK 을 막는다.
+A.R.M.S. 의 빨간 풍선 검출 노드. `/arms/image_raw` 를 받아 표적 하나를
+`/arms/detections` 로 발행한다. 구조는 **HSV proposal → ROI YOLO verification**:
+HSV 로 붉은 원형 후보를 싸게 만들고, 그 crop 들을 **YOLO batch 추론 한 번**으로
+확인해 승인된 것만 발행한다. HSV 가 놓치는 경우를 위해 저주기 전체화면 YOLO fallback 을 둔다.
+
+> ⚠️ 과거 버전의 ABSDIFF / cv_fused(HSV+ABSDIFF 융합)는 **현재 코드에 없다.**
+> 검출기는 YOLO + HSV 두 가지뿐이다.
 
 - 코드: `SW/arms_ws/src/arms_detection/arms_detection/arms_detection_node.py`
-- 배포: GPU 도커 컨테이너(`docker-compose.jetson.yml`). 소스는 바인드마운트라
+- 배포: GPU 도커 컨테이너(`docker-compose.jetson.yml`, 소스 바인드마운트).
   코드 수정은 `docker restart docker-arms_detection-1` 로 반영.
 
 ---
 
-## 1. 토픽 / 인터페이스
+## 1. 토픽
 
 | 방향 | 토픽 | 타입 | 설명 |
 | --- | --- | --- | --- |
-| 구독 | `/arms/image_raw` | `sensor_msgs/Image` | 카메라/replay 영상 (rgb8·bgr8·mono8) |
-| 발행 | `/arms/detections` | `arms_msgs/DetectionArray` | 표적 **0 또는 1개** (best 하나) |
+| 구독 | `/arms/image_raw` | `sensor_msgs/Image` | 입력 영상 (rgb8·bgr8·mono8) |
+| 발행 | `/arms/detections` | `arms_msgs/DetectionArray` | 표적 **0 또는 1개** |
 | 발행 | `/arms/roi_image` | `sensor_msgs/Image` | 추적 표적 확대 크롭 (bgr8) |
-| 발행 | `/arms/debug_image` | `sensor_msgs/Image` | 모든 검출기(YOLO/HSV/ABSDIFF/cv_fused) 결과 + 최종 선택 시각화 (bgr8) |
-| 발행 | `/arms/debug_absdiff` | `sensor_msgs/Image` | absdiff 이진 마스크 (mono8) |
-| 발행 | `/arms/detector_status` | `std_msgs/Float32MultiArray` | `[yolo, hsv, absdiff, mode]` — UI 표시용 |
+| 발행 | `/arms/debug_image` | `sensor_msgs/Image` | YOLO/HSV 결과 + 최종 시각화 (bgr8) |
+| 발행 | `/arms/hsv_debug_image` | `sensor_msgs/Image` | HSV 마스크·후보 시각화 (bgr8) |
+| 발행 | `/arms/detector_status` | `std_msgs/Float32MultiArray` | 검출값 + **단계별 처리시간 진단** (§7) |
 
-발행 최적화: `roi_image`·`debug_image`·`debug_absdiff` 는 **구독자가 있을 때만** 그려서
-발행한다(없으면 연산 전부 생략).
-
----
-
-## 2. 전체 파이프라인 (`_cb_image`)
-
-프레임 한 장이 들어올 때마다:
-
-1. **빈 프레임 스킵** (`width/height/data == 0`).
-2. `_frame_i += 1` — YOLO 스로틀용 프레임 카운터.
-3. **BGR 변환** (`imgmsg_to_bgr`): rgb8 이면 채널을 뒤집어 BGR 로.
-4. **다운스케일**: `proc_width`(기본 640) 로 축소해 검출한다(CV 비용 절감).
-   원본(`bgr_full`)은 ROI 확대 크롭용으로 따로 보관. 출력은 정규화 좌표라 정확도 무관.
-5. **`_TargetTracker.update(bgr, detect_fn, cfg)`** 호출 → 발행할 박스(또는 None).
-   여기서 `detect_fn = _run_detectors` 이며, **FSM 이 검출을 언제/어디에 돌릴지 결정**한다.
-6. **`DetectionArray` 발행** — 표적 있으면 1개, 없으면 빈 배열.
-7. 표적 있으면 **ROI 크롭 발행**(full-res 에서), 구독자 있을 때만.
-8. **디버그 이미지 발행**, `publish_debug` 이고 구독자 있을 때만.
-
-> 노드는 한 프레임에 **표적 1개만** 발행한다. 여러 표적 선택은 하지 않는다.
-> control 의 상태머신은 이 박스의 `confidence` 가 `detection_confidence_threshold`
-> (기본 0.32) 이상이고 `lock_duration_sec` 만큼 연속되면 LOCK 한다.
+`roi_image`·`debug_image`·`hsv_debug_image` 는 **구독자가 있을 때만** 그려서 발행한다.
 
 ---
 
-## 3. 검출기 3종 (우선순위: YOLO > 융합 CV > 단일 CV)
+## 2. 파이프라인 (`_cb_image`)
 
-### 3.1 YOLO — `_detect_yolo`
+프레임마다:
 
-같은 프로세스에서 ultralytics 로 직접 추론한다(서브프로세스/서버 없음).
-
-- 입력: **BGR ndarray 그대로**. ultralytics 가 내부에서 RGB 변환하므로 **미리 뒤집으면
-  R/B 가 두 번 바뀌어 빨강 성능이 급락**한다(과거 버그, 지금은 BGR 그대로 넣음).
-- `imgsz`(기본 320), `conf`(기본 0.32 = 카메라 학습모델 F1 최적점), `iou`(0.45)
-  는 환경변수(`ARMS_IMGSZ/ARMS_CONF/ARMS_IOU`)로 주입.
-- 결과 중 **최고 confidence 박스 1개** 를 정규화 좌표로 반환.
-- 모델(`ARMS_MODEL`)/ultralytics 가 없으면(SITL/호스트) **조용히 비활성** → CV 로만 동작.
-
-**OOM/실패 복구 (핵심 안전장치):** TensorRT 엔진은 첫 `predict()` 에서 지연 로딩되는데
-GPU 메모리 부족 등으로 실패할 수 있다. 그때:
-
-- 예외를 잡아 노드가 죽지 않게 한다(죽으면 재시작→CUDA 컨텍스트 미해제로 device busy 폭주).
-- `ARMS_YOLO_RETRY_SEC`(기본 3초) 쿨다운을 걸고 그동안 None 반환(→ CV 폴백).
-- **연속 `ARMS_YOLO_MAX_FAILS`(기본 3)회 실패하면 YOLO 를 영구 비활성**(`self._yolo=None`)
-  하고 CV 로만 동작. (계속 재시도하면 executor 가 블로킹돼 검출이 아예 멈추는 걸 방지.)
-- 이후 한 번이라도 성공하면 실패 카운터를 리셋하고 복구 로그를 남긴다.
-
-### 3.2 HSV — `_detect_hsv` (+ `_red_probability`)
-
-하드 `inRange` 대신 **빨강 soft-확률 맵 + 형태 + 텍스처** 를 결합한다.
-
-- **`_red_probability`**: 픽셀별 0~1 빨강 점수 =
-  `hue_score × sat_score × val_low × val_high`.
-  - hue: OpenCV hue(0~179)에서 빨강이 0/179 양끝에 걸리므로 **원형 hue 거리의 Gaussian**
-    (`hue_sigma`)로 평가 → 경계 하드컷 없음.
-  - sat: 시그모이드(`sat_center/sat_scale`) — 채도 낮으면 감점.
-  - val: 너무 어둡(val_low)거나 완전 포화된 LED/조명(val_high)은 감점(하드컷은 안 함).
-- 확률맵을 `prob_threshold`(0.20)로 이진화 → `MORPH_CLOSE`(작은 구멍만 메움, 소형 점은 보존).
-- 각 컨투어에 대해 게이팅+점수:
-  - **면적 게이트**: `hsv.min_area_ratio ~ max_area_ratio` 밖이면 제외.
-  - **형태 점수**: circularity(원형도) 와 aspect(가로세로비) 중 큰 값. 1~2px 원거리
-    점은 contourArea 가 0이 될 수 있어 aspect 로 대신 평가. `min_circularity` 미만 제외.
-  - **색 점수**: 박스 영역의 `red_prob` 평균.
-  - **텍스처 점수**: 주변(context)의 라플라시안 분산 → **배경이 매끈(하늘)하면 높고,
-    어수선(지상 클러터)하면 낮음**(`texture_scale`). 빨간 건물/현수막 억제.
-  - 최종 score = `color × (0.35+0.65·shape) × (0.5+0.5·aspect) × (0.15+0.85·smooth)`.
-- confidence = `min(0.60, 0.45·color + 0.35·shape + 0.10·size + 0.10·smooth)`.
-  **상한 0.60** — 단독으로는 LOCK 임계값을 넘지 못하게 캡(§5 정책).
-- class_name = `"hsv_red"`.
-
-### 3.3 ABSDIFF — `_detect_absdiff`
-
-색·형태와 무관하게 **배경과 다른 점** 을 찾는다(원거리 소형 표적에 강함).
-
-- gray → `pre_blur` → 배경추정 `bg_blur` Gaussian → `absdiff(gray, bg)` → `diff_thresh`
-  이진화 → `MORPH_CLOSE`(원거리 수-픽셀 표적이 OPEN 으로 사라지지 않게 close 만).
-- **클러터 게이트**: 컨투어 수가 `absdiff.max_blobs`(기본 100) 초과면 어수선한 장면으로
-  보고 통째로 버림.
-- 각 컨투어 점수:
-  - **면적 게이트**: `absdiff.min_area_ratio ~ max_area_ratio`.
-  - **대비**: diff patch 의 최대값.
-  - **색 점수**: `red_prob` 평균 — 색을 필수로 하진 않되(바닥 0.15) 붉은 점을 강하게 우선.
-  - **형태 점수**: circularity/aspect.
-  - score = `contrast × area^0.3 × (0.15+0.85·red) × (0.35+0.65·shape)`.
-  - **`hint`(HSV 박스)가 주어지면** 그 중심 근처일수록 가점(Gaussian proximity) —
-    HSV 와 같은 곳을 보는 점을 우선.
-- confidence = `min(0.60, 0.35·size + 0.30·contrast + 0.20·red + 0.15·shape)`. 상한 0.60.
-- class_name = `"absdiff_spot"`.
+1. 빈 프레임 스킵 → `frame_interval_ms` 기록(입력 간격) → `_frame_i++`.
+2. `_diag` 초기화 (단계별 타이밍 담을 dict).
+3. **BGR 변환**(`imgmsg_to_bgr`, rgb8 은 뒤집음).
+4. **다운스케일**: `proc_width`(기본 640) 로 축소 — 원본은 ROI 크롭용 보관. (입력이 640 이하면 스킵)
+5. **`_TargetTracker.update(bgr, detect_fn, cfg)`** → 발행할 박스. FSM 이 검출을 언제/어디에 돌릴지 결정(§6). `detect_fn = _run_detectors`.
+6. 각 단계 `perf_counter` 로 계측 → `total_ms` → **`_publish_detector_status()`**.
+7. `DetectionArray` 발행(표적 있으면 1개), ROI/debug 영상 발행(구독자 있을 때).
 
 ---
 
-## 4. CV 융합 & YOLO proposal (원거리 표적 살리기)
+## 3. HSV 후보 (`_detect_hsv_candidates` + `_red_probability`)
 
-획득(FULL) 프레임에서의 winner 선정 흐름:
+하드 `inRange` 대신 **빨강 soft-확률 + 형태 + 텍스처** 로 붉은 원형 후보를 뽑는다.
+
+- **`_red_probability`**: 픽셀별 0~1 빨강 점수 = `hue(원형 Gaussian) × sat(sigmoid) × val_low × val_high`.
+  OpenCV hue 의 0/179 경계 빨강을 원형 hue 거리로 평가, 포화 LED/조명은 감점(하드컷 없음).
+  → **프레임 전체 픽셀에 exp/sigmoid 를 계산하므로 이 단계가 고정 연산비용이 크다(§8).**
+- `prob_threshold`(0.20)로 이진화 → `MORPH_CLOSE`(작은 구멍만) → 컨투어.
+- 컨투어별 게이팅·점수: 면적비(`hsv.min/max_area_ratio`), 형태(circularity·aspect, `min_circularity`),
+  색(`red_prob` 평균), 텍스처(주변 라플라시안 분산 → 배경 매끈=하늘 우대, `texture_scale`).
+- 상위 **`hsv.max_candidates`(기본 2)** 개를 반환. confidence 는 크기·색·형태 가중(상한 있음).
+
+---
+
+## 4. ROI YOLO 검증 & 전체화면 fallback (`_detect_acquire`)
+
+획득(FULL) 경로:
+
+1. **HSV 후보 생성**(§3). 없으면 아래 fallback 로.
+2. **`_detect_yolo_proposals_batch`**: 각 후보 중심 주변을 `yolo.proposal_crop_px`(192px)로 크롭 →
+   **여러 crop 을 YOLO batch 추론 1회**(`_detect_yolo_batch`, `ARMS_ROI_IMGSZ`=320)로 확인 →
+   YOLO 가 승인한 박스만 원본 좌표로 역변환. **winner = 최고 confidence.**
+   (crop 을 imgsz 로 확대 추론하므로 원거리 소형 표적도 학습 ROI 크기로 보인다.)
+3. **전체화면 fallback**: ROI 가 아무것도 못 얻었고 `_frame_i % yolo.full_fallback_interval`(5)==0 이면
+   전체 프레임 YOLO 1회(`ARMS_FULL_IMGSZ`=320). HSV 가 색으로 후보를 놓친 경우 보완.
+
+> **최종 판정은 항상 YOLO** 다. HSV 는 "어디를 볼지" 만 제안 → 붉은 건물/조명에 헛-LOCK 되지 않는다.
+
+추적 재검증 경로(`_run_detectors`, roi_box 주어짐): ROI 크롭에 YOLO 1회 → 역변환.
 
 ```mermaid
 flowchart TB
-    Y["전체프레임 YOLO<br/>(YOLO 프레임에서만)"] --> Yq{"검출됨?"}
-    Yq -- 예 --> WY(["winner: YOLO<br/>실측 confidence, cap 없음"])
-    Yq -- 아니오 --> CV["HSV · ABSDIFF 실행"]
-    CV --> Fq{"HSV·ABSDIFF<br/>같은 위치 합의?"}
-    Fq -- 아니오 --> SG(["winner: 단일 CV<br/>hsv_red or absdiff_spot"])
-    Fq -- 예 --> FUSE["cv_fused 생성"]
-    FUSE --> Pq{"YOLO 프레임?"}
-    Pq -- 예 --> PC["융합 위치 192px 크롭<br/>→ YOLO 재추론"]
-    Pq -- 아니오 --> WF(["winner: cv_fused<br/>≤0.60, 시간확인 승격 필요"])
-    PC --> PCq{"검출됨?"}
-    PCq -- 예 --> WY
-    PCq -- 아니오 --> WF
+    A["프레임 (다운스케일 proc_width)"] --> H["HSV 후보 최대 2개<br/>(red_prob + 형태/텍스처)"]
+    H --> Hq{"후보 있음?"}
+    Hq -- 예 --> B["후보 crop 들 → YOLO batch 1회<br/>(ROI 검증, imgsz 320)"]
+    B --> Bq{"YOLO 승인?"}
+    Bq -- 예 --> W(["winner = 최고 conf YOLO 박스"])
+    Bq -- 아니오 --> F
+    Hq -- 아니오 --> F{"5프레임마다<br/>full-frame YOLO?"}
+    F -- 예 --> FF["전체화면 YOLO 1회"]
+    F -- 아니오 --> N(["검출 없음"])
+    FF --> FFq{"검출?"}
+    FFq -- 예 --> W
+    FFq -- 아니오 --> N
 ```
-
-> YOLO 로 확인된 winner 는 CV 가 아니라(`_is_cv_detection` False) **cap/승격 블록을
-> 건너뛰어 실측 confidence 를 그대로** 갖는다 → 빠른·신뢰 LOCK. 반면 cv_fused winner 는
-> 0.60 상한 + 여러 프레임 시간확인 후에야 승격된다(§6.1) → 보수적·느린 LOCK.
-
-### 4.1 `_fuse_cv` — HSV+ABSDIFF 합의
-
-HSV 박스와 ABSDIFF 박스가 **같은 위치**(중심거리 `fusion.max_center_dist`, 박스 크면
-비례 확장)를 가리킬 때만 하나로 융합한다.
-
-- 중심 = confidence 가중 평균, 크기 = 두 박스 중 큰 값.
-- confidence = `min(0.60, 0.5·(w_hsv+w_abs))`. 역시 상한 0.60.
-- class_name = `"cv_fused"`. **두 독립 신호(색/대비)가 합의**했다는 뜻이라 단일 CV 보다 신뢰.
-
-### 4.2 `_detect_yolo_proposal` — CV 위치를 확대해 YOLO 재확인
-
-전체프레임 YOLO 가 놓친 작은 표적을, **CV 융합 위치 주변을 `yolo.proposal_crop_px`(192px)
-고정 크기로 크롭 → YOLO 재추론**한다. ultralytics 가 작은 크롭을 `imgsz` 로 확대하므로
-원본에서 수 픽셀인 풍선도 학습 때 ROI 샘플과 비슷한 크기로 보여 인식된다. 확인되면
-그 YOLO 박스를 full-frame 좌표로 역변환해 채택한다. (FULL 모드에서만 동작.)
 
 ---
 
-## 5. 검출 stack & 획득 정책 (`_detect_stack`)
+## 5. YOLO (`_detect_yolo` / `_detect_yolo_batch`)
 
-한 이미지에 대한 우선순위 파이프라인:
-
-1. `run_yolo` 이면 전체프레임 YOLO.
-2. `need_cv`(= 상태표시 필요 or (allow_cv & YOLO 놓침)) 이면 HSV·ABSDIFF·융합 실행.
-3. YOLO 가 놓쳤고 융합 후보가 있으면 **§4.2 proposal-crop YOLO** 재시도.
-4. `report_status` 면 `/arms/detector_status` 발행.
-5. **winner 선정**: `YOLO > cv_fused > (hsv or absdiff)`. `allow_cv=False` 면 YOLO 만.
-
-**헛-LOCK 방지 정책 (가장 중요):**
-
-- 모든 CV confidence 는 **0.60 상한**이라, 한 프레임의 CV 후보는 confidence 가 낮게
-  유지된다. 이를 LOCK 임계값 위로 올려주는 승격은 **시간 연속성**을 확인한 뒤에만
-  `_TargetTracker` 가 수행한다(§6). 즉 CV 후보는 여러 프레임 같은 위치에서 합의해야만
-  승격되고, 순간적인 빨간 조명/건물은 승격되지 못해 LOCK 되지 않는다.
-- `acquire.yolo_only=True` 로 두면 획득 단계에서 CV 를 아예 배제(YOLO 전용)할 수도 있다
-  (기본 False = CV 후보도 함께 쓰되 시간확인으로 억제).
+- 같은 프로세스에서 ultralytics **TensorRT 엔진**(`balloon_camera.engine`, FP16) 추론.
+- 입력은 **BGR 그대로**(ultralytics 가 내부 RGB 변환 — 미리 뒤집으면 빨강 성능 급락).
+- 입력 크기 두 가지: `ARMS_ROI_IMGSZ`(ROI 크롭용), `ARMS_FULL_IMGSZ`(전체화면용).
+  **정적 엔진은 단일 크기라 둘 다 엔진 빌드 크기(320)와 일치해야 한다**(안 맞으면 추론 실패).
+- **OOM/실패 복구**: 첫 predict 지연로딩이 GPU OOM 등으로 실패해도 노드가 안 죽는다. 쿨다운
+  (`ARMS_YOLO_RETRY_SEC`) 후 재시도, 그동안 검출 보류. 연속 `ARMS_YOLO_MAX_FAILS`(3)회 실패 시
+  YOLO 영구 비활성(엔진/모델 없거나 OOM 이면 HSV 만으로라도 후보는 계속 만든다).
+- `.pt`(PyTorch) 를 직접 로드하면 프레임워크 전체가 올라가 **GPU OOM** 나기 쉽다 → **반드시 `.engine`**
+  (변환: `SW/yolo/export_trt.py`, NvMap 워크어라운드 포함).
 
 ---
 
 ## 6. detect-then-track FSM (`_TargetTracker`)
 
-검출을 매 프레임 전체로 돌리면 비싸고 흔들린다. 그래서 어느 정도 연속 검출되면
-**CSRT/KCF 트래커로 전환해 ROI 만 추적**한다. control 엔 완전히 투명(더 연속적인
-`/arms/detections` 를 낼 뿐). 상태 3개: **ACQUIRE → TRACK → LOST**.
+CSRT/KCF 로 ROI 만 추적해 TRACK 구간 비용을 줄이는 옵션. **`track.enable`** 로 켜고 끈다.
 
-트래커/opencv-contrib 가 없으면 자동으로 **매프레임 검출**로 폴백(기능 정상).
-
-### 6.1 ACQUIRE (`_do_acquire`)
-
-- 매 프레임 `detect_fn` 실행. 없으면 streak 리셋.
-- 검출 중심이 직전과 `confirm_dist`(0.035) 이내면 **`hit_streak` 증가**, 아니면 1로 리셋.
-- 중심을 **등속도 Kalman**(`_CenterKalman`)으로 스무딩.
-- **CV 후보 승격 (핵심):**
-  - `cv_fused` 이고 streak ≥ `cv_confirm_frames`(5) → confidence 를 `cv_confirm_conf`(0.72)로.
-  - `hsv_red` 이고 streak ≥ `hsv_confirm_frames`(8) → confidence 를 `hsv_confirm_conf`(0.68)로.
-  - 그 외 CV → confidence 를 0.60 으로 캡(승격 안 함).
-  - 즉 **순간적인 빨간 조명/건물은 몇 프레임 못 버텨 승격 못 하고**, 진짜 표적만
-    여러 프레임 같은 자리에서 합의해 임계값을 넘는다.
-- `hit_streak ≥ confirm_frames`(3) 이고 트래커 init 성공하면 **TRACK 전환**.
-- 반환: ACQUIRE 중에도 실검출 박스를 그대로 발행(승격된 confidence 포함).
-
-### 6.2 TRACK (`_do_track`)
-
-- CSRT/KCF `update` 로 ROI 추적 → 실패하면 **LOST**.
-- 추적 박스도 Kalman 스무딩 + 모션(속도 EMA) 갱신.
-- `redetect_interval`(10) 프레임마다 **박스 주변 ROI 크롭 재검출**(`detect_fn(roi)`)로
-  드리프트 보정: 검출되면 그 박스로 재init(스냅), 안 되면 `unconfirmed++`.
-- `unconfirmed ≥ max_unconfirmed`(3) 누적되면 드리프트 의심 → **LOST**.
-- 발행 confidence 는 승격된 `_last_conf` 를 유지(추적 중 원래 낮은 CV 점수로 안 떨어짐).
-
-### 6.3 LOST (`_do_lost`)
-
-- 매 프레임 재획득 시도. 검출이 **예측 위치 근처**(Kalman/속도 외삽 + `match_dist`)면
-  재init → **TRACK** 복귀.
-- `reacquire_frames`(8) 안에 못 찾으면 **ACQUIRE** 로.
-- LOST 중엔 **발행 안 함(None)** → control 이 마지막 표적을 홀드.
+- **`track.enable = False` (현재 기본)**: 추적기 미사용. **매 프레임 풀프레임 검출(`_detect_acquire`)**
+  으로 표적을 다시 찾는다. 추적기 드리프트로 표적을 "놓치는(락 풀리는)" 문제가 없다. 대신 매 프레임
+  검출이라 연산은 늘고 Kalman 스무딩/ACQUIRE 시간확인은 생략된다.
+- **`track.enable = True`**: ACQUIRE → TRACK → LOST 3상태.
+  - ACQUIRE: 매 프레임 검출, 연속 `confirm_frames` 회 같은 위치면 CSRT init → TRACK.
+  - TRACK: CSRT 추적 + `redetect_interval` 마다 ROI YOLO 재검증(드리프트 보정). 실패 누적 → LOST.
+  - LOST: 매 프레임 재획득, 예측 근처면 TRACK 복귀, `reacquire_frames` 초과면 ACQUIRE.
 
 ---
 
-## 7. detector_status (UI 연동)
+## 7. detector_status (진단·UI)
 
-`/arms/detector_status` = `Float32MultiArray([yolo, hsv, absdiff, mode])`.
+`Float32MultiArray`, 16개 값. 0~3 은 UI 호환, 4~ 는 성능 진단:
 
-- 각 값: `0~1` = 그 검출기의 confidence, `-1` = off/이번 프레임 미실행, `-2` = 사용불가(YOLO OOM).
-- `mode`: `0` = FULL(전체프레임 획득), `1` = ROI(추적 크롭).
-- `debug.detector_status`(기본 true) 로 on/off. arms_ui 가 SEARCH/LOCK 화면 좌상단에
-  세 검출기 %와 모드를 표시한다(표시 전용 — LOCK 판단에는 영향 없음).
+| idx | 내용 | idx | 내용 |
+| --- | --- | --- | --- |
+| 0 | yolo conf(-1 off, -2 사용불가) | 8 | resize_ms |
+| 1 | hsv conf | 9 | **hsv_ms** |
+| 2 | (미사용, -1) | 10 | **yolo_ms** |
+| 3 | mode(0=FULL,1=ROI) | 11 | tracker_ms |
+| 4 | hsv 후보 수 | 12 | **total_ms** |
+| 5 | yolo 입력 crop 수 | 13 | state(0 ACQUIRE/1 TRACK/2 LOST) |
+| 6 | yolo 승인 수 | 14 | frame_i |
+| 7 | **frame_interval_ms**(입력 간격) | 15 | full_frame(1=전체화면 YOLO) |
+
+arms_ui 가 이 값으로 실시간 성능 패널을 그린다(`ui.diagnostics_panel`).
 
 ---
 
-## 8. 파라미터 레퍼런스
+## 8. 성능 프로파일 (실측) & 최적화 포인트
 
-### 검출기 on/off · 처리
+빨간풍선 영상(640×480), warm, 381프레임 기준:
+
+| 단계 | 평균 | 비고 |
+| --- | --- | --- |
+| resize | ~0 ms | 640 이하라 스킵 |
+| **hsv (red_probability)** | **~26 ms** | 전체 프레임 픽셀별 exp/sigmoid — 고정비용 |
+| **yolo (ROI crop 2개 batch@320)** | **~30 ms** | 후보 수 비례 |
+| tracker | ~2 ms | track.enable=False 라 CSRT 미사용 |
+| **total** | **~58 ms → ~17 Hz 처리 가능** | |
+
+**병목·개선 우선순위:**
+
+1. **입력 전송 (가장 큰 실효 병목).** image_raw 640×480 bgr8 ≈920KB/프레임을 FastDDS **UDP 로
+   컨테이너 경계**로 넘기며 조각화/재조립 → 실측 도착률이 ~10Hz(불안정 0.6~10Hz)로 처리속도보다
+   낮다. **이미지 축소 발행/압축**이 최우선.
+2. **hsv red_probability(~26ms).** `proc_width` 640→320 이면 픽셀 1/4 → ~7ms. total ~58→~40ms.
+3. **yolo(~30ms).** `hsv.max_candidates` 2→1 이면 ROI crop 절반 → ~15ms. `full_fallback_interval`↑도 절감.
+
+---
+
+## 9. 주요 파라미터
+
 | 파라미터 | 기본 | 설명 |
 | --- | --- | --- |
-| `use_yolo` / `use_hsv` / `use_absdiff` | true | 검출기 on/off |
-| `yolo.acquire_interval` | 2 | ACQUIRE/LOST 중 YOLO 를 N프레임마다 실행 |
-| `yolo.proposal_crop_px` | 192 | CV 위치 확대검증 크롭 크기[px] |
-| `proc_width` | 640 | 검출 처리 가로 해상도(0=원본) |
-| `publish_debug` | true | 디버그 영상 발행 |
-
-### HSV
-| 파라미터 | 기본 | 설명 |
-| --- | --- | --- |
-| `hsv.hue_sigma` | 12.0 | 원형 hue Gaussian 폭 |
+| `use_yolo` / `use_hsv` | true | 검출/후보 on/off |
+| `proc_width` | 640 | 검출 처리 가로 해상도(0=원본) — HSV 비용 직결 |
+| `yolo.full_fallback_interval` | 5 | 전체화면 YOLO fallback 주기(프레임) |
+| `yolo.proposal_crop_px` | 192 | HSV 후보 crop 크기[px] |
+| `hsv.max_candidates` | 2 | YOLO 로 검증할 HSV 후보 수 |
 | `hsv.prob_threshold` | 0.20 | 빨강 확률 이진화 임계 |
-| `hsv.sat_center` / `sat_scale` | 75 / 22 | 채도 시그모이드 |
-| `hsv.val_min` / `val_max_center` / `val_scale` | 30 / 225 / 18 | 명도 게이팅 |
-| `hsv.min_area_ratio` / `max_area_ratio` | 0.00003 / 0.02 | 면적비 게이트 |
-| `hsv.full_conf_area_ratio` | 0.01 | confidence 포화 면적비 |
-| `hsv.min_circularity` | 0.20 | 형태 점수 하한 |
-| `hsv.texture_scale` | 120 | 배경 매끈함 스케일 |
-
-### ABSDIFF
-| 파라미터 | 기본 | 설명 |
-| --- | --- | --- |
-| `absdiff.diff_thresh` | 25 | 배경 대비 임계 |
-| `absdiff.bg_blur` / `pre_blur` | 15 / 1 | 배경추정/전처리 Gaussian(홀수) |
-| `absdiff.max_area_ratio` | 0.05 | blob 최대 면적비 |
-| `absdiff.max_blobs` | 100 | 초과 시 장면 클러터로 보고 억제(0=끔) |
-| `absdiff.min_area_ratio` | 0.00003 | blob 최소 면적비 |
-| `absdiff.full_conf_area_ratio` | 0.01 | confidence 포화 면적비 |
-
-### 융합 · 획득 승격
-| 파라미터 | 기본 | 설명 |
-| --- | --- | --- |
-| `fusion.max_center_dist` | 0.035 | HSV↔ABSDIFF 융합 중심 허용거리 |
-| `acquire.yolo_only` | false | 획득을 YOLO 전용으로(CV 배제) |
-| `acquire.cv_confirm_frames` / `cv_confirm_conf` | 5 / 0.72 | cv_fused 승격 조건/값 |
-| `acquire.hsv_confirm_frames` / `hsv_confirm_conf` | 8 / 0.68 | hsv_red 승격 조건/값 |
-| `debug.detector_status` | true | detector_status 발행 |
-
-### detect-then-track
-| 파라미터 | 기본 | 설명 |
-| --- | --- | --- |
-| `track.enable` | true | detect-then-track on/off |
-| `track.tracker_type` | CSRT | "CSRT" \| "KCF" |
-| `track.confirm_frames` | 3 | ACQUIRE→TRACK 연속 검출 수 |
-| `track.confirm_dist` | 0.035 | 연속 판정 중심거리 |
-| `track.redetect_interval` | 10 | TRACK 재검출 주기 |
-| `track.redetect_margin` | 2.0 | 재검출 ROI 크롭 확장배율 |
-| `track.match_dist` | 0.1 | LOST 재획득 예측 게이팅 거리 |
-| `track.reacquire_frames` | 8 | LOST 재획득 창 |
-| `track.max_unconfirmed` | 3 | TRACK 미확인 허용(드리프트 안전장치) |
-| `track.min_box_px` | 4 | 트래커 init 최소 박스 |
+| `hsv.hue_sigma` / `sat_*` / `val_*` | — | 빨강 soft-확률 파라미터 |
+| `hsv.min/max_area_ratio` | 3e-5 / 0.02 | 후보 면적비 게이트 |
+| `hsv.min_circularity` / `texture_scale` | 0.20 / 120 | 형태·텍스처 게이트 |
+| `track.enable` | **false** | false=매프레임 풀프레임 검출, true=CSRT/KCF ROI 추적 |
+| `track.tracker_type` | CSRT | "CSRT"\|"KCF" |
+| `track.confirm_frames` / `redetect_interval` / `reacquire_frames` | 3 / 5 / 8 | FSM 파라미터 |
 | `roi.margin` | 1.8 | ROI 확대 크롭 배율 |
+| `debug.detector_status` / `publish_debug` | true | 진단/디버그 발행 |
 
-### 환경변수 (컨테이너 compose 가 주입)
+### 환경변수 (compose 주입)
+
 | 변수 | 기본 | 설명 |
 | --- | --- | --- |
-| `ARMS_MODEL` | (없음) | YOLO 가중치 경로. 없으면 YOLO 비활성 |
-| `ARMS_CONF` | 0.32 | YOLO confidence 임계 |
-| `ARMS_IOU` | 0.45 | YOLO NMS IoU |
-| `ARMS_IMGSZ` | 320 | YOLO 입력 크기 |
-| `ARMS_YOLO_RETRY_SEC` | 3.0 | 실패 후 재시도 쿨다운 |
-| `ARMS_YOLO_MAX_FAILS` | 3 | 연속 실패 시 YOLO 영구 비활성 |
-
----
-
-## 9. 요약 — 상태별로 무엇이 도는가
-
-| 상황 | detect_fn 경로 | YOLO | CV | 발행 |
-| --- | --- | --- | --- | --- |
-| **ACQUIRE** | 전체프레임 | N프레임마다 + CV위치 확대검증 | HSV·ABSDIFF·융합(시간확인 승격) | 실검출 박스 |
-| **TRACK** | CSRT/KCF 추적 + 주기적 ROI 재검출 | 재검출 때 항상 | ROI 크롭 안 | 추적 박스 |
-| **LOST** | 전체프레임 재획득 | N프레임마다 | 예측근처만 채택 | 없음(홀드) |
-
-**degradation:** YOLO 가 OOM/부재면 자동으로 **CV(HSV+ABSDIFF+융합)만으로** 동작하며,
-시간 연속성 승격 로직은 그대로라 헛-LOCK 억제가 유지된다.
+| `ARMS_MODEL` | `/models/balloon_camera.engine` | YOLO 가중치(없으면 YOLO 비활성) |
+| `ARMS_CONF` / `ARMS_IOU` | 0.32 / 0.45 | YOLO conf/IoU |
+| `ARMS_FULL_IMGSZ` / `ARMS_ROI_IMGSZ` | 320 / 320 | 전체화면/ROI YOLO 입력 크기(엔진 크기와 일치必) |
+| `ARMS_YOLO_RETRY_SEC` / `ARMS_YOLO_MAX_FAILS` | 3.0 / 3 | 실패 재시도/영구비활성 |

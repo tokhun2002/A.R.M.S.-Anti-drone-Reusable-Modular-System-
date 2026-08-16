@@ -12,6 +12,11 @@
   <exec_depend>v4l2_camera</exec_depend>
   <!-- 샘플 비디오 replay (C++) -->
   <exec_depend>image_publisher</exec_depend>
+  <!-- image_transport JPEG 압축 발행: /arms/image_raw/compressed 자동 노출.
+       detection(도커)이 압축을 구독해 컨테이너 경계 UDP 데이터량을 줄인다.
+       v4l2_camera·image_publisher 둘 다 image_transport 발행자라 소스 무관하게 동작. -->
+  <exec_depend>image_transport</exec_depend>
+  <exec_depend>compressed_image_transport</exec_depend>
   <!-- SITL 영상 브리지 -->
   <exec_depend>ros_gz_bridge</exec_depend>
 

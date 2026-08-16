@@ -32,6 +32,9 @@ services:
       # YOLO가 연속 실패하면 검출을 비활성화한다. HSV는 proposal-only라
       # YOLO 없이 단독으로 검출을 발행하지 않는다.
       - ARMS_YOLO_MAX_FAILS=${ARMS_YOLO_MAX_FAILS:-3}
+      # 1=압축(JPEG) 입력 구독(/arms/image_raw/compressed) → 컨테이너로 오는 UDP
+      # 데이터량 급감(조각 드롭↓). 호스트에서 raw→compressed 노드가 떠 있어야 한다.
+      - ARMS_INPUT_COMPRESSED=${ARMS_INPUT_COMPRESSED:-1}
     volumes:
       - ./models:/models:ro # balloon_camera.pt 또는 변환한 .engine
       - ./fastdds_udp.xml:/fastdds_udp.xml:ro
