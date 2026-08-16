@@ -806,7 +806,9 @@ class ArmsUINode(Node):
         scale = max(0.45, h / 1100.0)
         thick = max(1, int(round(scale * 2)))
         x = 10
-        y = int(56 * max(1.0, h / 480.0))     # 상태 라벨(10,30) 아래에서 시작
+        # _draw_overlay 의 err(10,60)·cmd(10,80) 숫자 디버그 텍스트 아래에서 시작해
+        # LOCK/TRACK/FIRE 에서 서로 겹치지 않게 한다.
+        y = int(100 * max(1.0, h / 480.0))
         dy = int(cv2.getTextSize("A", font, scale, thick)[0][1] * 2.2)
 
         # 검출 모드 헤더: FULL=전체프레임(획득), ROI=크롭 안에서만(추적) → '가중치' 전환 확인용
@@ -859,11 +861,6 @@ class ArmsUINode(Node):
         # --- State label ---
         cv2.putText(frame, state, (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
-
-        # --- 현재 P (TRACK/FIRE 때 시간 램프 값 표시) ---
-        if state in ("TRACK", "FIRE"):
-            cv2.putText(frame, f"P {self._latest_state.kp_now:.0f}", (10, h - 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 200, 0), 2)
 
         # --- Lock progress bar (SEARCH / LOCK) ---
         if state in ("SEARCH", "LOCK"):
