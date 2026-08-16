@@ -325,10 +325,19 @@ class ArmsDetectionNode(Node):
         # 헛-LOCK 이 없다. hsv_propose_min_area_ratio 는 '후보'용이라 직접-LOCK 용
         # hsv.min_area_ratio 보다 훨씬 작게(관대하게) 둬서 원거리도 후보로 잡는다.
         self.declare_parameter("acquire.hsv_propose", True)
-        self.declare_parameter("acquire.hsv_max_candidates", 2)     # YOLO 로 검증할 후보 수
+        self.declare_parameter("acquire.hsv_max_candidates", 1)     # YOLO 로 검증할 HSV 후보 수
         self.declare_parameter("acquire.hsv_propose_min_area_ratio", 0.00005)
+        # absdiff 제안: 실외에서 HSV/전체YOLO 가 놓치는 원거리 풍선을 '배경과 다른 점'으로
+        # 잡아 후보로 낸다(주력). YOLO 가 확대 크롭에서 확인. 후보를 먼저 검증한다.
+        self.declare_parameter("acquire.absdiff_propose", True)
+        self.declare_parameter("acquire.absdiff_max_candidates", 2)  # YOLO 로 검증할 absdiff 후보 수
+        self.declare_parameter("acquire.absdiff_propose_min_area_ratio", 0.00005)
         self.declare_parameter("acquire.verify_margin", 4.0)        # 후보 크롭 확장배율(확대량)
         self.declare_parameter("acquire.verify_min_px", 64)         # 크롭 최소 한 변[px]
+        # 확대검증 YOLO conf 임계값(기본 추론보다 낮게 → 낮은 확률 표적도 확인).
+        # 단 최종 LOCK 은 arms_control 의 detection_confidence_threshold 도 넘어야 하므로
+        # 그 값도 이 수준으로 낮춰야 실제로 락이 걸린다.
+        self.declare_parameter("acquire.verify_conf", 0.30)
 
         # SEARCH 진단용: 전체 프레임 경로에서 세 검출기(YOLO/HSV/ABSDIFF) 각각의
         # 검출 여부·confidence 를 /arms/detector_status 로 발행해 UI 가 표시한다.
@@ -485,35 +494,55 @@ class ArmsDetectionNode(Node):
 
         # 초기 획득(전체 프레임): 원거리 풍선은 전체프레임 YOLO 가 놓치므로
         #   1) 전체프레임 YOLO 로 근/중거리 직접 검출
-        #   2) 놓치면 HSV 가 원거리 작은 빨강까지 '후보' 제안 (관대한 최소크기)
-        #   3) 각 후보를 확대 크롭해 YOLO 로 '진짜 풍선인지' 확인 → 확인된 것만 채택
+        #   2) 놓치면 ABSDIFF(주력)·HSV 가 '배경과 다른 점/빨강'을 후보로 제안
+        #   3) 각 후보를 확대 크롭해 낮은 conf 로 YOLO 확인 → 확인된 것만 채택
         # 최종 판단은 항상 YOLO 라 CV 헛검출로 LOCK 되지 않는다(원거리 탐지 + 헛-LOCK 방지).
         interval = max(1, int(self.get_parameter("yolo.acquire_interval").value))
         run_yolo = (self._frame_i % interval == 0)
         report   = bool(self.get_parameter("debug.detector_status").value)
         yolo_on  = bool(self.get_parameter("use_yolo").value)
         use_yolo = yolo_on and self._yolo is not None
-        hsv_propose = (bool(self.get_parameter("acquire.hsv_propose").value)
-                       and bool(self.get_parameter("use_hsv").value))
+        use_hsv     = bool(self.get_parameter("use_hsv").value)
+        use_absdiff = bool(self.get_parameter("use_absdiff").value)
+        hsv_propose = use_hsv and bool(self.get_parameter("acquire.hsv_propose").value)
+        abs_propose = use_absdiff and bool(self.get_parameter("acquire.absdiff_propose").value)
 
         yolo_box = self._detect_yolo(bgr) if (use_yolo and run_yolo) else None
 
         hsv_conf = -1.0
+        abs_conf = -1.0
         verify_box = None
-        do_verify = use_yolo and run_yolo and hsv_propose and yolo_box is None
+        do_verify = (use_yolo and run_yolo and yolo_box is None
+                     and (hsv_propose or abs_propose))
+
         if report or do_verify:
-            pm    = float(self.get_parameter("acquire.hsv_propose_min_area_ratio").value)
-            ncand = max(1, int(self.get_parameter("acquire.hsv_max_candidates").value))
-            cands = self._hsv_candidates(bgr, ncand, pm)
-            hsv_conf = cands[0].confidence if cands else 0.0
+            cands = []
+            # ABSDIFF 후보 먼저(실외 주력) — 검증 우선순위도 앞선다.
+            if abs_propose or (report and use_absdiff):
+                amin = float(self.get_parameter("acquire.absdiff_propose_min_area_ratio").value)
+                an   = max(1, int(self.get_parameter("acquire.absdiff_max_candidates").value))
+                ac = self._absdiff_candidates(bgr, an, None, amin)
+                abs_conf = ac[0].confidence if ac else 0.0
+                if abs_propose:
+                    cands += ac
+            # HSV 후보(빨강).
+            if hsv_propose or (report and use_hsv):
+                hmin = float(self.get_parameter("acquire.hsv_propose_min_area_ratio").value)
+                hn   = max(1, int(self.get_parameter("acquire.hsv_max_candidates").value))
+                hc = self._hsv_candidates(bgr, hn, hmin)
+                hsv_conf = hc[0].confidence if hc else 0.0
+                if hsv_propose:
+                    cands += hc
+
             if do_verify and cands:
+                vconf   = float(self.get_parameter("acquire.verify_conf").value)
                 vmargin = float(self.get_parameter("acquire.verify_margin").value)
                 vmin    = int(self.get_parameter("acquire.verify_min_px").value)
                 for cand in cands:
                     crop, off = self._crop_for_verify(bgr, cand, vmargin, vmin)
                     if crop is None:
                         continue
-                    vb = self._detect_yolo(crop)         # 확대 크롭에서 YOLO 확인
+                    vb = self._detect_yolo(crop, conf=vconf)   # 확대 크롭에서 낮은 conf 로 YOLO 확인
                     if vb is not None:
                         verify_box = self._remap_from_crop(vb, off, bgr.shape[1], bgr.shape[0])
                         break
@@ -530,13 +559,10 @@ class ArmsDetectionNode(Node):
                 yv = -1.0
             else:
                 yv = float(yb.confidence) if yb is not None else 0.0
-            if bool(self.get_parameter("use_absdiff").value):
-                ab = self._detect_absdiff(bgr, None)
-                av = float(ab.confidence) if ab is not None else 0.0
-            else:
-                av = -1.0
+            hv = hsv_conf if use_hsv else -1.0
+            av = abs_conf if use_absdiff else -1.0
             msg = Float32MultiArray()
-            msg.data = [yv, hsv_conf, av, 0.0]           # [yolo, hsv, absdiff, mode=FULL]
+            msg.data = [yv, hv, av, 0.0]                  # [yolo, hsv, absdiff, mode=FULL]
             self.pub_detstatus.publish(msg)
 
         return winner
@@ -639,9 +665,11 @@ class ArmsDetectionNode(Node):
     # Detectors
     # ------------------------------------------------------------------
 
-    def _detect_yolo(self, bgr: np.ndarray) -> BoundingBox | None:
+    def _detect_yolo(self, bgr: np.ndarray, conf: float | None = None) -> BoundingBox | None:
         """같은 프로세스에서 YOLO 추론 → 최고 confidence 박스 하나 (normalized).
 
+        conf 를 주면 그 confidence 임계값으로 추론한다(없으면 기본 self._yolo_conf).
+        확대검증(verify)에선 낮은 conf 로 호출해 낮은 확률의 표적도 확인한다.
         엔진 로딩/추론이 GPU OOM 등으로 실패해도 노드를 죽이지 않는다. 실패하면
         쿨다운을 걸고 None(=이번 프레임 YOLO 스킵, HSV/ABSDIFF 폴백)을 반환하며,
         쿨다운 후 자동으로 다시 시도한다. 같은 프로세스 안에서 재시도하므로 재시작
@@ -652,10 +680,11 @@ class ArmsDetectionNode(Node):
         now = time.monotonic()
         if now < self._yolo_retry_after:
             return None   # 최근 실패 → 쿨다운 동안 YOLO 건너뜀
+        conf_th = self._yolo_conf if conf is None else float(conf)
         h, w = bgr.shape[:2]
         rgb = np.ascontiguousarray(bgr[:, :, ::-1])   # 모델은 RGB 기대
         try:
-            res = self._yolo.predict(rgb, conf=self._yolo_conf, iou=self._yolo_iou,
+            res = self._yolo.predict(rgb, conf=conf_th, iou=self._yolo_iou,
                                      verbose=False)
         except Exception as e:
             self._yolo_fail_count += 1
@@ -739,8 +768,11 @@ class ArmsDetectionNode(Node):
         c = self._hsv_candidates(bgr, 1)
         return c[0] if c else None
 
-    def _detect_absdiff(self, bgr: np.ndarray, header=None) -> BoundingBox | None:
-        """배경 대비 튀는 점 검출 (색·형태 무관)."""
+    def _absdiff_candidates(self, bgr: np.ndarray, n: int = 1, header=None,
+                            min_area_ratio: float | None = None) -> list:
+        """배경 대비 튀는 점 후보들을 score(대비×크기) 큰 순으로 최대 n개 반환.
+
+        min_area_ratio 를 주면 그 값으로, 없으면 absdiff.min_area_ratio 로 거른다."""
         h, w = bgr.shape[:2]
 
         diff_thresh = int(self.get_parameter("absdiff.diff_thresh").value)
@@ -768,13 +800,15 @@ class ArmsDetectionNode(Node):
 
         # 장면 클러터 게이팅: blob 이 너무 많으면 하늘이 아니라 어수선한 지상 장면으로
         # 보고 absdiff 결과를 통째로 버린다(빨간풍선 데모 등에서 오검출 억제).
-        # YOLO/HSV 는 이 게이팅과 무관하게 우선 처리되므로 영향 없음.
         max_blobs = int(self.get_parameter("absdiff.max_blobs").value)
         if max_blobs > 0 and len(cnts) > max_blobs:
-            return None
+            return []
 
-        min_area = float(self.get_parameter("absdiff.min_area_ratio").value) * w * h
-        best, best_score = None, -1.0
+        min_frac = (float(self.get_parameter("absdiff.min_area_ratio").value)
+                    if min_area_ratio is None else float(min_area_ratio))
+        min_area = min_frac * w * h
+        full_frac = float(self.get_parameter("absdiff.full_conf_area_ratio").value)
+        scored = []
         for c in cnts:
             x, y, bw, bh = cv2.boundingRect(c)
             a_px = bw * bh
@@ -785,26 +819,29 @@ class ArmsDetectionNode(Node):
                 continue
             contrast = float(patch.max())
             score = contrast * (a_px ** 0.3)
-            if score > best_score:
-                best_score = score
-                best = (x, y, bw, bh, contrast)
+            scored.append((score, x, y, bw, bh, contrast))
 
-        if best is None:
-            return None
-        x, y, bw, bh, contrast = best
-        box = BoundingBox()
-        box.x_center  = float((x + bw / 2) / w)
-        box.y_center  = float((y + bh / 2) / h)
-        box.width     = float(bw / w)
-        box.height    = float(bh / h)
-        # confidence = 크기·대비 둘 다 커야 높다. 작은 점/약한 대비는 낮아 LOCK 못 넘긴다.
-        full_frac = float(self.get_parameter("absdiff.full_conf_area_ratio").value)
-        size_factor = min(1.0, (bw * bh) / (full_frac * w * h)) if full_frac > 0 else 1.0
-        contrast_factor = contrast / 255.0
-        box.confidence = float(min(0.99, 0.5 * size_factor + 0.5 * contrast_factor))
-        box.class_id  = 1
-        box.class_name = "absdiff_spot"
-        return box
+        scored.sort(key=lambda t: t[0], reverse=True)
+        out = []
+        for _score, x, y, bw, bh, contrast in scored[:max(1, n)]:
+            box = BoundingBox()
+            box.x_center  = float((x + bw / 2) / w)
+            box.y_center  = float((y + bh / 2) / h)
+            box.width     = float(bw / w)
+            box.height    = float(bh / h)
+            # confidence = 크기·대비 둘 다 커야 높다.
+            size_factor = min(1.0, (bw * bh) / (full_frac * w * h)) if full_frac > 0 else 1.0
+            contrast_factor = contrast / 255.0
+            box.confidence = float(min(0.99, 0.5 * size_factor + 0.5 * contrast_factor))
+            box.class_id  = 1
+            box.class_name = "absdiff_spot"
+            out.append(box)
+        return out
+
+    def _detect_absdiff(self, bgr: np.ndarray, header=None) -> BoundingBox | None:
+        """배경 대비 튀는 점 검출 (색·형태 무관, 최고 score 1개)."""
+        c = self._absdiff_candidates(bgr, 1, header)
+        return c[0] if c else None
 
     # ------------------------------------------------------------------
     # Debug visualization

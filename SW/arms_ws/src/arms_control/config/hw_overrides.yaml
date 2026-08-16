@@ -23,7 +23,7 @@ arms_control_node:
       cell_count: 4
       cell_full_v: 4.2
       cell_empty_v: 3.5
-      voltage_offset: 0.6   # 실측 대비 0.6V 낮게 뜨는 것 보정 (FC 캘리브레이션 하면 0 으로)
+      voltage_offset: 0.0   # 보정 없음(원래 raw 전압 그대로). 필요 시 값 조정
 
     # 실기체: 발사 잠금장치 서보 활성화 (핀15 PWM1, pwmchip0 ch0).
     #   전제: jetson-io 로 핀15 PWM1 pinmux 설정 + /sys/class/pwm 쓰기 권한(99-gpio.rules).
@@ -35,6 +35,10 @@ arms_control_node:
       # 사람이 조종기 LAUNCH(buttons[3]) 를 눌러야 추격이 시작된다.
       # control_params.yaml 은 SITL 편의를 위해 true 다.
       sitl_auto_launch: false
+      # 원거리 획득(absdiff후보→YOLO 확대검증, 낮은 conf)이 실제 LOCK 되도록
+      # 임계값을 낮춘다. 전체프레임 YOLO 는 ARMS_CONF(0.5)로 걸러지므로 근거리
+      # 헛-LOCK 은 그대로 억제된다. detection 의 acquire.verify_conf 이하로 둘 것.
+      detection_confidence_threshold: 0.25
 
     control:
       # ── 실기체 PID (미측정) ──────────────────────────────────────────────

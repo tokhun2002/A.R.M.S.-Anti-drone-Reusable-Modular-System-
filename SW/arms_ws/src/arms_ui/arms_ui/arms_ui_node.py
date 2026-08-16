@@ -129,7 +129,15 @@ class ArmsUINode(Node):
         self._fullscreen = self.get_parameter("ui.fullscreen").value
         self._keep_aspect = True    # True=레터박스(비율 유지, 잘림 없음), False=강제 스트레치
 
+        # 터치(=마우스 클릭)로 누르는 전원 종료 버튼. 누르면 즉시 끄지 않고 확인 받는다.
+        self.declare_parameter("ui.power_button", True)
+        self.declare_parameter("ui.power_off_cmd", "systemctl poweroff")
+        self._confirm_shutdown = False    # 확인 다이얼로그 표시 중 여부
+        self._btn_rects = {}              # 버튼 히트박스(원본 프레임 좌표): name→(x1,y1,x2,y2)
+        self._fit_xform = (0.0, 0.0, 1.0, 1.0)   # 표시좌표→원본좌표 역변환(x0,y0,sx,sy)
+
         cv2.namedWindow("A.R.M.S.", cv2.WINDOW_NORMAL)
+        cv2.setMouseCallback("A.R.M.S.", self._on_mouse)
         if self._fullscreen:
             # 작업표시줄·타이틀바·상단바까지 가리는 진짜 전체화면
             cv2.setWindowProperty(
@@ -352,8 +360,12 @@ class ArmsUINode(Node):
             self._draw_detector_status(frame)
         # kill 스위치 ON 이면 자동/수동 무관하게 화면 중앙에 크게 경고 (최상단).
         self._draw_kill_banner(frame)
+        # 전원 버튼(+확인 다이얼로그)은 최상단에 그린다(원본 좌표계, 터치 히트박스 기록).
+        self._draw_power_ui(frame)
         if self._fullscreen:
             frame = self._fit_to_window(frame)
+        else:
+            self._fit_xform = (0.0, 0.0, 1.0, 1.0)   # 창 모드: 표시=원본 좌표(항등)
         cv2.imshow("A.R.M.S.", frame)
         cv2.waitKey(1)
 
@@ -385,11 +397,14 @@ class ArmsUINode(Node):
         """
         win_w, win_h = self._screen_w, self._screen_h
         if win_w <= 0 or win_h <= 0:
+            self._fit_xform = (0.0, 0.0, 1.0, 1.0)
             return frame
+        h, w = frame.shape[:2]
         if not self._keep_aspect:
+            # 강제 스트레치: x/y 배율이 다름, 여백 없음.
+            self._fit_xform = (0.0, 0.0, win_w / w, win_h / h)
             return cv2.resize(frame, (win_w, win_h),
                               interpolation=cv2.INTER_LINEAR)
-        h, w = frame.shape[:2]
         scale = min(win_w / w, win_h / h)
         new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
         resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
@@ -397,6 +412,8 @@ class ArmsUINode(Node):
         x0 = (win_w - new_w) // 2
         y0 = (win_h - new_h) // 2
         canvas[y0:y0 + new_h, x0:x0 + new_w] = resized
+        # 표시(canvas)좌표 → 원본프레임 좌표 역변환 파라미터 저장(터치 매핑용).
+        self._fit_xform = (float(x0), float(y0), float(scale), float(scale))
         return canvas
 
     def _draw_roi_pip(self, frame):
@@ -480,6 +497,101 @@ class ArmsUINode(Node):
         scale = (w * 0.8) / max(1, base)
         self._put_center_text(frame, text, h // 2, (255, 255, 255), scale, 4)
 
+    # ------------------------------------------------------------------
+    # 전원 종료 버튼 (터치/클릭) + 확인 다이얼로그
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _put_text_in_rect(frame, text, x1, y1, x2, y2, color, scale, thick):
+        """사각형 중앙에 외곽선+본문 텍스트."""
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
+        tx = x1 + ((x2 - x1) - tw) // 2
+        ty = y1 + ((y2 - y1) + th) // 2
+        cv2.putText(frame, text, (tx, ty), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
+        cv2.putText(frame, text, (tx, ty), font, scale, color, thick, cv2.LINE_AA)
+
+    def _draw_power_ui(self, frame):
+        """우상단 전원(OFF) 버튼과, 눌렀을 때의 종료 확인 다이얼로그를 그린다.
+        터치 히트박스는 self._btn_rects(원본 프레임 좌표)에 기록한다."""
+        self._btn_rects = {}
+        if not self.get_parameter("ui.power_button").value:
+            self._confirm_shutdown = False
+            return
+        h, w = frame.shape[:2]
+        m  = max(8, int(h * 0.02))
+        bs = max(46, int(h * 0.12))
+        x2, y1 = w - m, m
+        x1, y2 = x2 - bs, y1 + bs
+        self._btn_rects["power"] = (x1, y1, x2, y2)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (30, 30, 200), -1)   # 빨강(BGR)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
+        self._put_text_in_rect(frame, "OFF", x1, y1, x2, y2,
+                               (255, 255, 255), max(0.5, bs / 90.0), 2)
+
+        if self._confirm_shutdown:
+            self._draw_confirm_dialog(frame)
+
+    def _draw_confirm_dialog(self, frame):
+        """화면 중앙에 '정말 끄겠습니까?' 확인 모달 (YES/NO 버튼)."""
+        h, w = frame.shape[:2]
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)      # 화면 어둡게
+        bw, bh = int(w * 0.6), int(h * 0.42)
+        bx1, by1 = (w - bw) // 2, (h - bh) // 2
+        bx2, by2 = bx1 + bw, by1 + bh
+        cv2.rectangle(frame, (bx1, by1), (bx2, by2), (45, 45, 45), -1)
+        cv2.rectangle(frame, (bx1, by1), (bx2, by2), (255, 255, 255), 2)
+        self._put_text_in_rect(frame, "SHUT DOWN?", bx1, by1, bx2,
+                               by1 + int(bh * 0.42), (255, 255, 255),
+                               max(0.7, w / 900.0), 2)
+        # YES / NO 버튼
+        btn_w, btn_h = int(bw * 0.38), int(bh * 0.30)
+        gap = int(bw * 0.08)
+        bxs = bx1 + (bw - (btn_w * 2 + gap)) // 2
+        byb = by2 - btn_h - int(bh * 0.12)
+        yx1, yx2 = bxs, bxs + btn_w
+        nx1, nx2 = yx2 + gap, yx2 + gap + btn_w
+        cv2.rectangle(frame, (yx1, byb), (yx2, byb + btn_h), (30, 30, 200), -1)  # YES 빨강
+        cv2.rectangle(frame, (nx1, byb), (nx2, byb + btn_h), (90, 110, 90), -1)  # NO 회색초록
+        self._btn_rects["yes"] = (yx1, byb, yx2, byb + btn_h)
+        self._btn_rects["no"]  = (nx1, byb, nx2, byb + btn_h)
+        bscale = max(0.6, btn_h / 70.0)
+        self._put_text_in_rect(frame, "YES", yx1, byb, yx2, byb + btn_h, (255, 255, 255), bscale, 2)
+        self._put_text_in_rect(frame, "NO",  nx1, byb, nx2, byb + btn_h, (255, 255, 255), bscale, 2)
+
+    def _on_mouse(self, event, x, y, flags, param):
+        """터치=좌클릭. 표시좌표를 원본좌표로 역변환해 버튼 히트박스와 비교."""
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+        x0, y0, sx, sy = self._fit_xform
+        rx = (x - x0) / sx if sx else x
+        ry = (y - y0) / sy if sy else y
+
+        def hit(name):
+            r = self._btn_rects.get(name)
+            return r is not None and r[0] <= rx <= r[2] and r[1] <= ry <= r[3]
+
+        if self._confirm_shutdown:
+            if hit("yes"):
+                self._confirm_shutdown = False
+                self._do_power_off()
+            elif hit("no"):
+                self._confirm_shutdown = False       # 취소
+        elif hit("power"):
+            self._confirm_shutdown = True             # 확인 다이얼로그 띄움(바로 안 끔)
+
+    def _do_power_off(self):
+        """확인된 경우에만 전원 종료 명령 실행."""
+        cmd = str(self.get_parameter("ui.power_off_cmd").value)
+        self.get_logger().warn(f"전원 종료 확인됨 → 실행: {cmd}")
+        try:
+            subprocess.Popen(cmd, shell=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            self.get_logger().error(f"전원 종료 명령 실패: {e}")
+
     def _draw_crosshair(self, frame):
         """화면 정중앙 조준 십자선 — 자동/수동 모두 항상 표시."""
         h, w = frame.shape[:2]
@@ -508,7 +620,11 @@ class ArmsUINode(Node):
         thick = max(1, int(round(scale * 2)))
         (tw, th), bl = cv2.getTextSize(text, font, scale, thick)
         m = 12
-        x, y = w - tw - m, th + m         # 우측 상단, y=텍스트 baseline
+        # 우상단 전원 버튼 아래에 배치(겹침 방지).
+        top = th + m
+        if self.get_parameter("ui.power_button").value:
+            top += max(8, int(h * 0.02)) + max(46, int(h * 0.12)) + 8
+        x, y = w - tw - m, top          # 우측 상단(버튼 아래), y=텍스트 baseline
         # 배경 박스 없이 검은 외곽선 + 흰 글씨만 (영상 위 최소 가독성).
         cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
         cv2.putText(frame, text, (x, y), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
