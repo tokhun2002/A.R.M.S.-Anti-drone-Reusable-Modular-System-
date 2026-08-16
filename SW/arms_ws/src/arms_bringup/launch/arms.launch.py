@@ -63,9 +63,10 @@ def generate_launch_description():
         DeclareLaunchArgument("start_detection", default_value="true",
                               description="detection(YOLO) 도커 컨테이너 자동 기동 여부"),
         DeclareLaunchArgument(
-            "model", default_value="/models/balloon.engine",
+            "model", default_value="/models/balloon_camera.engine",
             description="detection 컨테이너가 로드할 가중치(컨테이너 내부 경로). "
-                        "기본=/models/balloon.engine, 드론추적=/models/drone.engine"),
+                        "기본=/models/balloon_camera.engine(카메라 학습모델 FP16 TRT), "
+                        "드론추적=/models/drone.engine"),
     ]
 
     # 검출 컨테이너 자동 기동 (docker compose up -d — 멱등). 컨테이너의 arms_detection_node

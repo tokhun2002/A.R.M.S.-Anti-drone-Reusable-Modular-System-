@@ -87,9 +87,9 @@ def generate_launch_description():
         DeclareLaunchArgument("start_detection", default_value="true",
                               description="detection(YOLO) 도커 컨테이너 자동 기동 여부"),
         DeclareLaunchArgument(
-            "model", default_value="/models/balloon_camera.pt",
+            "model", default_value="/models/balloon_camera.engine",
             description="detection 컨테이너가 로드할 가중치(컨테이너 내부 경로). "
-                        "기본=/models/balloon_camera.pt"),
+                        "기본=/models/balloon_camera.engine (FP16 TensorRT)"),
     ]
 
     # 검출: arms.launch.py 와 동일하게 도커 컨테이너를 자동 기동한다(멱등). 컨테이너의

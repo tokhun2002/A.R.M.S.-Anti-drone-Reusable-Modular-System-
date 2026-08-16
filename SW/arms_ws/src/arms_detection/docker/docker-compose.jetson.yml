@@ -21,10 +21,13 @@ services:
       # and host because FastDDS SHM requires FD passing via Unix socket, which
       # does not work across the container boundary even with ipc: host.
       - FASTRTPS_DEFAULT_PROFILES_FILE=/fastdds_udp.xml
-      - ARMS_MODEL=${ARMS_MODEL:-/models/balloon_camera.pt}
+      - ARMS_MODEL=${ARMS_MODEL:-/models/balloon_camera.engine}
       - ARMS_CONF=${ARMS_CONF:-0.32}
       - ARMS_IOU=${ARMS_IOU:-0.45}
-      - ARMS_FULL_IMGSZ=${ARMS_FULL_IMGSZ:-512}
+      # 정적 TensorRT 엔진(balloon_camera.engine)은 단일 크기(320)로 빌드됨 →
+      # full/ROI 둘 다 320 으로 맞춰야 한다. (512 로 두면 full-frame 추론이
+      # 엔진 크기와 안 맞아 실패). .pt 나 dynamic 엔진이면 512 도 가능.
+      - ARMS_FULL_IMGSZ=${ARMS_FULL_IMGSZ:-320}
       - ARMS_ROI_IMGSZ=${ARMS_ROI_IMGSZ:-320}
       # YOLO가 연속 실패하면 검출을 비활성화한다. HSV는 proposal-only라
       # YOLO 없이 단독으로 검출을 발행하지 않는다.
