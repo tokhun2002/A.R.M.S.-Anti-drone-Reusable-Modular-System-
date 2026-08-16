@@ -18,28 +18,36 @@ HSV 로 붉은 원형 후보를 싸게 만들고, 그 crop 들을 **YOLO batch �
 
 | 방향 | 토픽 | 타입 | 설명 |
 | --- | --- | --- | --- |
-| 구독 | `/arms/image_raw` | `sensor_msgs/Image` | 입력 영상 (rgb8·bgr8·mono8) |
+| 구독 | `/arms/image_raw` | `sensor_msgs/Image` | 입력 영상 (rgb8·bgr8·mono8) — 기본 경로 |
+| 구독 | `/arms/image_raw/compressed` | `sensor_msgs/CompressedImage` | 입력 영상(JPEG/PNG) — `ARMS_INPUT_COMPRESSED=1` 일 때 (§2) |
 | 발행 | `/arms/detections` | `arms_msgs/DetectionArray` | 표적 **0 또는 1개** |
 | 발행 | `/arms/roi_image` | `sensor_msgs/Image` | 추적 표적 확대 크롭 (bgr8) |
 | 발행 | `/arms/debug_image` | `sensor_msgs/Image` | YOLO/HSV 결과 + 최종 시각화 (bgr8) |
 | 발행 | `/arms/hsv_debug_image` | `sensor_msgs/Image` | HSV 마스크·후보 시각화 (bgr8) |
 | 발행 | `/arms/detector_status` | `std_msgs/Float32MultiArray` | 검출값 + **단계별 처리시간 진단** (§7) |
 
-`roi_image`·`debug_image`·`hsv_debug_image` 는 **구독자가 있을 때만** 그려서 발행한다.
+입력은 **둘 중 하나만** 구독한다: `ARMS_INPUT_COMPRESSED=1` 이면 `.../compressed`(디코드),
+아니면 raw `image_raw`. `roi_image`·`debug_image`·`hsv_debug_image` 는 **구독자가 있을 때만**
+그려서 발행한다.
 
 ---
 
-## 2. 파이프라인 (`_cb_image`)
+## 2. 파이프라인 (`_cb_image` / `_cb_compressed` → `_process`)
 
-프레임마다:
+입력 콜백은 얇다. `_cb_image`(raw)와 `_cb_compressed`(JPEG/PNG → `cv2.imdecode`)가 각각
+BGR ndarray 로 만들어 공통 `_process(bgr_full, header)` 로 넘긴다. **압축 입력**은
+컨테이너로 오는 UDP 데이터량을 크게 줄여(≈920KB → 수십 KB) 경계 조각 드롭을 없앤다(§8).
+
+`_process` 는 프레임마다:
 
 1. 빈 프레임 스킵 → `frame_interval_ms` 기록(입력 간격) → `_frame_i++`.
 2. `_diag` 초기화 (단계별 타이밍 담을 dict).
-3. **BGR 변환**(`imgmsg_to_bgr`, rgb8 은 뒤집음).
-4. **다운스케일**: `proc_width`(기본 640) 로 축소 — 원본은 ROI 크롭용 보관. (입력이 640 이하면 스킵)
-5. **`_TargetTracker.update(bgr, detect_fn, cfg)`** → 발행할 박스. FSM 이 검출을 언제/어디에 돌릴지 결정(§6). `detect_fn = _run_detectors`.
-6. 각 단계 `perf_counter` 로 계측 → `total_ms` → **`_publish_detector_status()`**.
-7. `DetectionArray` 발행(표적 있으면 1개), ROI/debug 영상 발행(구독자 있을 때).
+3. **다운스케일**: `proc_width`(기본 320) 로 축소 — 원본(`bgr_full`)은 ROI 크롭용 보관. (입력이 그보다 작으면 스킵)
+4. **`_TargetTracker.update(bgr, detect_fn, cfg)`** → 발행할 박스. FSM 이 검출을 언제/어디에 돌릴지 결정(§6). `detect_fn = _run_detectors`.
+5. 각 단계 `perf_counter` 로 계측 → `total_ms` → **`_publish_detector_status()`**.
+6. `DetectionArray` 발행(표적 있으면 1개), ROI/debug 영상 발행(구독자 있을 때).
+
+> BGR 변환은 콜백에서 끝난다(raw 는 `imgmsg_to_bgr`, rgb8 은 뒤집음 / 압축은 `imdecode` 가 바로 BGR).
 
 ---
 
@@ -138,25 +146,34 @@ arms_ui 가 이 값으로 실시간 성능 패널을 그린다(`ui.diagnostics_p
 
 ---
 
-## 8. 성능 프로파일 (실측) & 최적화 포인트
+## 8. 성능 프로파일 (실측) & 최적화 이력
 
-빨간풍선 영상(640×480), warm, 381프레임 기준:
+빨간풍선 영상(`red_ballon_*`) 30fps 발행, 압축 입력, warm, 739프레임/30초 기준:
 
 | 단계 | 평균 | 비고 |
 | --- | --- | --- |
-| resize | ~0 ms | 640 이하라 스킵 |
-| **hsv (red_probability)** | **~26 ms** | 전체 프레임 픽셀별 exp/sigmoid — 고정비용 |
-| **yolo (ROI crop 2개 batch@320)** | **~30 ms** | 후보 수 비례 |
+| resize | ~1 ms | 원본→320 축소 |
+| **hsv (red_probability)** | **~7.6 ms** | `proc_width=320` — 픽셀별 exp/sigmoid 고정비용(640 대비 1/4) |
+| **yolo (ROI crop batch@320)** | **~25 ms** | 후보 수 비례 |
 | tracker | ~2 ms | track.enable=False 라 CSRT 미사용 |
-| **total** | **~58 ms → ~17 Hz 처리 가능** | |
+| **total** | **median ~35.7 ms → ~28 Hz 처리 여력** | |
 
-**병목·개선 우선순위:**
+측정: **입력 24.6Hz, 검출 발행 24.6Hz (1:1 추종)**. 처리여력(~28Hz)이 입력보다 커
+프레임 드롭 없이 따라간다.
 
-1. **입력 전송 (가장 큰 실효 병목).** image_raw 640×480 bgr8 ≈920KB/프레임을 FastDDS **UDP 로
-   컨테이너 경계**로 넘기며 조각화/재조립 → 실측 도착률이 ~10Hz(불안정 0.6~10Hz)로 처리속도보다
-   낮다. **이미지 축소 발행/압축**이 최우선.
-2. **hsv red_probability(~26ms).** `proc_width` 640→320 이면 픽셀 1/4 → ~7ms. total ~58→~40ms.
-3. **yolo(~30ms).** `hsv.max_candidates` 2→1 이면 ROI crop 절반 → ~15ms. `full_fallback_interval`↑도 절감.
+**해결한 병목(3~4Hz → 24.6Hz):**
+
+1. **입력 전송 (가장 컸던 병목) — 압축으로 해결.** raw `image_raw` 640×480 bgr8 ≈920KB/프레임을
+   FastDDS **UDP 로 컨테이너 경계**로 넘기면 조각화/재조립 드롭으로 도착률이 ~10Hz 이하로 떨어졌다.
+   → **video 노드가 `image_transport` 압축 서브토픽(`/arms/image_raw/compressed`)을 발행**하고
+   detection 이 `ARMS_INPUT_COMPRESSED=1` 로 그걸 구독·디코드하니 데이터량이 급감해 드롭이 사라졌다.
+   (video/replay 런치가 압축 서브토픽 리매핑을 명시해야 이름이 맞는다 — §video 런치 주석 참고.)
+2. **hsv red_probability.** `proc_width` 640→**320** 으로 픽셀 1/4 → ~26ms→~7.6ms.
+3. **커널 UDP 버퍼** `net.core.rmem_max/wmem_max` 16MB + FastDDS `send/receiveBufferSize` 16MB
+   (`fastdds_udp.xml`) — 재조립 실패 감소(재부팅 후에도 유지되게 설정).
+4. **YOLO TensorRT 엔진**(FP16) — `.pt` 대비 GPU 메모리·지연 대폭 감소(§5).
+
+**추가 여지:** `hsv.max_candidates` 2→1 이면 ROI crop 절반 → yolo ~절반, `full_fallback_interval`↑ 도 절감.
 
 ---
 
@@ -165,7 +182,7 @@ arms_ui 가 이 값으로 실시간 성능 패널을 그린다(`ui.diagnostics_p
 | 파라미터 | 기본 | 설명 |
 | --- | --- | --- |
 | `use_yolo` / `use_hsv` | true | 검출/후보 on/off |
-| `proc_width` | 640 | 검출 처리 가로 해상도(0=원본) — HSV 비용 직결 |
+| `proc_width` | 320 | 검출 처리 가로 해상도(0=원본) — HSV 비용 직결 |
 | `yolo.full_fallback_interval` | 5 | 전체화면 YOLO fallback 주기(프레임) |
 | `yolo.proposal_crop_px` | 192 | HSV 후보 crop 크기[px] |
 | `hsv.max_candidates` | 2 | YOLO 로 검증할 HSV 후보 수 |
@@ -187,3 +204,4 @@ arms_ui 가 이 값으로 실시간 성능 패널을 그린다(`ui.diagnostics_p
 | `ARMS_CONF` / `ARMS_IOU` | 0.32 / 0.45 | YOLO conf/IoU |
 | `ARMS_FULL_IMGSZ` / `ARMS_ROI_IMGSZ` | 320 / 320 | 전체화면/ROI YOLO 입력 크기(엔진 크기와 일치必) |
 | `ARMS_YOLO_RETRY_SEC` / `ARMS_YOLO_MAX_FAILS` | 3.0 / 3 | 실패 재시도/영구비활성 |
+| `ARMS_INPUT_COMPRESSED` | 0 | 1=압축(`.../compressed`) 구독·디코드, 0=raw `image_raw` (§2·§8) |

@@ -61,8 +61,15 @@ class ArmsUINode(Node):
 
         # PiP 크기 (프레임 폭 대비 ROI 표시 폭 비율)
         self.declare_parameter("ui.roi_pip_frac", 0.25)
-        self.declare_parameter("ui.diagnostics_panel", True)
+        # 디버그 화면 여부. True 면 영상 오른쪽에 HSV 진단 미리보기 + 성능 그래프
+        # 패널을 붙이고, 그를 위해 /arms/hsv_debug_image 를 구독한다.
+        #   False(실기체 기본) → 메인 화면만. hsv_debug 를 구독조차 하지 않으므로
+        #   detection 노드가 hsv_debug 발행을 통째로 건너뛴다(구독자 gated) →
+        #   컨테이너→호스트 UDP 대용량 발행이 사라져 검출 발행률이 카메라 fps 를 그대로 따라감.
+        #   arms.launch.py=False(메인만), arms_replay.launch.py=True(디버그) 로 준다.
+        self.declare_parameter("ui.debug", False)
         self.declare_parameter("ui.diagnostics_history", 180)
+        self._debug = bool(self.get_parameter("ui.debug").value)
 
         # 모드 전환 효과음 (MP3). 기본값 = 패키지 share/sounds 설치 경로.
         try:
@@ -100,8 +107,11 @@ class ArmsUINode(Node):
         self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
         self.create_subscription(Vector3, "/arms/control_debug", self._cb_debug, 10)
         self.create_subscription(Image, "/arms/roi_image", self._cb_roi, best_effort_qos)
-        self.create_subscription(Image, "/arms/hsv_debug_image",
-                                 self._cb_hsv_debug, best_effort_qos)
+        # hsv_debug_image(≈500KB raw)는 디버그 화면일 때만 구독한다. 비디버그면
+        # 구독자가 0이라 detection 이 발행 자체를 스킵 → UDP 부하/지연이 사라진다.
+        if self._debug:
+            self.create_subscription(Image, "/arms/hsv_debug_image",
+                                     self._cb_hsv_debug, best_effort_qos)
         # 실기체 command 퍼블리셔(arms_command_hw_node)가 BEST_EFFORT 라서 구독도 맞춰야
         # 메시지를 받는다. (RELIABLE 구독이면 BEST_EFFORT 발행을 하나도 못 받아 모드 전환
         # 오버레이/효과음이 동작하지 않음.)
@@ -413,7 +423,7 @@ class ArmsUINode(Node):
         self._draw_kill_banner(frame)
         # 전원 버튼(+확인 다이얼로그)은 최상단에 그린다(원본 좌표계, 터치 히트박스 기록).
         self._draw_power_ui(frame)
-        if self.get_parameter("ui.diagnostics_panel").value:
+        if self._debug:
             frame = self._compose_diagnostics_panel(frame)
         if self._fullscreen:
             frame = self._fit_to_window(frame)

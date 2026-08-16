@@ -20,6 +20,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 
 
@@ -67,6 +68,12 @@ def generate_launch_description():
             description="detection 컨테이너가 로드할 가중치(컨테이너 내부 경로). "
                         "기본=/models/balloon_camera.engine(카메라 학습모델 FP16 TRT), "
                         "드론추적=/models/drone.engine"),
+        # UI 표시 옵션 (실기체 기본: 전체화면·메인화면만).
+        DeclareLaunchArgument("fullscreen", default_value="true",
+                              description="UI 전체화면 여부 (true/false)"),
+        DeclareLaunchArgument("debug", default_value="false",
+                              description="UI 디버그 화면(HSV 진단+성능 그래프) 여부. "
+                                          "true 면 hsv_debug_image 를 구독해 진단 패널을 띄운다."),
     ]
 
     # 검출 컨테이너 자동 기동 (docker compose up -d — 멱등). 컨테이너의 arms_detection_node
@@ -105,13 +112,19 @@ def generate_launch_description():
                 {"crsf.port": LaunchConfiguration("crsf_port")},  # 필요시 포트만 오버라이드
             ],
         ),
-        # OpenCV UI (실기체: 전체화면)
+        # OpenCV UI. fullscreen/debug 는 런치 인자로 제어(실기체 기본: 전체화면·메인만).
+        #   ui.debug=false → hsv_debug_image 미구독 → detection 발행 부하 최소.
         Node(
             package="arms_ui",
             executable="arms_ui_node",
             name="arms_ui_node",
             output="screen",
-            parameters=[{"ui.fullscreen": True}],
+            parameters=[{
+                "ui.fullscreen": ParameterValue(
+                    LaunchConfiguration("fullscreen"), value_type=bool),
+                "ui.debug": ParameterValue(
+                    LaunchConfiguration("debug"), value_type=bool),
+            }],
         ),
     ]
 
