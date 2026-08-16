@@ -90,6 +90,7 @@ class ArmsUINode(Node):
         self.declare_parameter("ui.beep_volume", 0.6)            # 비프 음량(0~1)
         self._last_beep_t = 0.0                                  # 마지막 비프 시각(monotonic)
         self._lock_tone_proc = None                             # LOCK 이상: 끊기지 않는 연속 톤 프로세스
+        self._last_image_t = 0.0                                # 마지막 영상 프레임 수신 시각(monotonic)
 
         self.create_subscription(Image, "/arms/image_raw", self._cb_image, best_effort_qos)
         self.create_subscription(DetectionArray, "/arms/detections", self._cb_detections, 10)
@@ -153,6 +154,8 @@ class ArmsUINode(Node):
 
         # 상태에 따라 비프 간격을 조절하려고 50ms 마다 확인한다.
         self.create_timer(0.05, self._beep_tick)
+        # 영상이 없어도 창이 뜨도록 대기화면을 주기적으로 그린다(카메라 미연결 대비).
+        self.create_timer(0.1, self._ui_tick)
 
         self.get_logger().info("arms_ui_node started.")
 
@@ -253,6 +256,27 @@ class ArmsUINode(Node):
     # 탐지 비프음 (상태별 간격)
     # ------------------------------------------------------------------
 
+    def _ui_tick(self):
+        """영상 콜백이 최근에 안 돌았으면(카메라 미연결 등) 대기화면을 직접 표시해
+        UI 창이 항상 뜨게 한다. 전원 버튼·배터리도 그려 조작 가능하게 유지."""
+        if time.monotonic() - self._last_image_t < 0.7:
+            return   # 영상이 흐르는 중 → _cb_image 가 표시 담당
+        if self._fullscreen and self._screen_w > 0 and self._screen_h > 0:
+            h, w = self._screen_h, self._screen_w
+        else:
+            h, w = 720, 960
+        frame = np.full((h, w, 3), 30, dtype=np.uint8)
+        self._put_center_text(frame, "NO CAMERA SIGNAL", int(h * 0.45),
+                              (0, 0, 255), max(0.8, w / 900.0), 2)
+        self._put_center_text(frame, "waiting for /arms/image_raw", int(h * 0.54),
+                              (200, 200, 200), max(0.5, w / 1700.0), 1)
+        self._draw_crosshair(frame)
+        self._draw_battery(frame)
+        self._draw_power_ui(frame)               # 전원 버튼 사용 가능하게
+        self._fit_xform = (0.0, 0.0, 1.0, 1.0)   # 이미 화면 크기 → 항등(터치 매핑)
+        cv2.imshow("A.R.M.S.", frame)
+        cv2.waitKey(1)
+
     def _beep_tick(self):
         """SEARCH=느린 간헐 비프, LOCK 이상=끊기지 않는 연속 톤. AUTO 모드 한정."""
         if (not self.get_parameter("ui.beep_enabled").value) or self._manual_mode:
@@ -339,6 +363,7 @@ class ArmsUINode(Node):
             return
         if frame is None or frame.size == 0:
             return
+        self._last_image_t = time.monotonic()   # 대기화면 타이머가 라이브로 양보하게
 
         # 수동 모드에서는 원본 영상 + arm/disarm 표시, 오버레이는 생략한다.
         if not self._manual_mode:

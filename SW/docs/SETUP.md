@@ -86,6 +86,52 @@ ros2 launch arms_bringup arms.launch.py
 
 노드 스택과 함께 detection 컨테이너(`docker compose up -d`)까지 자동 기동됩니다.
 
+### A-3. 샘플 영상 replay (카메라·FC 없이 파이프라인 테스트)
+
+저장된 샘플 영상으로 detection → control → UI 파이프라인을 검증합니다. 캡처 동글이나
+FC 없이 검출·추적·UI를 그대로 돌려볼 수 있어, 검출 튜닝이나 UI 확인에 유용합니다.
+라이브 카메라 대신 `image_publisher` 가 영상 파일을 `/arms/image_raw` 로 스트리밍합니다.
+
+detection 은 `arms.launch.py` 와 동일하게 **GPU 도커 컨테이너로 자동 기동**됩니다
+(`docker compose up -d`, 멱등). 즉 실기체와 같은 YOLO 검출을 샘플 영상에 그대로 적용합니다.
+조종기는 실기체 ESP32 대신 **SITL 가상 조종기(tkinter GUI)** 가 함께 떠서, 그 창에서
+arm / 모드 / kill / launch 를 클릭으로 넣어 상태 전이(SEARCH→LOCK→…)를 테스트할 수 있습니다.
+
+```bash
+# 기본 샘플(sample1.mov) + 기본 모델(balloon_camera.pt)
+ros2 launch arms_bringup arms_replay.launch.py
+
+# 다른 영상 지정 (절대경로 권장)
+ros2 launch arms_bringup arms_replay.launch.py \
+  video_path:=/path/to/SW/sample_viedo/sample2.mov
+
+# 발행 fps 조정
+ros2 launch arms_bringup arms_replay.launch.py publish_rate:=15.0
+
+# 다른 가중치 사용 / detection 컨테이너 끄기
+ros2 launch arms_bringup arms_replay.launch.py model:=/models/balloon.engine
+ros2 launch arms_bringup arms_replay.launch.py start_detection:=false
+```
+
+| 인자              | 기본값                          | 설명                                      |
+| ----------------- | ------------------------------- | ----------------------------------------- |
+| `video_path`      | `SW/sample_viedo/sample1.mov`   | 재생할 영상 파일 (절대경로 권장)          |
+| `publish_rate`    | `30.0`                          | `/arms/image_raw` 발행 fps                |
+| `model`           | `/models/balloon_camera.pt`     | detection 컨테이너가 로드할 가중치        |
+| `start_detection` | `true`                          | detection 도커 컨테이너 자동 기동 여부    |
+| `crsf_port`       | `/dev/ttyUSB0`                  | ELRS TX 시리얼 포트 (제어 출력용)         |
+
+샘플 영상은 `SW/sample_viedo/` 에 `sample1.mov`, `sample2.mov`, `sample3.mov` 가 있습니다.
+
+의존성 (영상 스트리밍):
+
+```bash
+sudo apt install ros-humble-image-publisher
+```
+
+> detection 컨테이너 이미지가 최초라면 A-1 처럼 먼저 `docker compose -f
+> docker-compose.jetson.yml build` 가 필요합니다.
+
 ## B. SITL 실행
 
 | 항목          | 버전           |
