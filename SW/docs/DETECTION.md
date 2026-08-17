@@ -186,10 +186,10 @@ arms_ui 가 이 값으로 실시간 성능 패널을 그린다(`ui.diagnostics_p
 | `yolo.full_fallback_interval` | 5 | 전체화면 YOLO fallback 주기(프레임) |
 | `yolo.proposal_crop_px` | 192 | HSV 후보 crop 크기[px] |
 | `hsv.max_candidates` | 2 | YOLO 로 검증할 HSV 후보 수 |
-| `hsv.prob_threshold` | 0.20 | 빨강 확률 이진화 임계 |
-| `hsv.hue_sigma` / `sat_*` / `val_*` | — | 빨강 soft-확률 파라미터 |
+| `hsv.prob_threshold` | 0.35 | 빨강 확률 이진화 임계 |
+| `hsv.hue_sigma` / `sat_center` / `val_*` | — / 100 / — | 빨강 soft-확률 및 저채도 핑크 배경 억제 파라미터 |
 | `hsv.min/max_area_ratio` | 3e-5 / 0.02 | 후보 면적비 게이트 |
-| `hsv.min_circularity` / `texture_scale` | 0.20 / 120 | 형태·텍스처 게이트 |
+| `hsv.min_circularity` / `texture_scale` | 0.35 / 120 | 형태·텍스처 게이트 |
 | `track.enable` | **false** | false=매프레임 풀프레임 검출, true=CSRT/KCF ROI 추적 |
 | `track.tracker_type` | CSRT | "CSRT"\|"KCF" |
 | `track.confirm_frames` / `redetect_interval` / `reacquire_frames` | 3 / 5 / 8 | FSM 파라미터 |
