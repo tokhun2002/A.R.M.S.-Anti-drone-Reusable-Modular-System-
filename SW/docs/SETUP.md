@@ -133,7 +133,7 @@ sudo apt install ros-humble-image-publisher
 ```
 
 > detection 컨테이너 이미지가 최초라면 A-1 처럼 먼저 `docker compose -f
-> docker-compose.jetson.yml build` 가 필요합니다.
+docker-compose.jetson.yml build` 가 필요합니다.
 
 ### A-4. UI 표시 옵션 (`debug` / `cv_debug` / `fullscreen`)
 
@@ -324,3 +324,26 @@ rqt_graph
 ```bash
 ffplay -f v4l2 -framerate 30 -video_size 720x480 -i /dev/video0
 ```
+
+### PlotJuggler 실시간 그래프 (제어 튜닝용)
+
+오차(`/arms/mission_state`)·유도 출력(`/arms/control_debug`)·발사 τ(`/arms/debug_looming`)를
+실시간 플롯한다. SITL 튜닝 시 오버슈트·발산을 눈으로 본다.
+
+설치:
+
+```bash
+sudo apt install ros-humble-plotjuggler-ros
+```
+
+레이아웃 지정 실행:
+
+```bash
+ros2 run plotjuggler plotjuggler --buffer_size 60 \
+  --layout SW/arms_ws/src/arms_bringup/config/sitl_debug.xml
+```
+
+> - 창이 뜨면 상단 **Streaming → Start** → **ROS2 Topic Subscriber** 로 스트리밍을 켜야
+>   데이터가 흐른다(토픽 `control_debug`/`debug_looming`/`mission_state`는 레이아웃에 이미 선택됨).
+> - 데이터는 `arms_control_node` 가 돌고 있을 때만 나온다(그 노드가 발행). 스택 없이
+>   PlotJuggler만 켜면 빈 화면.
