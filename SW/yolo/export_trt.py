@@ -55,6 +55,13 @@ def main():
 
     print(f"[INFO] 저장 완료: {engine_path}")
 
+    # ultralytics 는 PT→ONNX→TensorRT 순으로 빌드하며 중간 .onnx 를 남긴다.
+    # 엔진만 있으면 되므로 중간 산출물은 지운다(추론에 불필요, 용량만 차지).
+    onnx_path = Path(engine_path).with_suffix(".onnx")
+    if onnx_path.exists():
+        onnx_path.unlink()
+        print(f"[INFO] 중간 ONNX 삭제: {onnx_path}")
+
 
 if __name__ == "__main__":
     main()
