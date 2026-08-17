@@ -1,6 +1,7 @@
 std_msgs/Header header
 string  state               # IDLE | SEARCH | LOCK | TRACK | FIRE | RTL
 float32 lock_elapsed_sec    # continuous detection duration so far [s]
+float32 lock_duration_sec   # LOCK 전환까지 필요한 시간 [s] (UI 진행바 기준값)
 float32 error_x             # normalized pixel error from frame center [-0.5, 0.5]
 float32 error_y
 bool    target_locked

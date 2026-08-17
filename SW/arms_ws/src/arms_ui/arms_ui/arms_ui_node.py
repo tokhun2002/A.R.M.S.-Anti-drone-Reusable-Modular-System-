@@ -61,14 +61,19 @@ class ArmsUINode(Node):
 
         # PiP 크기 (프레임 폭 대비 ROI 표시 폭 비율)
         self.declare_parameter("ui.roi_pip_frac", 0.25)
-        # 디버그 화면 여부. True 면 영상 오른쪽에 HSV 진단 미리보기 + 성능 그래프
-        # 패널을 붙이고, 그를 위해 /arms/hsv_debug_image 를 구독한다.
-        #   False(실기체 기본) → 메인 화면만. hsv_debug 를 구독조차 하지 않으므로
-        #   detection 노드가 hsv_debug 발행을 통째로 건너뛴다(구독자 gated) →
-        #   컨테이너→호스트 UDP 대용량 발행이 사라져 검출 발행률이 카메라 fps 를 그대로 따라감.
+        # ui.cv_debug: 검출 진단 패널(오른쪽에 HSV 미리보기 + 성능 그래프)을 붙일지.
+        #   True 면 /arms/hsv_debug_image 를 구독한다. False(실기체 기본) → 메인 화면만.
+        #   hsv_debug 를 구독조차 안 하므로 detection 이 발행을 통째로 스킵(구독자 gated) →
+        #   컨테이너→호스트 대용량 UDP 발행이 사라져 검출 발행률이 카메라 fps 를 그대로 따라감.
+        self.declare_parameter("ui.cv_debug", False)
+        self.declare_parameter("ui.diagnostics_history", 180)
+        self._cv_debug = bool(self.get_parameter("ui.cv_debug").value)
+
+        # ui.debug: 메인 화면 디버그 오버레이(err/cmd 숫자 텍스트, YOLO/HSV 상태 텍스트,
+        #   오차·명령 화살표)를 그릴지. 기본 False → 실기체처럼 메인 화면만.
+        #   표적 bbox 는 이 값과 무관하게 항상 그린다(아래 _draw_overlay).
         #   arms.launch.py=False(메인만), arms_replay.launch.py=True(디버그) 로 준다.
         self.declare_parameter("ui.debug", False)
-        self.declare_parameter("ui.diagnostics_history", 180)
         self._debug = bool(self.get_parameter("ui.debug").value)
 
         # 모드 전환 효과음 (MP3). 기본값 = 패키지 share/sounds 설치 경로.
@@ -107,9 +112,9 @@ class ArmsUINode(Node):
         self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
         self.create_subscription(Vector3, "/arms/control_debug", self._cb_debug, 10)
         self.create_subscription(Image, "/arms/roi_image", self._cb_roi, best_effort_qos)
-        # hsv_debug_image(≈500KB raw)는 디버그 화면일 때만 구독한다. 비디버그면
+        # hsv_debug_image(≈500KB raw)는 cv_debug 패널일 때만 구독한다. 아니면
         # 구독자가 0이라 detection 이 발행 자체를 스킵 → UDP 부하/지연이 사라진다.
-        if self._debug:
+        if self._cv_debug:
             self.create_subscription(Image, "/arms/hsv_debug_image",
                                      self._cb_hsv_debug, best_effort_qos)
         # 실기체 command 퍼블리셔(arms_command_hw_node)가 BEST_EFFORT 라서 구독도 맞춰야
@@ -415,15 +420,16 @@ class ArmsUINode(Node):
         self._draw_crosshair(frame)
         # 배터리(전압/퍼센트)는 좌측 하단에 자동/수동 무관하게 항상 표시.
         self._draw_battery(frame)
-        # 검출이 도는 상태(SEARCH/LOCK/추적)에서 검출기 작동여부·confidence·모드 표시.
-        if not self._manual_mode and (self._latest_state.state or "IDLE") in (
+        # 검출기 작동여부·confidence·모드 텍스트는 디버그 모드에서만(메인은 깔끔하게).
+        if self._debug and not self._manual_mode and (
+                self._latest_state.state or "IDLE") in (
                 "SEARCH", "LOCK", "BOOST", "TRACK", "FIRE"):
             self._draw_detector_status(frame)
         # kill 스위치 ON 이면 자동/수동 무관하게 화면 중앙에 크게 경고 (최상단).
         self._draw_kill_banner(frame)
         # 전원 버튼(+확인 다이얼로그)은 최상단에 그린다(원본 좌표계, 터치 히트박스 기록).
         self._draw_power_ui(frame)
-        if self._debug:
+        if self._cv_debug:
             frame = self._compose_diagnostics_panel(frame)
         if self._fullscreen:
             frame = self._fit_to_window(frame)
@@ -766,7 +772,8 @@ class ArmsUINode(Node):
         cv2.circle(frame, (cx_f, cy_f), 2, (0, 255, 0), -1)
 
     def _draw_battery(self, frame):
-        """배터리 전압/잔량을 좌측 하단에 표시 — 자동/수동 무관, 데이터 있을 때만."""
+        """배터리 전압/잔량을 하단 중앙에 표시 — 자동/수동·디버그 무관하게 항상
+        (데이터 있을 때만; /arms/battery 미수신이면 표시할 값이 없어 생략)."""
         bat = self._latest_battery
         if bat is None:
             return
@@ -784,12 +791,9 @@ class ArmsUINode(Node):
         scale = max(0.5, h / 900.0)
         thick = max(1, int(round(scale * 2)))
         (tw, th), bl = cv2.getTextSize(text, font, scale, thick)
-        m = 12
-        # 우상단 전원 버튼 아래에 배치(겹침 방지).
-        top = th + m
-        if self.get_parameter("ui.power_button").value:
-            top += max(8, int(h * 0.02)) + max(46, int(h * 0.12)) + 8
-        x, y = w - tw - m, top          # 우측 상단(버튼 아래), y=텍스트 baseline
+        m = max(10, int(h * 0.02))
+        x = (w - tw) // 2               # 가로 중앙
+        y = h - m                       # 하단 (텍스트 baseline)
         # 배경 박스 없이 검은 외곽선 + 흰 글씨만 (영상 위 최소 가독성).
         cv2.putText(frame, text, (x, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
         cv2.putText(frame, text, (x, y), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
@@ -864,17 +868,21 @@ class ArmsUINode(Node):
 
         # --- Lock progress bar (SEARCH / LOCK) ---
         if state in ("SEARCH", "LOCK"):
-            lock_duration = 2.0  # TODO: read from param
+            # control 이 발행한 실제 lock_duration_sec 를 기준으로 채운다(하드코딩 금지).
+            # 예전엔 2.0 하드코딩이라, 실제 0.3s 만에 LOCK 됐는데 바는 15%만 차 보였다.
+            lock_duration = float(getattr(self._latest_state, "lock_duration_sec", 0.0))
+            if lock_duration <= 0.0:
+                lock_duration = 2.0   # 아직 미수신/구버전 메시지 fallback
             progress = min(1.0, self._latest_state.lock_elapsed_sec / lock_duration)
-            bar_w = int(w * 0.4)
+            bar_w = int(w * 0.2)
             bar_x, bar_y = 10, h - 20
             cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + 10), (80, 80, 80), -1)
             cv2.rectangle(frame, (bar_x, bar_y), (bar_x + int(bar_w * progress), bar_y + 10), color, -1)
             cv2.putText(frame, "LOCK", (bar_x, bar_y - 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
-        # --- Error vector (LOCK / TRACK / FIRE) : 노란색 = 풍선 방향 ---
-        if state in ("LOCK", "TRACK", "FIRE"):
+        # --- Error/command 화살표 + 숫자 텍스트: 디버그 모드에서만 (bbox 는 위에서 항상) ---
+        if self._debug and state in ("LOCK", "TRACK", "FIRE"):
             ex = int(self._latest_state.error_x * w)
             ey = int(self._latest_state.error_y * h)
             cv2.arrowedLine(frame, (cx_f, cy_f), (cx_f + ex, cy_f + ey),

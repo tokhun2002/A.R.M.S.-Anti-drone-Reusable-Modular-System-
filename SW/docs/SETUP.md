@@ -113,13 +113,16 @@ ros2 launch arms_bringup arms_replay.launch.py model:=/models/balloon.engine
 ros2 launch arms_bringup arms_replay.launch.py start_detection:=false
 ```
 
-| 인자              | 기본값                          | 설명                                      |
-| ----------------- | ------------------------------- | ----------------------------------------- |
-| `video_path`      | `SW/sample_viedo/sample1.mov`   | 재생할 영상 파일 (절대경로 권장)          |
-| `publish_rate`    | `30.0`                          | `/arms/image_raw` 발행 fps                |
-| `model`           | `/models/balloon_camera.pt`     | detection 컨테이너가 로드할 가중치        |
-| `start_detection` | `true`                          | detection 도커 컨테이너 자동 기동 여부    |
-| `crsf_port`       | `/dev/ttyUSB0`                  | ELRS TX 시리얼 포트 (제어 출력용)         |
+| 인자              | 기본값                            | 설명                                      |
+| ----------------- | --------------------------------- | ----------------------------------------- |
+| `video_path`      | `SW/sample_viedo/sample1.mov`     | 재생할 영상 파일 (절대경로 권장)          |
+| `publish_rate`    | `30.0`                            | `/arms/image_raw` 발행 fps                |
+| `model`           | `/models/balloon_camera.engine`   | detection 컨테이너가 로드할 가중치        |
+| `start_detection` | `true`                            | detection 도커 컨테이너 자동 기동 여부    |
+| `crsf_port`       | `/dev/ttyUSB0`                    | ELRS TX 시리얼 포트 (제어 출력용)         |
+| `fullscreen`      | `false` (replay) / `true` (실기체)| UI 전체화면 여부 (A-4)                    |
+| `debug`           | `true` (replay) / `false` (실기체)| 메인 화면 디버그 오버레이 (A-4)           |
+| `cv_debug`        | `false`                           | 검출 진단 패널(HSV+그래프) (A-4)          |
 
 샘플 영상은 `SW/sample_viedo/` 에 `sample1.mov`, `sample2.mov`, `sample3.mov` 가 있습니다.
 
@@ -131,6 +134,40 @@ sudo apt install ros-humble-image-publisher
 
 > detection 컨테이너 이미지가 최초라면 A-1 처럼 먼저 `docker compose -f
 > docker-compose.jetson.yml build` 가 필요합니다.
+
+### A-4. UI 표시 옵션 (`debug` / `cv_debug` / `fullscreen`)
+
+UI 화면 구성은 세 개의 독립 런치 인자로 제어합니다. 실기체(`arms.launch.py`)와
+replay(`arms_replay.launch.py`)의 **기본값이 다릅니다**.
+
+| 인자         | 대상 파라미터   | 실기체 기본 | replay 기본 | 켜면 표시되는 것 |
+| ------------ | --------------- | ----------- | ----------- | ---------------- |
+| `fullscreen` | `ui.fullscreen` | `true`      | `false`     | 전체화면(작업표시줄까지 가림) vs 창모드 |
+| `debug`      | `ui.debug`      | `false`     | `true`      | **메인 화면 디버그 오버레이** — err/cmd 숫자 텍스트, YOLO/HSV 상태 텍스트, 오차(ERR)·명령(CMD) 화살표 |
+| `cv_debug`   | `ui.cv_debug`   | `false`     | `false`     | **검출 진단 패널** — 화면 오른쪽에 HSV 후보 미리보기 + 실시간 성능 그래프 |
+
+- **`debug` (메인 오버레이).** `false` 면 실기체처럼 메인 화면만 깔끔하게 나옵니다.
+  단, **표적 bounding box·confidence 는 `debug` 와 무관하게 항상** 그려집니다(상태 라벨/십자선/
+  배터리/락 진행바/전원 버튼도 항상). `true` 면 그 위에 조준 오차·제어 명령 화살표와
+  숫자 디버그 텍스트, 검출기(YOLO/HSV) 작동 상태가 추가로 뜹니다.
+- **`cv_debug` (진단 패널).** 켜면 UI 가 `/arms/hsv_debug_image`(≈500KB raw)를 구독하고,
+  그때만 detection 노드가 그 영상을 발행합니다 → **컨테이너→호스트 UDP 대용량 전송으로
+  검출 발행률이 크게 떨어집니다**(측정상 ~30Hz → ~12Hz). 그래서 기본 off 이며, 검출 튜닝·
+  성능 확인이 필요할 때만 켭니다. `debug` 와 독립이라 따로 켤 수 있습니다.
+
+```bash
+# 실기체를 디버그 오버레이까지 켜서 실행 (기본은 메인 화면만)
+ros2 launch arms_bringup arms.launch.py debug:=true
+
+# replay 를 실기체처럼 메인 화면만으로
+ros2 launch arms_bringup arms_replay.launch.py debug:=false
+
+# replay 에 검출 진단 패널까지 (검출 발행률 하락 감수)
+ros2 launch arms_bringup arms_replay.launch.py cv_debug:=true
+
+# 창모드 replay 를 전체화면으로
+ros2 launch arms_bringup arms_replay.launch.py fullscreen:=true
+```
 
 ## B. SITL 실행
 

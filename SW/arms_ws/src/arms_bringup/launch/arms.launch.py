@@ -72,8 +72,11 @@ def generate_launch_description():
         DeclareLaunchArgument("fullscreen", default_value="true",
                               description="UI 전체화면 여부 (true/false)"),
         DeclareLaunchArgument("debug", default_value="false",
-                              description="UI 디버그 화면(HSV 진단+성능 그래프) 여부. "
-                                          "true 면 hsv_debug_image 를 구독해 진단 패널을 띄운다."),
+                              description="메인 화면 디버그 오버레이(err/cmd·YOLO/HSV 텍스트·화살표). "
+                                          "기본 off — 실기체는 메인 화면만(표적 bbox 는 항상 표시)."),
+        DeclareLaunchArgument("cv_debug", default_value="false",
+                              description="검출 진단 패널(HSV 미리보기+성능 그래프). "
+                                          "true 면 hsv_debug_image 를 구독 → 검출 발행률↓."),
     ]
 
     # 검출 컨테이너 자동 기동 (docker compose up -d — 멱등). 컨테이너의 arms_detection_node
@@ -124,6 +127,8 @@ def generate_launch_description():
                     LaunchConfiguration("fullscreen"), value_type=bool),
                 "ui.debug": ParameterValue(
                     LaunchConfiguration("debug"), value_type=bool),
+                "ui.cv_debug": ParameterValue(
+                    LaunchConfiguration("cv_debug"), value_type=bool),
             }],
         ),
     ]

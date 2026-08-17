@@ -54,6 +54,8 @@ public:
   // ---------- accessors ----------
   State       state()               const { return state_; }
   double      lock_elapsed_sec()    const { return lock_elapsed_sec_; }
+  /** LOCK 전환까지 필요한 연속검출 시간[s]. UI 진행바가 이 값을 기준으로 채운다. */
+  double      lock_duration_sec()   const { return params_.lock_duration_sec; }
   double      current_error_x()     const { return error_x_; }
   double      current_error_y()     const { return error_y_; }
   bool        target_locked()       const { return target_locked_; }

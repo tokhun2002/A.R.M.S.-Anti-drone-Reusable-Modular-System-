@@ -91,13 +91,16 @@ def generate_launch_description():
             "model", default_value="/models/balloon_camera.engine",
             description="detection 컨테이너가 로드할 가중치(컨테이너 내부 경로). "
                         "기본=/models/balloon_camera.engine (FP16 TensorRT)"),
-        # UI 표시 옵션 (replay 기본: 창모드·디버그 화면). 실기체 arms.launch.py 는
+        # UI 표시 옵션 (replay 기본: 창모드·디버그 오버레이 on). 실기체 arms.launch.py 는
         # 전체화면·메인화면만이 기본. 필요하면 여기서 인자로 뒤집을 수 있다.
         DeclareLaunchArgument("fullscreen", default_value="false",
                               description="UI 전체화면 여부 (true/false)"),
         DeclareLaunchArgument("debug", default_value="true",
-                              description="UI 디버그 화면(HSV 진단+성능 그래프) 여부. "
-                                          "true 면 hsv_debug_image 를 구독해 진단 패널을 띄운다."),
+                              description="메인 화면 디버그 오버레이(err/cmd·YOLO/HSV 텍스트·화살표). "
+                                          "replay 기본 on (표적 bbox 는 항상 표시)."),
+        DeclareLaunchArgument("cv_debug", default_value="false",
+                              description="검출 진단 패널(HSV 미리보기+성능 그래프). "
+                                          "true 면 hsv_debug_image 를 구독 → 검출 발행률↓(진단용)."),
     ]
 
     # 검출: arms.launch.py 와 동일하게 도커 컨테이너를 자동 기동한다(멱등). 컨테이너의
@@ -139,9 +142,9 @@ def generate_launch_description():
                 {"crsf.port": LaunchConfiguration("crsf_port")},
             ],
         ),
-        # OpenCV UI (replay: 디버그 화면 기본 — 우측에 HSV 진단 미리보기 + 성능 그래프).
-        #   ui.debug=true → hsv_debug_image 를 구독하므로 detection 이 그걸 발행한다
-        #   (진단용). fullscreen/debug 는 런치 인자로 제어.
+        # OpenCV UI (replay 기본: 메인 화면 디버그 오버레이 on). cv_debug:=true 를 주면
+        #   우측 HSV 진단+성능 그래프 패널도 붙는다(그때만 hsv_debug_image 구독 →
+        #   detection 이 그걸 발행, 발행률↓). fullscreen/debug/cv_debug 는 런치 인자로 제어.
         Node(
             package="arms_ui",
             executable="arms_ui_node",
@@ -152,6 +155,8 @@ def generate_launch_description():
                     LaunchConfiguration("fullscreen"), value_type=bool),
                 "ui.debug": ParameterValue(
                     LaunchConfiguration("debug"), value_type=bool),
+                "ui.cv_debug": ParameterValue(
+                    LaunchConfiguration("cv_debug"), value_type=bool),
             }],
         ),
     ]

@@ -16,10 +16,10 @@ arms_control_node:
 
       # ── 검출 → LOCK 판정 ──────────────────────────────────────────────
       # 카메라 재학습 모델의 validation F1 최적 confidence(0.32)에 맞춘 값.
-      # 오검출은 아래 0.3초 연속 LOCK 판정과 detection 노드의 CV 시간 게이팅으로 억제한다.
+      # 오검출은 아래 1초 연속 LOCK 판정과 detection 노드의 CV 시간 게이팅으로 억제한다.
       detection_confidence_threshold: 0.32
       detection_timeout_sec: 1.0
-      lock_duration_sec: 0.3
+      lock_duration_sec: 1.0
       lock_box_tolerance: 0.5
 
       # ── LOCK → FIRE 판정 (비전 looming, τ) ────────────────────────────

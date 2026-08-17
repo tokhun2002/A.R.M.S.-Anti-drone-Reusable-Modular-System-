@@ -33,7 +33,7 @@ class ArmsControlNode : public rclcpp::Node {
     // Declare & load parameters
     // ----------------------------------------------------------------
     declare_parameter("mission.detection_confidence_threshold", 0.32);
-    declare_parameter("mission.lock_duration_sec", 0.3);
+    declare_parameter("mission.lock_duration_sec", 1.0);
     declare_parameter("mission.detection_timeout_sec", 1.0);
     declare_parameter("mission.lock_box_tolerance", 0.5);
     declare_parameter("mission.fire_align_tol", 0.2);  // FIRE 정렬 허용오차(가짜명중 방지)
@@ -930,6 +930,7 @@ class ArmsControlNode : public rclcpp::Node {
     msg.header.stamp = now_t;
     msg.state = to_string(state);
     msg.lock_elapsed_sec = static_cast<float>(sm_->lock_elapsed_sec());
+    msg.lock_duration_sec = static_cast<float>(sm_->lock_duration_sec());
     msg.error_x = static_cast<float>(sm_->current_error_x());
     msg.error_y = static_cast<float>(sm_->current_error_y());
     msg.target_locked = sm_->target_locked();
