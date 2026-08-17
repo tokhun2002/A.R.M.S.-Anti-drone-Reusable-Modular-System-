@@ -113,13 +113,13 @@ ros2 launch arms_bringup arms_replay.launch.py model:=/models/balloon.engine
 ros2 launch arms_bringup arms_replay.launch.py start_detection:=false
 ```
 
-| 인자              | 기본값                          | 설명                                      |
-| ----------------- | ------------------------------- | ----------------------------------------- |
-| `video_path`      | `SW/sample_viedo/sample1.mov`   | 재생할 영상 파일 (절대경로 권장)          |
-| `publish_rate`    | `30.0`                          | `/arms/image_raw` 발행 fps                |
-| `model`           | `/models/balloon_camera.pt`     | detection 컨테이너가 로드할 가중치        |
-| `start_detection` | `true`                          | detection 도커 컨테이너 자동 기동 여부    |
-| `crsf_port`       | `/dev/ttyUSB0`                  | ELRS TX 시리얼 포트 (제어 출력용)         |
+| 인자              | 기본값                        | 설명                                   |
+| ----------------- | ----------------------------- | -------------------------------------- |
+| `video_path`      | `SW/sample_viedo/sample1.mov` | 재생할 영상 파일 (절대경로 권장)       |
+| `publish_rate`    | `30.0`                        | `/arms/image_raw` 발행 fps             |
+| `model`           | `/models/balloon_camera.pt`   | detection 컨테이너가 로드할 가중치     |
+| `start_detection` | `true`                        | detection 도커 컨테이너 자동 기동 여부 |
+| `crsf_port`       | `/dev/ttyUSB0`                | ELRS TX 시리얼 포트 (제어 출력용)      |
 
 샘플 영상은 `SW/sample_viedo/` 에 `sample1.mov`, `sample2.mov`, `sample3.mov` 가 있습니다.
 
@@ -130,7 +130,7 @@ sudo apt install ros-humble-image-publisher
 ```
 
 > detection 컨테이너 이미지가 최초라면 A-1 처럼 먼저 `docker compose -f
-> docker-compose.jetson.yml build` 가 필요합니다.
+docker-compose.jetson.yml build` 가 필요합니다.
 
 ## B. SITL 실행
 
@@ -287,3 +287,26 @@ rqt_graph
 ```bash
 ffplay -f v4l2 -framerate 30 -video_size 720x480 -i /dev/video0
 ```
+
+### PlotJuggler 실시간 그래프 (제어 튜닝용)
+
+오차(`/arms/mission_state`)·유도 출력(`/arms/control_debug`)·발사 τ(`/arms/debug_looming`)를
+실시간 플롯한다. SITL 튜닝 시 오버슈트·발산을 눈으로 본다.
+
+설치:
+
+```bash
+sudo apt install ros-humble-plotjuggler-ros
+```
+
+레이아웃 지정 실행:
+
+```bash
+ros2 run plotjuggler plotjuggler --buffer_size 60 \
+  --layout SW/arms_ws/src/arms_bringup/config/sitl_debug.xml
+```
+
+> - 창이 뜨면 상단 **Streaming → Start** → **ROS2 Topic Subscriber** 로 스트리밍을 켜야
+>   데이터가 흐른다(토픽 `control_debug`/`debug_looming`/`mission_state`는 레이아웃에 이미 선택됨).
+> - 데이터는 `arms_control_node` 가 돌고 있을 때만 나온다(그 노드가 발행). 스택 없이
+>   PlotJuggler만 켜면 빈 화면.
