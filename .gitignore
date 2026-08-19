@@ -7,3 +7,11 @@ install/
 log/
 
 .DS_Store
+
+# IDE
+.vscode/
+
+# 파이썬 가상환경 (머신 종속 — 리포에 두지 않음)
+.venv/
+.venv-yolo/
+venv/

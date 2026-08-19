@@ -1,7 +1,0 @@
-{
-  "python.defaultInterpreterPath": "/usr/bin/python3",
-  "python.analysis.extraPaths": [
-    "/opt/ros/jazzy/lib/python3.12/site-packages",
-    "${workspaceFolder}/SW/arms_ws/install/arms_msgs/lib/python3.12/site-packages"
-  ]
-}
