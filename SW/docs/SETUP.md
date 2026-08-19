@@ -299,6 +299,21 @@ ros2 topic echo /arms/debug_looming
 ros2 run rqt_image_view rqt_image_view /arms/image_raw
 ```
 
+### 검출 화면 캡처 (`S` 키)
+
+A.R.M.S. UI 창이 떠 있을 때 **`S`(또는 `s`) 키**를 누르면 현재 화면을 JPG로 저장한다.
+검출·HSV 튜닝 자료 수집용. **한 번에 두 장**이 같은 타임스탬프 파일명으로 저장된다:
+
+- `SW/output_image/detection/<YYYYmmdd_HHMMSS_mmm>.jpg` — 오버레이 포함 검출 화면
+- `SW/output_image/hsv/<...같은 이름>.jpg` — HSV 마스크·후보 화면
+
+- 저장 폴더는 `ui.capture_dir` 파라미터로 바꿀 수 있다(기본 `SW/output_image`).
+- 평소 UI 는 `hsv_debug_image` 를 구독하지 않는다(검출 발행률 보호). `S` 를 누른 **그 순간에만
+  잠깐 구독**해 HSV 한 프레임을 받아 저장하고 바로 해제하므로, 저장까지 아주 짧은 지연이 있을 수 있다.
+  (`cv_debug` 패널이 이미 켜져 있으면 즉시 저장.)
+- **A.R.M.S. 창이 포커스**돼 있어야 키가 먹는다(OpenCV `waitKey` 기반).
+- `SW/output_image/` 는 런타임 생성물이라 git 추적 대상이 아니다(`.gitignore`).
+
 ### 정상 상태 전이 흐름
 
 ```

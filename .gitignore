@@ -15,3 +15,6 @@ log/
 .venv/
 .venv-yolo/
 venv/
+
+# UI S키 캡처 출력물 (런타임 생성물)
+SW/output_image/
