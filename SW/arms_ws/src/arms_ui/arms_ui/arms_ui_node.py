@@ -18,6 +18,8 @@ import subprocess
 import threading
 import time
 from collections import deque
+from datetime import datetime
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -58,6 +60,7 @@ class ArmsUINode(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
+        self._image_qos = best_effort_qos
 
         # PiP 크기 (프레임 폭 대비 ROI 표시 폭 비율)
         self.declare_parameter("ui.roi_pip_frac", 0.25)
@@ -75,6 +78,21 @@ class ArmsUINode(Node):
         #   arms.launch.py=False(메인만), arms_replay.launch.py=True(디버그) 로 준다.
         self.declare_parameter("ui.debug", False)
         self._debug = bool(self.get_parameter("ui.debug").value)
+
+        # S 키 캡처: 소스 트리 기준 SW/output_image. ARMS_SW가 있으면 장비별
+        # 저장소 위치를 그대로 따르므로 노트북/Jetson 모두 같은 상대 위치에 저장된다.
+        source_file = Path(__file__).resolve()
+        source_sw = next(
+            (parent for parent in source_file.parents if parent.name == "SW"),
+            Path.cwd(),
+        )
+        default_sw = Path(os.environ.get("ARMS_SW", str(source_sw)))
+        self.declare_parameter("ui.capture_dir", str(default_sw / "output_image"))
+        self._capture_dir = Path(
+            str(self.get_parameter("ui.capture_dir").value)).expanduser()
+        self._pending_capture = None
+        self._hsv_subscription = None
+        self._transient_hsv_subscription = False
 
         # 모드 전환 효과음 (MP3). 기본값 = 패키지 share/sounds 설치 경로.
         try:
@@ -115,8 +133,9 @@ class ArmsUINode(Node):
         # hsv_debug_image(≈500KB raw)는 cv_debug 패널일 때만 구독한다. 아니면
         # 구독자가 0이라 detection 이 발행 자체를 스킵 → UDP 부하/지연이 사라진다.
         if self._cv_debug:
-            self.create_subscription(Image, "/arms/hsv_debug_image",
-                                     self._cb_hsv_debug, best_effort_qos)
+            self._hsv_subscription = self.create_subscription(
+                Image, "/arms/hsv_debug_image", self._cb_hsv_debug,
+                best_effort_qos)
         # 실기체 command 퍼블리셔(arms_command_hw_node)가 BEST_EFFORT 라서 구독도 맞춰야
         # 메시지를 받는다. (RELIABLE 구독이면 BEST_EFFORT 발행을 하나도 못 받아 모드 전환
         # 오버레이/효과음이 동작하지 않음.)
@@ -178,6 +197,8 @@ class ArmsUINode(Node):
             cv2.resizeWindow("A.R.M.S.", 960, 720)
             self._screen_w, self._screen_h = 0, 0
             self.get_logger().info("windowed mode (960x720)")
+        self.get_logger().info(
+            f"S key capture enabled: {self._capture_dir}")
 
         # 상태에 따라 비프 간격을 조절하려고 50ms 마다 확인한다.
         self.create_timer(0.05, self._beep_tick)
@@ -393,6 +414,70 @@ class ArmsUINode(Node):
                 msg, desired_encoding="bgr8")
         except Exception as e:
             self.get_logger().warn(f"hsv debug cv_bridge error: {e}")
+            return
+
+        pending = self._pending_capture
+        if pending is not None:
+            capture_id, detection_frame = pending
+            self._pending_capture = None
+            self._save_capture_pair(
+                capture_id, detection_frame, self._latest_hsv_debug)
+
+            # 평소 ui.cv_debug=false인 실기체에서는 캡처 1회가 끝난 즉시 구독을
+            # 해제해 HSV 디버그 영상 전송/연산 부하가 계속 남지 않게 한다.
+            if self._transient_hsv_subscription:
+                subscription = self._hsv_subscription
+                self._hsv_subscription = None
+                self._transient_hsv_subscription = False
+                if subscription is not None:
+                    self.destroy_subscription(subscription)
+
+    def _request_capture(self, detection_frame):
+        """S 키 입력 시 검출 화면을 보관하고 다음 HSV 프레임을 요청한다."""
+        if self._pending_capture is not None:
+            self.get_logger().warn("capture already pending; waiting for HSV frame")
+            return
+
+        capture_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        self._pending_capture = (
+            capture_id, np.ascontiguousarray(detection_frame.copy()))
+
+        # 진단 패널이 켜져 있어 최신 HSV 화면이 이미 있으면 즉시 저장한다.
+        if self._cv_debug and self._latest_hsv_debug is not None:
+            _, frame = self._pending_capture
+            self._pending_capture = None
+            self._save_capture_pair(capture_id, frame, self._latest_hsv_debug)
+            return
+
+        # 평소에는 HSV를 구독하지 않다가 캡처 요청 순간에만 잠깐 구독한다.
+        if self._hsv_subscription is None:
+            self._latest_hsv_debug = None
+            self._hsv_subscription = self.create_subscription(
+                Image, "/arms/hsv_debug_image", self._cb_hsv_debug,
+                self._image_qos)
+            self._transient_hsv_subscription = True
+        self.get_logger().info("S pressed: waiting for one HSV debug frame...")
+
+    def _save_capture_pair(self, capture_id, detection_frame, hsv_frame):
+        """검출 화면과 HSV 화면을 같은 ID의 JPG 두 장으로 저장한다."""
+        try:
+            detection_dir = self._capture_dir / "detection"
+            hsv_dir = self._capture_dir / "hsv"
+            detection_dir.mkdir(parents=True, exist_ok=True)
+            hsv_dir.mkdir(parents=True, exist_ok=True)
+            # 두 폴더에서 같은 파일명을 사용해 한 번의 캡처를 쉽게 짝지을 수 있다.
+            detection_path = detection_dir / f"{capture_id}.jpg"
+            hsv_path = hsv_dir / f"{capture_id}.jpg"
+            detection_ok = cv2.imwrite(str(detection_path), detection_frame)
+            hsv_ok = cv2.imwrite(str(hsv_path), hsv_frame)
+            if not detection_ok or not hsv_ok:
+                raise RuntimeError(
+                    f"cv2.imwrite failed (detection={detection_ok}, hsv={hsv_ok})")
+            self.get_logger().info(
+                f"capture saved: detection/{detection_path.name}, "
+                f"hsv/{hsv_path.name}")
+        except Exception as e:
+            self.get_logger().error(f"capture save failed: {e}")
 
     def _cb_image(self, msg: Image):
         if msg.width == 0 or msg.height == 0 or len(msg.data) == 0:
@@ -429,6 +514,8 @@ class ArmsUINode(Node):
         self._draw_kill_banner(frame)
         # 전원 버튼(+확인 다이얼로그)은 최상단에 그린다(원본 좌표계, 터치 히트박스 기록).
         self._draw_power_ui(frame)
+        # 화면 맞춤/우측 진단 패널을 붙이기 전 검출 화면 원본을 캡처 대상으로 쓴다.
+        detection_capture = frame.copy()
         if self._cv_debug:
             frame = self._compose_diagnostics_panel(frame)
         if self._fullscreen:
@@ -436,7 +523,9 @@ class ArmsUINode(Node):
         else:
             self._fit_xform = (0.0, 0.0, 1.0, 1.0)   # 창 모드: 표시=원본 좌표(항등)
         cv2.imshow("A.R.M.S.", frame)
-        cv2.waitKey(1)
+        key = cv2.waitKey(1) & 0xFF
+        if key in (ord("s"), ord("S")):
+            self._request_capture(detection_capture)
 
     def _compose_diagnostics_panel(self, frame):
         """영상 오른쪽에 HSV 후보 미리보기와 실시간 성능 그래프를 붙인다."""
