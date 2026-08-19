@@ -337,13 +337,15 @@ class ArmsDetectionNode(Node):
         # OpenCV hue(0..179)는 빨강이 0/179 경계에 걸쳐 있다. 경계 두 구간을
         # hard threshold로 자르는 대신 원형 hue 거리의 Gaussian 확률로 평가한다.
         self.declare_parameter("hsv.hue_sigma",               12.0)
-        self.declare_parameter("hsv.prob_threshold",          0.20)
-        self.declare_parameter("hsv.sat_center",              75.0)
+        # 핑크색 벽처럼 hue가 빨강과 가깝지만 채도가 낮은 배경을 억제하도록
+        # 실기체 튜닝값을 기본값으로 사용한다.
+        self.declare_parameter("hsv.prob_threshold",          0.35)
+        self.declare_parameter("hsv.sat_center",             100.0)
         self.declare_parameter("hsv.sat_scale",               22.0)
         self.declare_parameter("hsv.val_min",                 30.0)
         self.declare_parameter("hsv.val_max_center",          225.0)
         self.declare_parameter("hsv.val_scale",               18.0)
-        self.declare_parameter("hsv.min_circularity",         0.20)
+        self.declare_parameter("hsv.min_circularity",         0.35)
         self.declare_parameter("hsv.texture_scale",           120.0)
         # SEARCH 진단용: YOLO/HSV 각각의
         # 검출 여부·confidence 를 /arms/detector_status 로 발행해 UI 가 표시한다.
@@ -516,8 +518,11 @@ class ArmsDetectionNode(Node):
         self._diag["total_ms"] = (time.perf_counter() - frame_started) * 1000.0
         self._publish_detector_status()
 
-        if (self._diag_hsv_mask is not None and
-                self.pub_hsv_debug.get_subscription_count() > 0):
+        if self.pub_hsv_debug.get_subscription_count() > 0:
+            # TRACK/ROI 구간에는 원래 HSV를 실행하지 않는다. RQT 또는 UI의 S키
+            # 일회성 캡처가 구독한 경우에만 HSV 화면을 별도로 한 번 계산한다.
+            if self._diag_hsv_mask is None:
+                self._diag_hsv_proposals = self._detect_hsv_candidates(bgr)
             self._publish_hsv_debug(bgr, header)
 
         out = DetectionArray()
