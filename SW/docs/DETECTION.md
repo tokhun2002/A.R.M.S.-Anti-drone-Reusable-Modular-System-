@@ -28,7 +28,8 @@ HSV 로 붉은 원형 후보를 싸게 만들고, 그 crop 들을 **YOLO batch �
 
 입력은 **둘 중 하나만** 구독한다: `ARMS_INPUT_COMPRESSED=1` 이면 `.../compressed`(디코드),
 아니면 raw `image_raw`. `roi_image`·`debug_image`·`hsv_debug_image` 는 **구독자가 있을 때만**
-그려서 발행한다.
+그려서 발행한다. 특히 `hsv_debug_image` 는 구독자가 있고 TRACK/ROI 구간이라 HSV 가 안 돌던
+프레임이면 그 프레임에 한해 HSV 후보를 **온디맨드로 한 번 더 계산**해 보여준다(UI 의 S키 일회성 캡처용).
 
 ---
 
@@ -58,7 +59,8 @@ BGR ndarray 로 만들어 공통 `_process(bgr_full, header)` 로 넘긴다. **�
 - **`_red_probability`**: 픽셀별 0~1 빨강 점수 = `hue(원형 Gaussian) × sat(sigmoid) × val_low × val_high`.
   OpenCV hue 의 0/179 경계 빨강을 원형 hue 거리로 평가, 포화 LED/조명은 감점(하드컷 없음).
   → **프레임 전체 픽셀에 exp/sigmoid 를 계산하므로 이 단계가 고정 연산비용이 크다(§8).**
-- `prob_threshold`(0.20)로 이진화 → `MORPH_CLOSE`(작은 구멍만) → 컨투어.
+- `prob_threshold`(0.35)로 이진화 → `MORPH_CLOSE`(작은 구멍만) → 컨투어.
+  (실기체 튜닝: 저채도 핑크 배경 억제 위해 `sat_center`=100, `min_circularity`=0.35 로 상향.)
 - 컨투어별 게이팅·점수: 면적비(`hsv.min/max_area_ratio`), 형태(circularity·aspect, `min_circularity`),
   색(`red_prob` 평균), 텍스처(주변 라플라시안 분산 → 배경 매끈=하늘 우대, `texture_scale`).
 - 상위 **`hsv.max_candidates`(기본 2)** 개를 반환. confidence 는 크기·색·형태 가중(상한 있음).
@@ -101,7 +103,8 @@ flowchart TB
 
 ## 5. YOLO (`_detect_yolo` / `_detect_yolo_batch`)
 
-- 같은 프로세스에서 ultralytics **TensorRT 엔진**(`balloon_camera.engine`, FP16) 추론.
+- 같은 프로세스에서 ultralytics **TensorRT 엔진**(현재 기본 `best_nano_v6.engine`, FP16) 추론.
+  (모델은 `ARMS_MODEL` 로 교체 — compose/런치 기본값. 이 젯슨에서 빌드한 `.engine` 이어야 함.)
 - 입력은 **BGR 그대로**(ultralytics 가 내부 RGB 변환 — 미리 뒤집으면 빨강 성능 급락).
 - 입력 크기 두 가지: `ARMS_ROI_IMGSZ`(ROI 크롭용), `ARMS_FULL_IMGSZ`(전체화면용).
   **정적 엔진은 단일 크기라 둘 다 엔진 빌드 크기(320)와 일치해야 한다**(안 맞으면 추론 실패).
@@ -142,7 +145,7 @@ CSRT/KCF 로 ROI 만 추적해 TRACK 구간 비용을 줄이는 옵션. **`track
 | 6 | yolo 승인 수 | 14 | frame_i |
 | 7 | **frame_interval_ms**(입력 간격) | 15 | full_frame(1=전체화면 YOLO) |
 
-arms_ui 가 이 값으로 실시간 성능 패널을 그린다(`ui.diagnostics_panel`).
+arms_ui 가 이 값으로 실시간 성능 패널을 그린다(`ui.cv_debug=true` 일 때).
 
 ---
 
@@ -200,7 +203,7 @@ arms_ui 가 이 값으로 실시간 성능 패널을 그린다(`ui.diagnostics_p
 
 | 변수 | 기본 | 설명 |
 | --- | --- | --- |
-| `ARMS_MODEL` | `/models/balloon_camera.engine` | YOLO 가중치(없으면 YOLO 비활성) |
+| `ARMS_MODEL` | `/models/best_nano_v6.engine` | YOLO 가중치(없으면 YOLO 비활성) |
 | `ARMS_CONF` / `ARMS_IOU` | 0.32 / 0.45 | YOLO conf/IoU |
 | `ARMS_FULL_IMGSZ` / `ARMS_ROI_IMGSZ` | 320 / 320 | 전체화면/ROI YOLO 입력 크기(엔진 크기와 일치必) |
 | `ARMS_YOLO_RETRY_SEC` / `ARMS_YOLO_MAX_FAILS` | 3.0 / 3 | 실패 재시도/영구비활성 |
