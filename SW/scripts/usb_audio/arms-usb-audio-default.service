@@ -1,0 +1,14 @@
+[Unit]
+Description=Set USB speaker as default PulseAudio sink (boot-race workaround)
+# 그래픽 세션/PulseAudio 가 올라온 뒤 실행. 스크립트가 USB 싱크를 재시도 대기하므로
+# PA 준비 타이밍이 어긋나도 안전하다.
+After=pulseaudio.service
+Wants=pulseaudio.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/arms/.local/bin/arms-usb-audio-default.sh
+RemainAfterExit=no
+
+[Install]
+WantedBy=default.target
