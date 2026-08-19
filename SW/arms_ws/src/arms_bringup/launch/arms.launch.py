@@ -64,9 +64,9 @@ def generate_launch_description():
         DeclareLaunchArgument("start_detection", default_value="true",
                               description="detection(YOLO) 도커 컨테이너 자동 기동 여부"),
         DeclareLaunchArgument(
-            "model", default_value="/models/balloon_camera.engine",
+            "model", default_value="/models/best_nano_v6.engine",
             description="detection 컨테이너가 로드할 가중치(컨테이너 내부 경로). "
-                        "기본=/models/balloon_camera.engine(카메라 학습모델 FP16 TRT), "
+                        "기본=/models/best_nano_v6.engine(nano FP16 TRT), "
                         "드론추적=/models/drone.engine"),
         # UI 표시 옵션 (실기체 기본: 전체화면·메인화면만).
         DeclareLaunchArgument("fullscreen", default_value="true",

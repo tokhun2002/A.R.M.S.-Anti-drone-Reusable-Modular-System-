@@ -86,6 +86,8 @@ class ArmsControlNode : public rclcpp::Node {
 
     declare_parameter("crsf.port", std::string("/tmp/crsf_tx"));
     declare_parameter("crsf.baud", 400000);
+    // 이 시간[s] 내 CRSF 텔레메트리가 안 오면 ELRS 링크 끊김으로 판정(UI 표시/효과음).
+    declare_parameter("crsf.telemetry_timeout_sec", 2.0);
 
     // ── 배터리 잔량(%) 계산 ────────────────────────────────────────────
     // cell_count>0 이면 측정 전압으로 퍼센트를 직접 계산한다
@@ -244,6 +246,7 @@ class ArmsControlNode : public rclcpp::Node {
     // ---- 배터리 잔량 계산 설정 ----
     battery_cell_count_   = static_cast<int>(get_parameter("battery.cell_count").as_int());
     battery_voltage_offset_ = get_parameter("battery.voltage_offset").as_double();
+    telemetry_timeout_sec_ = get_parameter("crsf.telemetry_timeout_sec").as_double();
     battery_cell_full_v_  = get_parameter("battery.cell_full_v").as_double();
     battery_cell_empty_v_ = get_parameter("battery.cell_empty_v").as_double();
 
@@ -501,6 +504,12 @@ class ArmsControlNode : public rclcpp::Node {
     crsf_rx_framing_errors_ += result.framing_errors;             // 프레임 길이 오류 수를 갱신한다.
     crsf_rx_valid_frames_ += result.frames.size();                // 정상 텔레메트리 수를 갱신한다.
 
+    // 유효 텔레메트리 프레임이 오면 링크 살아있음(ELRS 연결) — 마지막 수신 시각 갱신.
+    if (!result.frames.empty()) {
+      last_telem_time_ = now();
+      telem_ever_ = true;
+    }
+
     if (result.bytes_read > 0 || result.crc_errors > 0 ||
         result.framing_errors > 0)
     {
@@ -535,6 +544,8 @@ class ArmsControlNode : public rclcpp::Node {
           "down_rssi=%ddBm down_lq=%d%% down_snr=%ddB",
           up_rssi_1, up_rssi_2, up_lq, up_snr,
           down_rssi, down_lq, down_snr);                          // 링크 상태를 1초마다 보여준다.
+        last_up_lq_ = up_lq;                                      // uplink LQ 저장(0이면 RF 링크 끊김으로 본다).
+        last_lq_time_ = now();
       } else if ((frame.type == 0x1C || frame.type == 0x1D) &&
                  frame.payload.size() >= 5)
       {
@@ -938,6 +949,18 @@ class ArmsControlNode : public rclcpp::Node {
     msg.armed = ch5_armed;                // UI 효과음/표시용 (실제 CH5 arm 상태)
     msg.manual_mode = joy_manual_mode_;   // UI 효과음/표시용 (모드)
     msg.prearm_blocked = prearm_blocked_; // UI 경고용 (스틱 미idle 로 arm 차단)
+    // ELRS 링크: 텔레메트리를 timeout 내 받았고, 0x14 를 봤다면 uplink LQ>0 이어야 연결로 본다.
+    //   (텔레메트리 자체가 끊기면 timeout 으로, RF 만 끊겨 LQ=0 이면 LQ 로 잡는다.)
+    bool elrs_connected = false;
+    if (telem_ever_) {
+      const bool telem_recent =
+          (now_t - last_telem_time_).seconds() < telemetry_timeout_sec_;
+      const bool lq_recent =
+          (last_up_lq_ >= 0) &&
+          ((now_t - last_lq_time_).seconds() < telemetry_timeout_sec_);
+      elrs_connected = telem_recent && (!lq_recent || last_up_lq_ > 0);
+    }
+    msg.elrs_connected = elrs_connected;  // UI 표시/효과음용 (연결/끊김)
     pub_state_->publish(msg);
 
     // ---- 발사 잠금장치 서보 ----
@@ -1040,6 +1063,12 @@ class ArmsControlNode : public rclcpp::Node {
   // CRSF 송수신 상태
   std::unique_ptr<CrsfOutput> crsf_out_;                          // CRSF UART 송수신기를 소유한다.
   std::array<bool, 256> crsf_seen_types_{};                       // 처음 발견한 텔레메트리 타입을 구분한다.
+  // ELRS 링크 연결 판정용 텔레메트리 수신 추적.
+  rclcpp::Time last_telem_time_;        // 마지막 유효 텔레메트리 수신 시각
+  bool         telem_ever_{false};      // 텔레메트리를 한 번이라도 받았는지
+  int          last_up_lq_{-1};         // 마지막 0x14 uplink LQ[%] (-1=미수신)
+  rclcpp::Time last_lq_time_;           // 마지막 0x14 수신 시각
+  double       telemetry_timeout_sec_{2.0};  // 이 시간 내 텔레메트리 없으면 끊김
   std::size_t crsf_rx_bytes_{0};                                 // 누적 UART 수신량을 센다.
   std::size_t crsf_rx_valid_frames_{0};                          // 정상 텔레메트리 프레임 수를 센다.
   std::size_t crsf_rx_echoes_{0};                                // 자체 송신 에코 프레임 수를 센다.

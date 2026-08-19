@@ -88,9 +88,9 @@ def generate_launch_description():
         DeclareLaunchArgument("start_detection", default_value="true",
                               description="detection(YOLO) 도커 컨테이너 자동 기동 여부"),
         DeclareLaunchArgument(
-            "model", default_value="/models/balloon_camera.engine",
+            "model", default_value="/models/best_nano_v6.engine",
             description="detection 컨테이너가 로드할 가중치(컨테이너 내부 경로). "
-                        "기본=/models/balloon_camera.engine (FP16 TensorRT)"),
+                        "기본=/models/best_nano_v6.engine (nano FP16 TensorRT)"),
         # UI 표시 옵션 (replay 기본: 창모드·디버그 오버레이 on). 실기체 arms.launch.py 는
         # 전체화면·메인화면만이 기본. 필요하면 여기서 인자로 뒤집을 수 있다.
         DeclareLaunchArgument("fullscreen", default_value="false",

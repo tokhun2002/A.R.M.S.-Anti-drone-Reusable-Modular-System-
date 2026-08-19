@@ -90,9 +90,13 @@ class ArmsUINode(Node):
         self.declare_parameter("ui.sound_idle", os.path.join(_snd_dir, "idle.mp3"))
         # 킬 스위치 ON(engage) 경고음
         self.declare_parameter("ui.sound_kill", os.path.join(_snd_dir, "kill.mp3"))
+        # ELRS 텔레메트리 연결/끊김 효과음
+        self.declare_parameter("ui.sound_telm_connected", os.path.join(_snd_dir, "telm_connected.mp3"))
+        self.declare_parameter("ui.sound_telm_lost", os.path.join(_snd_dir, "telm_lost.mp3"))
         self._player = shutil.which("ffplay")
         if self._player is None:
             self.get_logger().warn("ffplay 없음 — 효과음이 재생되지 않습니다.")
+
 
         # ── 탐지 비프음 (mp3 없이 ffplay lavfi 사인파로 생성) ──────────────
         #   SEARCH: 느린 간격, LOCK/TRACK/FIRE: 빠른 간격으로 삑삑거린다.
@@ -133,6 +137,10 @@ class ArmsUINode(Node):
         self._latest_roi = None
         self._latest_hsv_debug = None
         self._latest_battery = None   # /arms/battery 최신값 (None=아직 미수신)
+        self._elrs_connected = None   # ELRS 연결 여부 (None=미수신, True/False). 엣지에 효과음
+        # 시작 안내음: 모드+텔레메트리를 순서대로(모드 먼저) 한 번만, 공백 없이 이어 재생.
+        #   이게 끝나기 전엔 개별 첫-수신 효과음을 내지 않아 순서가 보장된다.
+        self._startup_sound_done = False
         self._det_status = None       # raw [yolo, hsv proposal, legacy slot]
         history = max(30, int(self.get_parameter("ui.diagnostics_history").value))
         self._diag_history = {
@@ -224,6 +232,31 @@ class ArmsUINode(Node):
         self._prev_armed = armed
         self._prev_state = state
 
+        # ---- ELRS 연결/끊김 효과음 ----
+        #   시작 안내는 _maybe_startup_announce(모드→텔레메트리 순). 이후 변화 엣지에만 개별.
+        connected = bool(getattr(msg, "elrs_connected", False))
+        if self._startup_sound_done and self._elrs_connected is not None \
+                and connected != self._elrs_connected:
+            param = "ui.sound_telm_connected" if connected else "ui.sound_telm_lost"
+            self._play_sound(self.get_parameter(param).value)
+        self._elrs_connected = connected
+        self._maybe_startup_announce()
+
+    def _maybe_startup_announce(self):
+        """켜진 뒤 모드와 텔레메트리 연결여부가 둘 다 확인되면, 그때 한 번만
+        '모드 → 텔레메트리' 순서로 공백 없이 이어 재생한다(순서 보장 + 사이 공백 제거)."""
+        if self._startup_sound_done:
+            return
+        if self._prev_manual is None or self._elrs_connected is None:
+            return   # 아직 둘 중 하나 미수신 → 대기
+        mode_p = self.get_parameter(
+            "ui.sound_manual" if self._manual_mode else "ui.sound_auto").value
+        telm_p = self.get_parameter(
+            "ui.sound_telm_connected" if self._elrs_connected
+            else "ui.sound_telm_lost").value
+        self._startup_sound_done = True
+        self._play_sequence([mode_p, telm_p])   # 모드 먼저 → 텔레메트리, 공백 없이
+
     def _cb_debug(self, msg: Vector3):
         self._latest_cmd = msg
 
@@ -254,15 +287,17 @@ class ArmsUINode(Node):
         self._prev_kill = kill
         manual = bool(msg.buttons[MODE_BUTTON_IDX])
         self._manual_mode = manual
-        # 첫 수신(현재 모드 안내) 또는 전환 엣지에서 효과음.
-        #   → 전체 시스템 런치 시 지금 어느 모드인지 소리로 알려준다.
-        if self._prev_manual is None or manual != self._prev_manual:
+        # 시작 안내(모드+텔레메트리)는 _maybe_startup_announce 가 순서대로 한 번에 낸다.
+        #   그 이후의 모드 전환 엣지에만 개별 효과음을 낸다.
+        if self._startup_sound_done and self._prev_manual is not None \
+                and manual != self._prev_manual:
             param = "ui.sound_manual" if manual else "ui.sound_auto"
             self._play_sound(self.get_parameter(param).value)
         self._prev_manual = manual
+        self._maybe_startup_announce()
 
     def _play_sound(self, path):
-        """ffplay 로 효과음을 비동기 재생 (UI 렌더링을 막지 않음)."""
+        """ffplay 로 효과음을 비동기 즉시 재생 (UI 렌더링을 막지 않음, 지연 없음)."""
         # 트리거가 실제로 걸렸는지 항상 로그로 남긴다 (재생 성공 여부와 별개).
         #   → 로그는 뜨는데 소리가 없으면 오디오/ffplay 문제, 로그도 없으면 토픽/필드 문제.
         self.get_logger().info(
@@ -284,6 +319,24 @@ class ArmsUINode(Node):
 
         threading.Thread(target=_run, daemon=True).start()
 
+    def _play_sequence(self, paths):
+        """여러 효과음을 하나의 ffplay(concat 프로토콜)로 순서대로·공백 없이 이어 재생.
+        시작 안내(모드→텔레메트리)처럼 순서가 중요한 경우에만 쓴다. 비동기(즉시)."""
+        paths = [p for p in paths if p and os.path.isfile(p)]
+        if not paths or self._player is None:
+            return
+        src = paths[0] if len(paths) == 1 else "concat:" + "|".join(paths)
+
+        def _run():
+            try:
+                subprocess.run(
+                    [self._player, "-nodisp", "-autoexit", "-loglevel", "quiet", "-i", src],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as e:
+                self.get_logger().warn(f"효과음 재생 실패: {e}")
+
+        threading.Thread(target=_run, daemon=True).start()
+
     # ------------------------------------------------------------------
     # 탐지 비프음 (상태별 간격)
     # ------------------------------------------------------------------
@@ -298,11 +351,10 @@ class ArmsUINode(Node):
         else:
             h, w = 720, 960
         frame = np.full((h, w, 3), 30, dtype=np.uint8)
-        self._put_center_text(frame, "NO CAMERA SIGNAL", int(h * 0.45),
+        self._put_center_text(frame, "NO CAMERA SIGNAL", int(h * 0.5),
                               (0, 0, 255), max(0.8, w / 900.0), 2)
-        self._put_center_text(frame, "waiting for /arms/image_raw", int(h * 0.54),
-                              (200, 200, 200), max(0.5, w / 1700.0), 1)
-        self._draw_crosshair(frame)
+        # 대기화면에선 중앙 십자선·부제를 그리지 않는다(요청).
+        self._draw_link_status(frame)            # 모드·TELM 연결 표시
         self._draw_battery(frame)
         self._draw_power_ui(frame)               # 전원 버튼 사용 가능하게
         self._fit_xform = (0.0, 0.0, 1.0, 1.0)   # 이미 화면 크기 → 항등(터치 매핑)
@@ -418,7 +470,9 @@ class ArmsUINode(Node):
             self._draw_prearm_banner(frame)
         # 중앙 조준 십자선은 상태·모드 무관하게 항상 표시 (IDLE 포함).
         self._draw_crosshair(frame)
-        # 배터리(전압/퍼센트)는 좌측 하단에 자동/수동 무관하게 항상 표시.
+        # 현재 모드(AUTO/MANUAL)·ELRS 연결 여부는 상단 중앙에 항상 표시.
+        self._draw_link_status(frame)
+        # 배터리(전압/퍼센트)는 하단 중앙에 자동/수동 무관하게 항상 표시.
         self._draw_battery(frame)
         # 검출기 작동여부·confidence·모드 텍스트는 디버그 모드에서만(메인은 깔끔하게).
         if self._debug and not self._manual_mode and (
@@ -770,6 +824,35 @@ class ArmsUINode(Node):
         cv2.line(frame, (cx_f - 20, cy_f), (cx_f + 20, cy_f), (0, 255, 0), 1)
         cv2.line(frame, (cx_f, cy_f - 20), (cx_f, cy_f + 20), (0, 255, 0), 1)
         cv2.circle(frame, (cx_f, cy_f), 2, (0, 255, 0), -1)
+
+    def _draw_link_status(self, frame):
+        """현재 모드(TRACKING/MANUAL)와 TELM 연결 여부를 상단 중앙에 한 줄로 표시 — 항상.
+        TELM 슬롯 폭을 가장 긴 'TELM LOST' 로 고정해, 연결상태가 바뀌어도 MODE 위치가 안 밀린다."""
+        h, w = frame.shape[:2]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = max(0.5, h / 900.0)
+        thick = max(1, int(round(scale * 2)))
+        mode_txt = "MANUAL" if self._manual_mode else "TRACKING"
+        if self._elrs_connected is None:
+            link_txt, link_col = "", (0, 0, 0)   # 아직 미수신 → TELM 표시 안 함(모드만)
+        elif self._elrs_connected:
+            link_txt, link_col = "TELM OK", (0, 220, 0)
+        else:
+            # 끊김은 안전상 눈에 띄게 점멸(빨강).
+            self._elrs_blink = (getattr(self, "_elrs_blink", 0) + 1) % 20
+            link_col = (60, 60, 60) if self._elrs_blink >= 13 else (0, 0, 255)
+            link_txt = "TELM LOST"
+        sep = "   "
+        mode_str = mode_txt + sep
+        (mw, th), _ = cv2.getTextSize(mode_str, font, scale, thick)
+        (slot_w, _), _ = cv2.getTextSize("TELM LOST", font, scale, thick)   # 슬롯 폭 고정
+        x = (w - (mw + slot_w)) // 2
+        y = max(th + 6, int(h * 0.035))
+        # 외곽선 → 가독성. 모드=흰색, TELM=상태색. (각각 따로 그려 슬롯 고정 유지)
+        cv2.putText(frame, mode_str, (x, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
+        cv2.putText(frame, mode_str, (x, y), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
+        cv2.putText(frame, link_txt, (x + mw, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
+        cv2.putText(frame, link_txt, (x + mw, y), font, scale, link_col, thick, cv2.LINE_AA)
 
     def _draw_battery(self, frame):
         """배터리 전압/잔량을 하단 중앙에 표시 — 자동/수동·디버그 무관하게 항상
