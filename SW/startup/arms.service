@@ -10,10 +10,10 @@ User=arms
 Group=arms
 
 # arms_ui(OpenCV 창)가 실기체 모니터에 뜨도록 X 디스플레이 지정.
-#   이 기기: X11 세션, Xorg 가 vt2/DISPLAY=:1, auth 는 GDM 관리 경로.
-#   (확인: `ls /tmp/.X11-unix` 로 소켓 번호, `ps -e -o cmd|grep Xorg` 로 -auth 경로)
+#   이 기기: X11 세션, Xorg 가 vt2/DISPLAY=:0(소켓 /tmp/.X11-unix/X0), auth 는 GDM 관리 경로.
+#   (확인: `ls /tmp/.X11-unix` 로 소켓 번호 → X0=:0, `ps -e -o cmd|grep Xorg` 로 -auth 경로)
 #   ★ ~/.Xauthority 는 없음 — GDM 은 /run/user/<uid>/gdm/Xauthority 를 씀.
-Environment=DISPLAY=:1
+Environment=DISPLAY=:0
 Environment=XAUTHORITY=/run/user/1000/gdm/Xauthority
 Environment=ROS_DOMAIN_ID=0
 

@@ -102,6 +102,31 @@ cp ~/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/startup/arms-autostart.desk
 - 로그: `~/arms_logs/arms_startup_YYYYmmdd_HHMMSS.log` (+ systemd는 journald).
 - 환경변수로 조정: `ARMS_ROOT`, `ROS_DOMAIN_ID`, `ARMS_DEVICE_WAIT`, `ARMS_LOG_DIR`.
 
+## 실행 중지 (뜬 것 끄기)
+
+autostart(방법 B)는 `Terminal=false` 라 창에서 Ctrl-C 가 안 된다. 터미널에서 런치를 끈다:
+
+```bash
+pkill -INT -f "ros2 launch arms_bringup"
+```
+→ video·command·control·ui 노드가 정리된다.
+
+검출 **도커 컨테이너는 별도**(`docker compose up -d` 로 뜸)라 위 명령으로 안 꺼진다. 같이 내리려면:
+
+```bash
+docker stop docker-arms_detection-1
+```
+
+한 번에 다 끄기:
+
+```bash
+pkill -INT -f "ros2 launch arms_bringup"; docker stop docker-arms_detection-1
+```
+
+> systemd(방법 A)로 띄웠다면: `sudo systemctl stop arms.service`.
+> UI 우상단 **OFF 버튼은 젯슨 전원 자체를 끔**(poweroff) — 런치만 끄는 것과 다르다.
+> **다음 부팅부터 자동실행 자체를 끄려면**: `rm ~/.config/autostart/arms-autostart.desktop`.
+
 ## 먼저 수동 테스트
 
 부팅 자동화 전에 스크립트가 잘 뜨는지 확인:
@@ -116,5 +141,5 @@ UI 창이 뜨고 노드들이 올라오면 성공. Ctrl-C 로 종료.
 - 다만 **arm 재토글 안전장치**로 부팅 시엔 스위치가 arm이어도 **disarm으로 시작**한다
   (DISARM→ARM 재토글 + 수동은 스틱 idle 이어야 arm). 그래도 첫 전원 인가 시 프로펠러
   제거 등 기본 안전수칙을 지킬 것.
-- 문제 시 즉시 멈추려면: systemd는 `sudo systemctl stop arms.service`,
-  autostart는 창에서 Ctrl-C 또는 해당 프로세스 종료.
+- 문제 시 즉시 멈추려면: `pkill -INT -f "ros2 launch arms_bringup"`
+  (systemd 방식은 `sudo systemctl stop arms.service`). 자세한 건 위 "실행 중지" 절.
