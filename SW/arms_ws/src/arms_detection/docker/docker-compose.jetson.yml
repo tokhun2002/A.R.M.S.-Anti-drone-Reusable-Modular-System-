@@ -21,7 +21,7 @@ services:
       # and host because FastDDS SHM requires FD passing via Unix socket, which
       # does not work across the container boundary even with ipc: host.
       - FASTRTPS_DEFAULT_PROFILES_FILE=/fastdds_udp.xml
-      - ARMS_MODEL=${ARMS_MODEL:-/models/balloon_camera.engine}
+      - ARMS_MODEL=${ARMS_MODEL:-/models/best_nano_v6.engine}
       - ARMS_CONF=${ARMS_CONF:-0.32}
       - ARMS_IOU=${ARMS_IOU:-0.45}
       # 정적 TensorRT 엔진(balloon_camera.engine)은 단일 크기(320)로 빌드됨 →
