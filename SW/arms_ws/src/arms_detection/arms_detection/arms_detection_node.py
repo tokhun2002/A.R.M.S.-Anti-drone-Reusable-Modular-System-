@@ -21,7 +21,7 @@ arms_detection_node — A.R.M.S. 빨간 풍선 검출기
 
 파라미터 (ros2 param set /arms_detection_node ...)
   use_yolo/use_hsv             : bool  검출/후보 제안 on/off (기본 true)
-  yolo.full_fallback_interval  : int   전체 화면 YOLO fallback 주기 (기본 5)
+  yolo.full_fallback_interval  : int   전체 화면 YOLO fallback 주기 (기본 2)
   proc_width            : int   검출 처리 가로 해상도, 0=원본 (기본 640)
   publish_debug         : bool  디버그 영상 발행 (기본 true)
   track.enable          : bool  detect-then-track on/off (기본 true, false=매프레임 검출)
@@ -322,31 +322,31 @@ class ArmsDetectionNode(Node):
         self.declare_parameter("use_hsv",    True)
         # HSV→ROI YOLO가 기본 경로다. HSV가 놓치는 색 변화에 대비해 전체 화면
         # YOLO를 낮은 주기로 실행한다. 0 이하면 full fallback을 끈다.
-        self.declare_parameter("yolo.full_fallback_interval", 5)
+        self.declare_parameter("yolo.full_fallback_interval", 2)
         self.declare_parameter("yolo.proposal_crop_px", 192)
         # 검출 처리 해상도(가로 px). 0=원본. 출력은 비율이라 정확도 무관, CV 비용만 절감.
         self.declare_parameter("proc_width", 320)
         self.declare_parameter("publish_debug", True)
 
         # --- HSV proposal (단독 LOCK 금지) ------------------------------------
-        self.declare_parameter("hsv.max_candidates",            3)
+        self.declare_parameter("hsv.max_candidates",            4)
         # 질감 계산은 비교적 비싸므로 기본 형상/색 점수 상위 후보에만 적용한다.
-        self.declare_parameter("hsv.texture_shortlist",          8)
+        self.declare_parameter("hsv.texture_shortlist",         10)
         self.declare_parameter("hsv.min_area_ratio",          0.00003)
         self.declare_parameter("hsv.full_conf_area_ratio",    0.0100)
-        self.declare_parameter("hsv.max_area_ratio",          0.0200)
+        self.declare_parameter("hsv.max_area_ratio",          0.1000)
         # OpenCV hue(0..179)는 빨강이 0/179 경계에 걸쳐 있다. 경계 두 구간을
         # hard threshold로 자르는 대신 원형 hue 거리의 Gaussian 확률로 평가한다.
-        self.declare_parameter("hsv.hue_sigma",               12.0)
-        # 핑크색 벽처럼 hue가 빨강과 가깝지만 채도가 낮은 배경을 억제하도록
-        # 실기체 튜닝값을 기본값으로 사용한다.
-        self.declare_parameter("hsv.prob_threshold",          0.20)
-        self.declare_parameter("hsv.sat_center",             75.0)
-        self.declare_parameter("hsv.sat_scale",               22.0)
-        self.declare_parameter("hsv.val_min",                 30.0)
-        self.declare_parameter("hsv.val_max_center",          225.0)
-        self.declare_parameter("hsv.val_scale",               18.0)
-        self.declare_parameter("hsv.min_circularity",         0.20)
+        self.declare_parameter("hsv.hue_sigma",               14.0)
+        # 실내 조명에서 채도가 낮아지거나 반사광으로 밝아진 풍선도 후보에
+        # 포함한다. HSV는 후보만 만들고 최종 승인은 YOLO가 수행한다.
+        self.declare_parameter("hsv.prob_threshold",          0.22)
+        self.declare_parameter("hsv.sat_center",              80.0)
+        self.declare_parameter("hsv.sat_scale",               30.0)
+        self.declare_parameter("hsv.val_min",                 25.0)
+        self.declare_parameter("hsv.val_max_center",          245.0)
+        self.declare_parameter("hsv.val_scale",               28.0)
+        self.declare_parameter("hsv.min_circularity",         0.23)
         self.declare_parameter("hsv.texture_scale",           120.0)
         # SEARCH 진단용: YOLO/HSV 각각의
         # 검출 여부·confidence 를 /arms/detector_status 로 발행해 UI 가 표시한다.
@@ -440,7 +440,7 @@ class ArmsDetectionNode(Node):
 
         if not _tracker_available():
             self.get_logger().warn(
-                "cv2 트래커(CSRT/KCF) 없음 — opencv-contrib 미설치. "
+                "cv2 트래커(CSRT/KCF) 없음 — opencv-contrib 미설치  . "
                 "detect-then-track 비활성 → 매프레임 검출로 폴백(기능은 정상).")
 
         self.get_logger().info(
@@ -519,11 +519,8 @@ class ArmsDetectionNode(Node):
         self._diag["total_ms"] = (time.perf_counter() - frame_started) * 1000.0
         self._publish_detector_status()
 
-        if self.pub_hsv_debug.get_subscription_count() > 0:
-            # TRACK/ROI 구간에는 원래 HSV를 실행하지 않는다. RQT 또는 UI의 S키
-            # 일회성 캡처가 구독한 경우에만 HSV 화면을 별도로 한 번 계산한다.
-            if self._diag_hsv_mask is None:
-                self._diag_hsv_proposals = self._detect_hsv_candidates(bgr)
+        if (self._diag_hsv_mask is not None and
+                self.pub_hsv_debug.get_subscription_count() > 0):
             self._publish_hsv_debug(bgr, header)
 
         out = DetectionArray()

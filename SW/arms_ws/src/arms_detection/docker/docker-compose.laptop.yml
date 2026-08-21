@@ -26,6 +26,9 @@ services:
       - ARMS_FULL_IMGSZ=${ARMS_FULL_IMGSZ:-512}
       - ARMS_ROI_IMGSZ=${ARMS_ROI_IMGSZ:-320}
       - ARMS_CLASSES=${ARMS_CLASSES:-balloon}
+      # 영상 노드는 JPEG 압축 토픽도 함께 발행한다. 컨테이너 경계를 넘어 큰 raw
+      # 프레임을 UDP로 받으면 조각 유실이 발생하기 쉬우므로 압축 입력을 기본 사용한다.
+      - ARMS_INPUT_COMPRESSED=${ARMS_INPUT_COMPRESSED:-1}
     volumes:
       - ./models:/models:ro    # place .pt model file here
       - ./fastdds_udp.xml:/fastdds_udp.xml:ro
