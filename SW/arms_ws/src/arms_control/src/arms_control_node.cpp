@@ -966,25 +966,23 @@ class ArmsControlNode : public rclcpp::Node {
     pub_state_->publish(msg);
 
     // ---- 발사 잠금장치 서보 ----
-    //   상태 전이 엣지로만 판정한다(방아쇠 버튼이 아니라 LOCK→TRACK 전이가 열림 트리거).
-    //     · IDLE 진입            → OPEN (무조건 열림, 기체 장착/탈거)
-    //     · IDLE→SEARCH (auto)   → LOCK (상승엣지, 발사기 고정)
-    //     · LOCK→TRACK (발사)    → OPEN (기체 놓아줌)
-    //   in-tick 전이(arm/disarm 등) 이후의 최신 상태로 판정한다.
+    //   ★ 설계(안전): 방아쇠/발사 전이(LOCK→TRACK)로는 **절대 열리지 않는다**(발사 금지).
+    //     · IDLE          → OPEN  (기체 장착/탈거 때만 열림)
+    //     · IDLE 이탈(auto)→ LOCK  (SEARCH 진입 = 발사기 고정)
+    //     · 이후 SEARCH/LOCK/TRACK/FIRE/RTL 어느 상태에서도 열지 않는다
+    //       → **IDLE 로 복귀하기 전까지 계속 잠김.**
+    //   상태 전이 엣지로만 판정한다. in-tick 전이(arm/disarm 등) 이후 최신 상태 기준.
     State servo_state = sm_->state();
     if (!servo_init_) {
       servo_init_ = true;
       servo_->open();  // 시작 상태 IDLE → OPEN
     } else if (servo_state != servo_prev_state_) {
       if (servo_state == State::IDLE) {
-        servo_->open();
-      } else if (servo_prev_state_ == State::IDLE &&
-                 servo_state == State::SEARCH && !joy_manual_mode_) {
-        servo_->lock();
-      } else if (servo_prev_state_ == State::LOCK &&
-                 servo_state == State::TRACK) {
-        servo_->open();
+        servo_->open();                        // IDLE 복귀 시에만 열림
+      } else if (servo_prev_state_ == State::IDLE && !joy_manual_mode_) {
+        servo_->lock();                        // IDLE 이탈(SEARCH) → 잠금 유지
       }
+      // ※ 방아쇠(LOCK→TRACK)로 여는 분기는 의도적으로 제거(발사 안 함).
     }
     servo_prev_state_ = servo_state;
   }
