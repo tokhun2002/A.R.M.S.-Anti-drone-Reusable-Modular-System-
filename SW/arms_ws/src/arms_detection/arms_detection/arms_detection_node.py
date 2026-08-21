@@ -38,6 +38,7 @@ import time
 import numpy as np
 import cv2
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
@@ -328,7 +329,7 @@ class ArmsDetectionNode(Node):
         self.declare_parameter("publish_debug", True)
 
         # --- HSV proposal (단독 LOCK 금지) ------------------------------------
-        self.declare_parameter("hsv.max_candidates",            2)
+        self.declare_parameter("hsv.max_candidates",            3)
         # 질감 계산은 비교적 비싸므로 기본 형상/색 점수 상위 후보에만 적용한다.
         self.declare_parameter("hsv.texture_shortlist",          8)
         self.declare_parameter("hsv.min_area_ratio",          0.00003)
@@ -339,13 +340,13 @@ class ArmsDetectionNode(Node):
         self.declare_parameter("hsv.hue_sigma",               12.0)
         # 핑크색 벽처럼 hue가 빨강과 가깝지만 채도가 낮은 배경을 억제하도록
         # 실기체 튜닝값을 기본값으로 사용한다.
-        self.declare_parameter("hsv.prob_threshold",          0.35)
-        self.declare_parameter("hsv.sat_center",             100.0)
+        self.declare_parameter("hsv.prob_threshold",          0.20)
+        self.declare_parameter("hsv.sat_center",             75.0)
         self.declare_parameter("hsv.sat_scale",               22.0)
         self.declare_parameter("hsv.val_min",                 30.0)
         self.declare_parameter("hsv.val_max_center",          225.0)
         self.declare_parameter("hsv.val_scale",               18.0)
-        self.declare_parameter("hsv.min_circularity",         0.35)
+        self.declare_parameter("hsv.min_circularity",         0.20)
         self.declare_parameter("hsv.texture_scale",           120.0)
         # SEARCH 진단용: YOLO/HSV 각각의
         # 검출 여부·confidence 를 /arms/detector_status 로 발행해 UI 가 표시한다.
@@ -996,11 +997,14 @@ def main(args=None):
     node = ArmsDetectionNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
+        # Ctrl-C / docker stop(SIGINT·SIGTERM): rclpy 가 컨텍스트를 이미 닫으므로
+        # 여기서 조용히 빠져나온다(아래 rclpy.ok() 가드로 이중 shutdown 방지).
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":
