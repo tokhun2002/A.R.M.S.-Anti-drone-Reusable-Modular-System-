@@ -380,7 +380,7 @@ class ArmsControlNode : public rclcpp::Node {
           };
           int kill = btn(0), arm = btn(1), mode = btn(2), launch = btn(3);
 
-          // MODE: 레벨 스위치. 0=auto(영상유도, PX4 Manual), 1=manual(손제어, PX4 Altitude)
+          // MODE: 레벨 스위치. 0=auto(영상유도, Betaflight Acro), 1=manual(손제어, Betaflight Angle)
           bool new_manual = static_cast<bool>(mode);
           if (new_manual != joy_manual_mode_) {
             joy_manual_mode_ = new_manual;
@@ -390,16 +390,23 @@ class ArmsControlNode : public rclcpp::Node {
             //   모드가 바뀌면 래치를 걸어, DISARM 으로 내렸다가 다시 올려야만 arm 되게 한다.
             require_arm_reset_ = true;
             RCLCPP_INFO(get_logger(), "Mode: %s (ARM 재토글 필요)",
-                        joy_manual_mode_ ? "MANUAL (Altitude)" : "AUTO (Manual)");
+                        joy_manual_mode_ ? "MANUAL (Angle)" : "AUTO (Acro)");
           }
           if (launch && !prev_btn_[3]) {
             sm_->on_launch_button();
           }
 
+          const bool kill_edge = kill && !prev_btn_[0];   // kill 상승엣지
           joy_kill_ = static_cast<bool>(kill);
           joy_arm_  = static_cast<bool>(arm);
           // ARM 스위치를 기본 위치(DISARM)로 내리면 재토글 래치 해제.
           if (!joy_arm_) require_arm_reset_ = false;
+          // KILL 이 걸리면 재무장 래치를 세운다(위 해제보다 우선) → kill 을 내려도
+          //   arm 스위치를 재토글(DOWN→UP)해야만 다시 무장. 실수로 즉시 재무장 방지.
+          if (kill_edge) {
+            require_arm_reset_ = true;
+            RCLCPP_WARN(get_logger(), "KILL — 강제 disarm (재무장하려면 ARM 재토글)");
+          }
           prev_btn_[0] = kill; prev_btn_[1] = arm;
           prev_btn_[2] = mode; prev_btn_[3] = launch;
         });
@@ -503,12 +510,6 @@ class ArmsControlNode : public rclcpp::Node {
     crsf_rx_crc_errors_ += result.crc_errors;                     // CRC 오류 수를 갱신한다.
     crsf_rx_framing_errors_ += result.framing_errors;             // 프레임 길이 오류 수를 갱신한다.
     crsf_rx_valid_frames_ += result.frames.size();                // 정상 텔레메트리 수를 갱신한다.
-
-    // 유효 텔레메트리 프레임이 오면 링크 살아있음(ELRS 연결) — 마지막 수신 시각 갱신.
-    if (!result.frames.empty()) {
-      last_telem_time_ = now();
-      telem_ever_ = true;
-    }
 
     if (result.bytes_read > 0 || result.crc_errors > 0 ||
         result.framing_errors > 0)
@@ -852,11 +853,13 @@ class ArmsControlNode : public rclcpp::Node {
     const bool manual_out = joy_manual_mode_ || rtl_handover;
 
     // ---- CH5(FC arm) 결정 ----
-    //   RTL: 이미 비행 중이므로 무조건 armed 유지 (착지 후 PX4 COM_DISARM_LAND 가 무장해제).
+    //   KILL: 최우선 — 눌려 있으면 무조건 disarm(CH5 low). 즉시 모터 정지.
+    //   RTL: 이미 비행 중이므로 무조건 armed 유지 (착지 후 auto-disarm).
     //   수동: manual_armed_ (재토글 안전장치 + pre-arm 스틱 idle 확인).
     //   자동: 스위치와 분리 — 상태머신 상태 기반(auto_arm_states_)으로 컨트롤 노드가 결정.
     const bool ch5_armed =
-        rtl_handover      ? true
+        joy_kill_          ? false
+        : rtl_handover     ? true
         : joy_manual_mode_ ? manual_armed_
                            : (auto_arm_states_.count(to_string(state)) > 0);
 
@@ -890,11 +893,12 @@ class ArmsControlNode : public rclcpp::Node {
       //   자동: 기본 발사(TRACK)부터 arm (control.auto_arm_states 로 조정).
       crsf[4] = ch5_armed ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
 
-      // CH6: flight mode — auto=PX4 Manual/ACRO(172), manual|RTL=PX4 Altitude(1811).
-      //   RTL 이면 자동으로 Altitude 로 넘어가 조종사가 이어받아 수동 착륙. RC_MAP_FLTMODE=6.
+      // CH6: flight mode — auto=Acro(172, low), manual|RTL=Angle(1811, high).
+      //   Betaflight Modes 탭에서 AUX2(CH6) high 구간에 Angle 을 배정(low=미할당=Acro).
+      //   RTL 이면 자동으로 Angle(수동)로 넘어가 조종사가 이어받아 착륙.
       crsf[5] = manual_out ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
 
-      // CH7: kill switch (양쪽 모드 공통, FC가 직접 모터 차단)
+      // CH7: kill 지시(참고용). 실제 kill 은 CH5 를 강제 disarm 해 처리하므로 BF 매핑 불필요.
       crsf[6] = joy_kill_ ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
 
       // CH8: 미사용 (crsf.fill(CRSF_MIN)으로 172 고정)
@@ -949,40 +953,36 @@ class ArmsControlNode : public rclcpp::Node {
     msg.armed = ch5_armed;                // UI 효과음/표시용 (실제 CH5 arm 상태)
     msg.manual_mode = joy_manual_mode_;   // UI 효과음/표시용 (모드)
     msg.prearm_blocked = prearm_blocked_; // UI 경고용 (스틱 미idle 로 arm 차단)
-    // ELRS 링크: 텔레메트리를 timeout 내 받았고, 0x14 를 봤다면 uplink LQ>0 이어야 연결로 본다.
-    //   (텔레메트리 자체가 끊기면 timeout 으로, RF 만 끊겨 LQ=0 이면 LQ 로 잡는다.)
-    bool elrs_connected = false;
-    if (telem_ever_) {
-      const bool telem_recent =
-          (now_t - last_telem_time_).seconds() < telemetry_timeout_sec_;
-      const bool lq_recent =
-          (last_up_lq_ >= 0) &&
-          ((now_t - last_lq_time_).seconds() < telemetry_timeout_sec_);
-      elrs_connected = telem_recent && (!lq_recent || last_up_lq_ > 0);
-    }
+    // ELRS 링크 판정 = **바인딩+RF 링크가 실제로 살아있는가**.
+    //   TX 모듈이 젯슨에 꽂혀 있으면 바인딩 안 돼도 CRSF 프레임(0x3A RadioSync 등)은
+    //   계속 오므로, "프레임 수신"만으론 연결로 보면 안 된다. 실제 링크의 지표는
+    //   LinkStatistics(0x14)의 **uplink LQ**(우리 명령이 RX 까지 도달하는 비율):
+    //     · 바인딩 안 됨/범위 밖 → LQ=0 (또는 0x14 자체가 안 옴) → LOST
+    //     · 바인딩+연결        → LQ>0 → OK
+    const bool elrs_connected =
+        (last_up_lq_ > 0) &&
+        ((now_t - last_lq_time_).seconds() < telemetry_timeout_sec_);
     msg.elrs_connected = elrs_connected;  // UI 표시/효과음용 (연결/끊김)
     pub_state_->publish(msg);
 
     // ---- 발사 잠금장치 서보 ----
-    //   상태 전이 엣지로만 판정한다(방아쇠 버튼이 아니라 LOCK→TRACK 전이가 열림 트리거).
-    //     · IDLE 진입            → OPEN (무조건 열림, 기체 장착/탈거)
-    //     · IDLE→SEARCH (auto)   → LOCK (상승엣지, 발사기 고정)
-    //     · LOCK→TRACK (발사)    → OPEN (기체 놓아줌)
-    //   in-tick 전이(arm/disarm 등) 이후의 최신 상태로 판정한다.
+    //   ★ 설계(안전): 방아쇠/발사 전이(LOCK→TRACK)로는 **절대 열리지 않는다**(발사 금지).
+    //     · IDLE          → OPEN  (기체 장착/탈거 때만 열림)
+    //     · IDLE 이탈(auto)→ LOCK  (SEARCH 진입 = 발사기 고정)
+    //     · 이후 SEARCH/LOCK/TRACK/FIRE/RTL 어느 상태에서도 열지 않는다
+    //       → **IDLE 로 복귀하기 전까지 계속 잠김.**
+    //   상태 전이 엣지로만 판정한다. in-tick 전이(arm/disarm 등) 이후 최신 상태 기준.
     State servo_state = sm_->state();
     if (!servo_init_) {
       servo_init_ = true;
       servo_->open();  // 시작 상태 IDLE → OPEN
     } else if (servo_state != servo_prev_state_) {
       if (servo_state == State::IDLE) {
-        servo_->open();
-      } else if (servo_prev_state_ == State::IDLE &&
-                 servo_state == State::SEARCH && !joy_manual_mode_) {
-        servo_->lock();
-      } else if (servo_prev_state_ == State::LOCK &&
-                 servo_state == State::TRACK) {
-        servo_->open();
+        servo_->open();                        // IDLE 복귀 시에만 열림
+      } else if (servo_prev_state_ == State::IDLE && !joy_manual_mode_) {
+        servo_->lock();                        // IDLE 이탈(SEARCH) → 잠금 유지
       }
+      // ※ 방아쇠(LOCK→TRACK)로 여는 분기는 의도적으로 제거(발사 안 함).
     }
     servo_prev_state_ = servo_state;
   }
@@ -1063,12 +1063,10 @@ class ArmsControlNode : public rclcpp::Node {
   // CRSF 송수신 상태
   std::unique_ptr<CrsfOutput> crsf_out_;                          // CRSF UART 송수신기를 소유한다.
   std::array<bool, 256> crsf_seen_types_{};                       // 처음 발견한 텔레메트리 타입을 구분한다.
-  // ELRS 링크 연결 판정용 텔레메트리 수신 추적.
-  rclcpp::Time last_telem_time_;        // 마지막 유효 텔레메트리 수신 시각
-  bool         telem_ever_{false};      // 텔레메트리를 한 번이라도 받았는지
+  // ELRS 링크(바인딩+RF) 판정: LinkStatistics(0x14)의 uplink LQ 로만 본다.
   int          last_up_lq_{-1};         // 마지막 0x14 uplink LQ[%] (-1=미수신)
   rclcpp::Time last_lq_time_;           // 마지막 0x14 수신 시각
-  double       telemetry_timeout_sec_{2.0};  // 이 시간 내 텔레메트리 없으면 끊김
+  double       telemetry_timeout_sec_{2.0};  // 이 시간 내 0x14(LQ) 없으면 끊김
   std::size_t crsf_rx_bytes_{0};                                 // 누적 UART 수신량을 센다.
   std::size_t crsf_rx_valid_frames_{0};                          // 정상 텔레메트리 프레임 수를 센다.
   std::size_t crsf_rx_echoes_{0};                                // 자체 송신 에코 프레임 수를 센다.

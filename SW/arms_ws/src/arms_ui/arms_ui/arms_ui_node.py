@@ -111,6 +111,9 @@ class ArmsUINode(Node):
         # ELRS 텔레메트리 연결/끊김 효과음
         self.declare_parameter("ui.sound_telm_connected", os.path.join(_snd_dir, "telm_connected.mp3"))
         self.declare_parameter("ui.sound_telm_lost", os.path.join(_snd_dir, "telm_lost.mp3"))
+        # TELM 효과음 안정화: 시작 직후 링크 성립 대기(grace) + 성립 중/운영 중 깜빡임 무시(debounce).
+        self.declare_parameter("ui.telm_startup_grace_sec", 6.0)
+        self.declare_parameter("ui.telm_debounce_sec", 1.5)
         self._player = shutil.which("ffplay")
         if self._player is None:
             self.get_logger().warn("ffplay 없음 — 효과음이 재생되지 않습니다.")
@@ -156,9 +159,12 @@ class ArmsUINode(Node):
         self._latest_roi = None
         self._latest_hsv_debug = None
         self._latest_battery = None   # /arms/battery 최신값 (None=아직 미수신)
-        self._elrs_connected = None   # ELRS 연결 여부 (None=미수신, True/False). 엣지에 효과음
-        # 시작 안내음: 모드+텔레메트리를 순서대로(모드 먼저) 한 번만, 공백 없이 이어 재생.
-        #   이게 끝나기 전엔 개별 첫-수신 효과음을 내지 않아 순서가 보장된다.
+        self._elrs_connected = None   # ELRS 연결 여부 (None=미수신). 화면 표시는 이 값으로 즉시 반영
+        self._elrs_sound_state = None # 효과음 기준 상태(디바운스로 확정된 값). None=아직 안 알림
+        self._elrs_changed_t = 0.0    # raw 표시값이 마지막으로 바뀐 시각(디바운스용)
+        self._start_t = time.monotonic()  # 노드 시작 시각(시작 안내 grace 계산용)
+        # 시작 안내음: 모드+텔레메트리를 모드 먼저 한 번만, 공백 없이 이어 재생.
+        #   링크가 붙는 데 몇 초 걸리므로, 붙거나 grace 가 지나야 안내 → 켤 때 잠깐 뜨는 초기 LOST 억제.
         self._startup_sound_done = False
         self._det_status = None       # raw [yolo, hsv proposal, legacy slot]
         history = max(30, int(self.get_parameter("ui.diagnostics_history").value))
@@ -253,30 +259,42 @@ class ArmsUINode(Node):
         self._prev_armed = armed
         self._prev_state = state
 
-        # ---- ELRS 연결/끊김 효과음 ----
-        #   시작 안내는 _maybe_startup_announce(모드→텔레메트리 순). 이후 변화 엣지에만 개별.
+        # ---- ELRS(TELM) 연결/끊김 효과음 ----
+        #   시작 안내는 _maybe_startup_announce(모드→텔레메트리, 링크 붙거나 grace 후).
+        #   운영 중 변화는 debounce 로 깜빡임을 무시하고 확정된 것만 낸다(겹침 방지).
         connected = bool(getattr(msg, "elrs_connected", False))
-        if self._startup_sound_done and self._elrs_connected is not None \
-                and connected != self._elrs_connected:
-            param = "ui.sound_telm_connected" if connected else "ui.sound_telm_lost"
-            self._play_sound(self.get_parameter(param).value)
-        self._elrs_connected = connected
+        now = time.monotonic()
+        if self._elrs_connected is None or connected != self._elrs_connected:
+            self._elrs_changed_t = now       # raw(표시값)가 바뀐 시각
+        self._elrs_connected = connected     # 화면 표시는 즉시 반영
+        if self._startup_sound_done:
+            debounce = float(self.get_parameter("ui.telm_debounce_sec").value)
+            if connected != self._elrs_sound_state and \
+                    (now - self._elrs_changed_t) >= debounce:
+                self._elrs_sound_state = connected
+                param = "ui.sound_telm_connected" if connected else "ui.sound_telm_lost"
+                self._play_sound(self.get_parameter(param).value)
         self._maybe_startup_announce()
 
     def _maybe_startup_announce(self):
-        """켜진 뒤 모드와 텔레메트리 연결여부가 둘 다 확인되면, 그때 한 번만
-        '모드 → 텔레메트리' 순서로 공백 없이 이어 재생한다(순서 보장 + 사이 공백 제거)."""
+        """시작 안내(모드 → 텔레메트리, 공백 없이 한 번). 모드가 확인되고, 텔레메트리 링크가
+        붙었거나(연결) grace 시간이 지났을 때 낸다 → 켤 때 잠깐 뜨는 초기 LOST 를 안 낸다."""
         if self._startup_sound_done:
             return
         if self._prev_manual is None or self._elrs_connected is None:
-            return   # 아직 둘 중 하나 미수신 → 대기
+            return   # 모드 or 연결여부 미수신 → 대기
+        connected = bool(self._elrs_connected)
+        grace = float(self.get_parameter("ui.telm_startup_grace_sec").value)
+        grace_over = (time.monotonic() - self._start_t) >= grace
+        if not (connected or grace_over):
+            return   # 아직 링크 안 붙었고 grace 안 지남 → 대기(초기 LOST 억제)
         mode_p = self.get_parameter(
             "ui.sound_manual" if self._manual_mode else "ui.sound_auto").value
         telm_p = self.get_parameter(
-            "ui.sound_telm_connected" if self._elrs_connected
-            else "ui.sound_telm_lost").value
+            "ui.sound_telm_connected" if connected else "ui.sound_telm_lost").value
         self._startup_sound_done = True
-        self._play_sequence([mode_p, telm_p])   # 모드 먼저 → 텔레메트리, 공백 없이
+        self._elrs_sound_state = connected       # 이후 debounce 엣지 판정 기준
+        self._play_sequence([mode_p, telm_p])    # 모드 먼저 → 텔레메트리, 공백 없이
 
     def _cb_debug(self, msg: Vector3):
         self._latest_cmd = msg
