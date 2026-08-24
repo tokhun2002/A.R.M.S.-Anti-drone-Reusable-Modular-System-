@@ -83,10 +83,8 @@ graph TD
 
     subgraph arms_sim ["arms_sim (SITL 전용)"]
         PANEL["panel<br/>(튜닝/심판 콘솔)"]
-        REFEREE["referee<br/>(표적 비행 + 접촉 판정)"]
+        REFEREE["referee<br/>(표적 비행)"]
     end
-
-    HIT(["/arms/hit"])
 
     ADS1115["ADS1115 ADC<br/>(I2C 짐벌 4축)"]
     SWGPIO["GPIO 스위치 4개"]
@@ -129,9 +127,6 @@ graph TD
     CN --> CRSF_SERIAL
     MISSION_STATE --> UN
     MISSION_STATE --> PANEL
-    GZ_CONTACT(["gz 접촉 센서"]) --> REFEREE
-    REFEREE --> HIT
-    HIT -.->|로그 전용| CN
     PANEL -.->|ros2 param set| CN
     PANEL -.->|ros2 param set| REFEREE
     CRSF_SERIAL -->|SITL: socat PTY| BRIDGE
@@ -147,8 +142,8 @@ graph TD
 | `arms_command_node`    | —                                                                                            | `/arms/command` (가상 조종기, SITL)                                                       |
 | `arms_command_hw_node` | —                                                                                            | `/arms/command` (실기체 ESP32)                                                            |
 | `panel` (`arms_sim`)   | `/arms/mission_state`                                                                        | — (`ros2 param set` 으로 튜닝/심판 제어)                                                  |
-| `referee` (`arms_sim`) | gz 접촉 센서 · gz dynamic_pose (ROS 구독 없음)                                               | `/arms/hit` (SITL 명중 판정, 로그용)                                                      |
-| `arms_control_node`    | `/arms/detections`<br/>`/arms/command`<br/>`/arms/hit`                                       | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>CRSF serial |
+| `referee` (`arms_sim`) | — (ROS 구독 없음, gz 로만 동작)                                                              | — (gz set_pose 로 표적 비행)                                                              |
+| `arms_control_node`    | `/arms/detections`<br/>`/arms/command`                                                       | `/arms/mission_state`<br/>`/arms/control_debug`<br/>`/arms/debug_looming`<br/>CRSF serial |
 | `sitl_bridge_node`     | CRSF serial (`/tmp/crsf_rx`)                                                                 | MAVLink RC_CHANNELS_OVERRIDE → PX4                                                        |
 | `arms_ui_node`         | `/arms/image_raw`<br/>`/arms/detections`<br/>`/arms/mission_state`<br/>`/arms/control_debug` | —                                                                                         |
 
@@ -161,7 +156,7 @@ graph TD
 | `arms_command_node`    | `arms_command`   | **SITL 가상 조종기.** 드래그 스틱·KILL/ARM/MODE/LAUNCH 버튼으로 `/arms/command`(Joy) 발행. 실기체 물리 조종기의 SITL 쌍둥이 (발행자는 이 노드 하나뿐 → 레이스 방지)             | 호스트 (SITL)                 |
 | `arms_command_hw_node` | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. fake_mode 지원                                     | 호스트 (실기체)               |
 | `panel`                | `arms_sim`       | **SITL 전용 튜닝/심판 콘솔.** PID·τ·PN 등 arms_control 파라미터 + 표적 고도/속도 등 referee 파라미터를 `ros2 param set` 으로 실시간 제어. 미션 상태 표시. 노드별로 묶은 그룹 UI | 호스트 (SITL)                 |
-| `referee`              | `arms_sim`       | **SITL 전용 표적 심판.** 표적(풍선/드론)을 gz set_pose 로 비행시키고, **Gazebo 접촉 센서**로 실제 충돌을 감지해 `/arms/hit` 발행 + 로그. 미션 상태는 바꾸지 않는다              | 호스트 (SITL)                 |
+| `referee`              | `arms_sim`       | **SITL 전용 표적.** 표적(풍선/드론)을 gz set_pose 로 비행시킨다. 미션 상태·제어에는 관여하지 않는 순수 시각 표적                                                                | 호스트 (SITL)                 |
 | `arms_control_node`    | `arms_control`   | 상태 머신 + PID 제어. `/arms/command`에서 조종 입력을 받아 auto/manual 모드 전환. CRSF 프레임을 시리얼로 직접 출력                                                              | 호스트                        |
 | `sitl_bridge_node`     | `arms_control`   | **SITL 전용.** 가상 시리얼(`/tmp/crsf_rx`)에서 CRSF 수신 → MAVLink `RC_CHANNELS_OVERRIDE` 50Hz → PX4. CH5=arm(레벨), CH6=flight mode(ACRO/Altitude)                             | 호스트 (SITL)                 |
 | `arms_ui_node`         | `arms_ui`        | 카메라 영상에 바운딩박스·상태·오차값 오버레이해서 OpenCV 윈도우로 표시                                                                                                          | 호스트                        |
@@ -557,7 +552,6 @@ arms_control_node
   |
   +-- [Subscribers]
   |     /arms/detections   (DetectionArray → 검출 + 비전 looming τ)
-  |     /arms/hit          (Empty → 심판의 실제 접촉 통지. **로그 전용**, 상태 전이 없음)
   |     /arms/command      (Joy → 조종 입력 + 버튼)
   |
   +-- [Publishers]
