@@ -24,7 +24,6 @@ struct SMParams {
   double confidence_threshold{0.65};
   double lock_duration_sec{2.0};
   double detection_timeout_sec{1.0};
-  double lock_box_tolerance{0.15};
   double fire_align_tol{0.2};   // FIRE 조건: 이 오차 이내로 '중앙 정렬'돼야 (가짜명중 방지)
   double tau_fire_sec{0.3};     // 비전 looming: 충돌까지 시간(τ) 이 값 미만이면 발사
   double loom_s_min{0.1};       // FIRE 최소 bbox 크기(정규화). 원거리/노이즈 오탐 차단

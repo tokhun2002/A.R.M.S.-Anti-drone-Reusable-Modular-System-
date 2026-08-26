@@ -227,7 +227,6 @@ mission:
   detection_confidence_threshold: 0.32
   detection_timeout_sec: 1.0
   lock_duration_sec: 0.3
-  lock_box_tolerance: 0.5
   tau_fire_sec: 0.3 # 비전 looming: 충돌까지 시간(τ) 임계 [s] → FIRE
   fire_align_tol: 0.2 # FIRE 정렬 허용오차
   loom_s_min: 0.1 # FIRE 최소 bbox 크기(정규화)

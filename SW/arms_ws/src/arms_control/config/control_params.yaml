@@ -20,7 +20,6 @@ arms_control_node:
       detection_confidence_threshold: 0.32
       detection_timeout_sec: 1.0
       lock_duration_sec: 1.0
-      lock_box_tolerance: 0.5
 
       # ── LOCK → FIRE 판정 (비전 looming, τ) ────────────────────────────
       # 거리센서 없이 bbox 팽창률로 충돌 임박을 판정한다. 3D 거리는 실기체에서

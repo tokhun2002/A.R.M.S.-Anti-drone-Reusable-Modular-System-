@@ -29,6 +29,7 @@ arms_detection_node — A.R.M.S. 빨간 풍선 검출기
   track.confirm_frames  : int   트래킹 시작 연속 검출 수 (기본 3)
   track.redetect_interval: int  TRACK 중 ROI YOLO 확인 주기 (기본 5)
   track.reacquire_frames: int   LOST 재획득 창 (기본 8)
+  track.jump_gate       : float track off 시 위치 급변 차단 게이트, 0=off (기본 0.4)
   roi.margin            : float ROI 크롭 확장 배율 (기본 1.8)
 """
 
@@ -154,6 +155,12 @@ class _TargetTracker:
         self._lost_count = 0
         self._last_conf = 0.0
         self._kalman = _CenterKalman()
+        # track.enable=false 경로 상시 연관 게이트 상태 (위치 급변 차단).
+        self._g_center = None            # 확정된 표적 중심(normalized)
+        self._g_confirmed = False
+        self._g_prev = None              # 확정 전 연속판정용 직전 중심
+        self._g_streak = 0
+        self._g_miss = 0
 
     # ---- geometry (normalized <-> pixel) ----
     @staticmethod
@@ -231,10 +238,66 @@ class _TargetTracker:
         self._cv = None
         self._lost_count = 0
 
+    # ---- track.enable=false 경로 상시 안전장치 (위치 급변 차단) ----
+    def _g_reset(self):
+        self._g_center = None
+        self._g_confirmed = False
+        self._g_prev = None
+        self._g_streak = 0
+        self._g_miss = 0
+
+    def _gate_detection(self, det, cfg):
+        """추적기 미사용 경로의 상시 연관 게이트.
+        표적이 confirm_frames 회 연속 검출로 확정되면, 그 위치에서 jump_gate(정규화
+        중심거리) 이상 벗어난 검출을 버려 위치 급변을 막는다. 벗어남이
+        reacquire_frames 넘게 지속되면 확정을 풀고 새 위치로 재획득한다.
+        jump_gate<=0 이면 게이트 비활성(기존 동작)."""
+        gate = cfg["jump_gate"]
+        if gate <= 0.0:
+            return det
+        if det is None:
+            if self._g_confirmed:
+                self._g_miss += 1
+                if self._g_miss >= cfg["reacquire_frames"]:
+                    self._g_reset()
+            else:
+                self._g_streak = 0
+                self._g_prev = None
+            return None
+        c = (det.x_center, det.y_center)
+        if not self._g_confirmed:
+            # 확정 전: 같은 위치 연속검출로 표적 확정(스푸리어스 1프레임 배제).
+            if self._g_prev is not None and \
+                    _center_dist(c, self._g_prev) < cfg["confirm_dist"]:
+                self._g_streak += 1
+            else:
+                self._g_streak = 1
+            self._g_prev = c
+            if self._g_streak >= cfg["confirm_frames"]:
+                self._g_confirmed = True
+                self._g_center = c
+                self._g_miss = 0
+            return det   # 확정 전엔 그대로 발행(기존 동작 유지)
+        # 확정됨: jump 게이트.
+        if _center_dist(c, self._g_center) > gate:
+            self._g_miss += 1
+            if self._g_miss >= cfg["reacquire_frames"]:
+                self._g_reset()      # 튐 지속 → 새 위치로 재획득 허용
+            return None              # 튄 검출은 버림(직전 위치 홀드)
+        # 통과: 채택 + 중심 EMA 갱신(느린 이동 추종).
+        self._g_miss = 0
+        self._g_center = (0.5 * c[0] + 0.5 * self._g_center[0],
+                          0.5 * c[1] + 0.5 * self._g_center[1])
+        return det
+
     # ---- FSM ----
     def update(self, bgr, detect_fn, cfg):
         if not cfg["enable"]:
-            return detect_fn(bgr)            # 트래킹 비활성 → 기존 매프레임 검출
+            # 추적기 미사용: 매 프레임 검출 + 상시 연관 게이트(위치 급변 차단).
+            return self._gate_detection(detect_fn(bgr), cfg)
+        # 추적기 사용 경로에선 게이트 상태 미사용 → 전환 대비 한 번 리셋.
+        if self._g_confirmed or self._g_center is not None:
+            self._g_reset()
         H, W = bgr.shape[:2]
         if self.state == self.TRACK:
             return self._do_track(bgr, detect_fn, cfg, W, H)
@@ -368,6 +431,11 @@ class ArmsDetectionNode(Node):
         self.declare_parameter("track.reacquire_frames", 8)   # LOST 재획득 창
         self.declare_parameter("track.max_unconfirmed", 2)    # ROI YOLO 연속 실패 허용 횟수
         self.declare_parameter("track.min_box_px", 4)         # 트래커 init 최소 박스
+        # track.enable=false(추적기 미사용) 경로 상시 안전장치:
+        #   표적이 confirm_frames 회 연속검출로 확정되면 그 위치에서 jump_gate(정규화
+        #   중심거리) 이상 튄 검출을 버려 위치 급변을 막는다. reacquire_frames 넘게
+        #   지속되면 확정 해제 → 새 위치로 재획득. 0 이하면 비활성.
+        self.declare_parameter("track.jump_gate", 0.4)
         self.declare_parameter("roi.margin", 1.8)             # ROI 크롭 확장 배율
 
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -551,6 +619,7 @@ class ArmsDetectionNode(Node):
             "reacquire_frames":  int(g("track.reacquire_frames").value),
             "max_unconfirmed":   int(g("track.max_unconfirmed").value),
             "min_box_px":        int(g("track.min_box_px").value),
+            "jump_gate":         float(g("track.jump_gate").value),
         }
 
     def _run_detectors(self, bgr, header=None, roi_box=None):

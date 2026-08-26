@@ -35,7 +35,6 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("mission.detection_confidence_threshold", 0.32);
     declare_parameter("mission.lock_duration_sec", 1.0);
     declare_parameter("mission.detection_timeout_sec", 1.0);
-    declare_parameter("mission.lock_box_tolerance", 0.5);
     declare_parameter("mission.fire_align_tol", 0.2);  // FIRE 정렬 허용오차(가짜명중 방지)
     // 비전 looming(τ) 기반 FIRE — 거리센서 없이 bbox 팽창률로 충돌 임박을 판정.
     //   (3D 거리는 실기체에서 못 쓰므로 sim 에서도 제거. FIRE 는 τ 로만.)
@@ -146,8 +145,6 @@ class ArmsControlNode : public rclcpp::Node {
         get_parameter("mission.lock_duration_sec").as_double();
     sm_params.detection_timeout_sec =
         get_parameter("mission.detection_timeout_sec").as_double();
-    sm_params.lock_box_tolerance =
-        get_parameter("mission.lock_box_tolerance").as_double();
     sm_params.fire_align_tol =
         get_parameter("mission.fire_align_tol").as_double();
     sm_params.tau_fire_sec =

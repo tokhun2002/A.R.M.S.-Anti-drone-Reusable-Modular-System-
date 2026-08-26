@@ -53,6 +53,8 @@ void StateMachine::on_detection(
   }
 
   // Valid detection
+  //   위치 급변(튐) 차단은 detection 노드의 상시 연관 게이트(track.jump_gate)가
+  //   담당한다. control 은 detection 결과를 신뢰한다(단일 표적만 발행됨).
   detection_held_ = false;
   auto now = Clock::now();
   last_detection_time_  = now;

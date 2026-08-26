@@ -1,0 +1,43 @@
+# A.R.M.S. 실내 검출 튜닝 (arms_detection_node)
+# ---------------------------------------------------------------------------
+# bringup 의 docker compose 가 --params-file 로 이 파일을 로드한다.
+# (docker-compose.jetson.yml 의 command + ../config 마운트)
+#
+# 실내 상황 가정:
+#   · 조명(형광/LED)으로 붉은 풍선의 채도가 낮아지고 hue 가 흔들림
+#   · 시험 때 표적을 카메라 가까이 대면 화면을 크게 차지함
+# 대응:
+#   · 색 범위 확대(채도·hue 완화)로 실내에서도 붉은 표적을 후보로 잡음
+#   · 면적 상한↑(가까이 댄 큰 풍선 허용), 면적 하한↑(작은 조명/노이즈 컷)
+#
+# yaml 만 고치고 `docker compose ... restart` 하면 반영된다(재빌드 불필요).
+arms_detection_node:
+  ros__parameters:
+    proc_width: 320
+    use_yolo: true
+    use_hsv: true
+
+    yolo:
+      # HSV 가 놓쳐도 2프레임마다 전체화면 YOLO 로 재시도(표적 획득 기회 확보).
+      full_fallback_interval: 2
+
+    hsv:
+      # --- 면적 게이트 ---
+      #   상한: 0.10 → 0.75. 표적을 가까이 대면 화면의 10% 를 훌쩍 넘겨 예전엔
+      #         통째로 걸러졌다. 큰 풍선을 허용한다.
+      #   하한: 0.00003 → 0.0006. 1~5px 짜리 작은 조명/압축 노이즈를 후보에서 뺀다.
+      max_area_ratio: 0.75
+      min_area_ratio: 0.0006
+      # --- 색 게이트 (실내 조명 보정) ---
+      #   채도가 낮아지고 hue 가 이동한 붉은색도 후보로 포함되게 완화.
+      prob_threshold: 0.18
+      hue_sigma: 20.0
+      sat_center: 55.0
+      sat_scale: 34.0
+      val_min: 20.0
+      val_max_center: 250.0
+      val_scale: 34.0
+      # --- 형상 게이트 ---
+      #   부분 가림/약간 찌그러진 풍선도 통과하도록 원형도 하한을 낮춘다.
+      min_circularity: 0.18
+      max_candidates: 4
