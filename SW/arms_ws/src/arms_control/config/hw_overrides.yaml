@@ -35,7 +35,7 @@ arms_control_node:
       # 사람이 조종기 LAUNCH(buttons[3]) 를 눌러야 추격이 시작된다.
       # control_params.yaml 은 SITL 편의를 위해 true 다.
       sitl_auto_launch: false
-      # 원거리 획득(absdiff후보→YOLO 확대검증, 낮은 conf)이 실제 LOCK 되도록
+      # 원거리 획득(absdiff후보→YOLO 확대검증, 낮은  conf)이 실제 LOCK 되도록
       # 임계값을 낮춘다. 전체프레임 YOLO 는 ARMS_CONF(0.5)로 걸러지므로 근거리
       # 헛-LOCK 은 그대로 억제된다. detection 의 acquire.verify_conf 이하로 둘 것.
       detection_confidence_threshold: 0.25
@@ -48,10 +48,17 @@ arms_control_node:
       #
       # 실기체 값이 확정되면 이 주석의 "미측정"을 지우고 근거(비행 날짜/로그)를 남길 것.
       roll_pid:
-        kp: 100.0
+        kp: 30.0
         ki: 0.0
-        kd: 3.5
+        kd: 0.0
       pitch_pid:
-        kp: 100.0
+        kp: 30.0
         ki: 0.0
-        kd: 3.5
+        kd: 0.0
+
+      # ── 추격 추력 (실기체 전용) ──────────────────────────────────────────
+      # TRACK 때 표적쪽으로 상승하는 세기. SITL(control_params)은 0.85지만 실기체는
+      # TWR·무게가 달라 따로 잡는다. hover_throttle(≈0.51) 위여야 상승한다.
+      #   첫 비행은 보수적으로(가볍게 상승) → 추격력 부족하면 ↑.
+      #   pursuit_center_boost=false 라 이 값이 곧 상수 추력이다.
+      track_throttle: 0.20
