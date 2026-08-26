@@ -4,6 +4,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <thread>
+#include <unistd.h>   // access(), W_OK
 
 namespace arms_control {
 
@@ -39,15 +40,25 @@ void ServoLock::init() {
   // 1) export (이미 export 됐으면 write 가 실패해도 무시하고 dir 존재로 판단).
   if (!path_exists(pwm_dir_)) {
     write_file(params_.chip_path + "/export", std::to_string(params_.channel));
-    // udev 가 pwmN 디렉터리/권한을 만들 때까지 잠깐 대기 (최대 ~500ms).
-    for (int i = 0; i < 50 && !path_exists(pwm_dir_ + "/enable"); ++i) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
   }
 
-  if (!path_exists(pwm_dir_ + "/enable")) {
-    log("[ServoLock] sysfs PWM 사용 불가 (" + pwm_dir_ +
-        ") — pinmux/권한 확인. 서보 명령 무시.");
+  // export 직후 pwmN 파일들은 잠깐 root:root(쓰기 불가)이고, udev(99-gpio.rules)가
+  // gpio 그룹 권한을 적용하는 데 시간이 걸린다. **존재(enable)만이 아니라 실제
+  // 쓰기 가능(W_OK)까지 기다린다** → 부팅 시 arms_control 이 udev 보다 먼저 떠도
+  // 권한 적용을 기다렸다가 쓰므로 "sysfs 쓰기 실패"로 서보가 죽는 레이스를 없앤다.
+  const std::string duty_path = pwm_dir_ + "/duty_cycle";
+  bool writable = false;
+  for (int i = 0; i < 300; ++i) {   // 최대 ~3s
+    if (path_exists(pwm_dir_ + "/enable") &&
+        ::access(duty_path.c_str(), W_OK) == 0) {
+      writable = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  if (!writable) {
+    log("[ServoLock] sysfs PWM 쓰기 권한 대기 시간초과 (" + pwm_dir_ +
+        ") — udev(99-gpio.rules)/pinmux/gpio 그룹 확인. 서보 명령 무시.");
     available_ = false;
     return;
   }
