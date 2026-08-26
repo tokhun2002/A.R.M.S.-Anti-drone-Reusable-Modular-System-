@@ -162,6 +162,7 @@ arms_control_node:
       #   SEARCH/LOCK(throttle 0) 에서 미리 arm → TRACK 에서 throttle↑ 전에 무장
       #   완료 (PX4 의 high-throttle arm 거부 회피). SITL 전용.
       auto_arm_states: ["SEARCH", "LOCK", "TRACK", "FIRE", "RTL"]
+      # auto_arm_states: ["TRACK", "FIRE", "RTL"]
 
       # 수동 모드: arm 하는 순간 스틱이 idle 이어야만 실제로 무장한다 (급상승/오발 방지).
       prearm_check: true

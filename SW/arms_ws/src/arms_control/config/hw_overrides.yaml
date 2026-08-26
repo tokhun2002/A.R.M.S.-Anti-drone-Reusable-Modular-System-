@@ -48,11 +48,11 @@ arms_control_node:
       #
       # 실기체 값이 확정되면 이 주석의 "미측정"을 지우고 근거(비행 날짜/로그)를 남길 것.
       roll_pid:
-        kp: 30.0
+        kp: 240.0
         ki: 0.0
         kd: 0.0
       pitch_pid:
-        kp: 30.0
+        kp: 240.0
         ki: 0.0
         kd: 0.0
 
@@ -61,4 +61,4 @@ arms_control_node:
       # TWR·무게가 달라 따로 잡는다. hover_throttle(≈0.51) 위여야 상승한다.
       #   첫 비행은 보수적으로(가볍게 상승) → 추격력 부족하면 ↑.
       #   pursuit_center_boost=false 라 이 값이 곧 상수 추력이다.
-      track_throttle: 0.20
+      track_throttle: 0.60
