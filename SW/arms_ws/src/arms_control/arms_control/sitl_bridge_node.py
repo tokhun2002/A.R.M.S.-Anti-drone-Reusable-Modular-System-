@@ -9,7 +9,8 @@ Channel mapping:
   CH1: roll     CH2: pitch     CH3: throttle  CH4: yaw
   CH5: arm sw   CH6: mode sw   CH7: kill sw   CH8: (unused)
 
-CH6 flight mode: low=ACRO(자동/영상유도, 젯슨이 계산한 CRSF), high=Altitude(수동/사람 입력).
+CH6 flight mode: low=ACRO(자동/영상유도, 젯슨이 계산한 CRSF), high=Stabilized(수동/사람 입력).
+  high=Stabilized 는 자동수평 + throttle 직결(고도유지 없음). 실기체 FC 의 수동 모드와 동작을 맞춘 것.
 """
 
 import threading
@@ -26,7 +27,8 @@ except ImportError:
 
 # PX4 mode constants
 PX4_BASE_MODE_CUSTOM          = 1
-PX4_CUSTOM_MAIN_MODE_ALTCTL   = 2   # manual/손제어 Altitude (CH6 high)
+# manual/손제어: 자동수평 + throttle 직결(고도유지 없음). 실기체 FC 의 수동 모드와 동작 일치.
+PX4_CUSTOM_MAIN_MODE_STABILIZED = 7  # (CH6 high)
 PX4_CUSTOM_MAIN_MODE_ACRO     = 5   # 각속도(rate) 제어 — 자동 요격용 (자동수평 없음)
 
 CRSF_SYNC   = 0xC8
@@ -169,7 +171,7 @@ class ArmsSITLCommNode(Node):
 
     def _initial_setup(self):
         """Set default autonomous mode after EKF convergence; arming is done via CH5.
-        Flight mode thereafter follows CH6 (low=ACRO/자동, high=Altitude/수동)."""
+        Flight mode thereafter follows CH6 (low=ACRO/자동, high=Stabilized/수동)."""
         time.sleep(3.0)
         mode_name = "ACRO(각속도)"
         self.get_logger().info(f"Setting autonomous mode: {mode_name} (CH6 default)...")
@@ -225,8 +227,8 @@ class ArmsSITLCommNode(Node):
         ch6 = channels[5]
         ch6_high = ch6 > SWITCH_THRESH
         if ch6_high != (self._prev_ch6 > SWITCH_THRESH):
-            # CH6 low→ACRO(자동/영상유도), high→Altitude(수동/사람 입력)
-            self._mode_pending = (PX4_CUSTOM_MAIN_MODE_ALTCTL if ch6_high
+            # CH6 low→ACRO(자동/영상유도), high→Stabilized(수동/사람 입력)
+            self._mode_pending = (PX4_CUSTOM_MAIN_MODE_STABILIZED if ch6_high
                                   else PX4_CUSTOM_MAIN_MODE_ACRO)
         self._prev_ch6 = ch6
 
@@ -257,7 +259,7 @@ class ArmsSITLCommNode(Node):
 
         # Handle pending flight-mode change (CH6)
         if mode_req is not None:
-            name = {PX4_CUSTOM_MAIN_MODE_ALTCTL: "Altitude",
+            name = {PX4_CUSTOM_MAIN_MODE_STABILIZED: "Stabilized",
                     PX4_CUSTOM_MAIN_MODE_ACRO:   "ACRO(각속도)"}.get(mode_req, "?")
             self.get_logger().info(f"CH6 → {name} mode")
             self._send_set_mode(mode_req)

@@ -59,9 +59,14 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("control.deriv_lpf_alpha", 0.25);
 
     declare_parameter("mission.sitl_auto_launch", true);
-    // sitl_hit_rtl: true 면 RTL 을 심판 /arms/hit(거리 직격)로 트리거하고 영상 FIRE→RTL 은 끔.
-    //   SITL 에서 영상 τ 판정이 불안정할 때 지상진실 명중으로 RTL. 실기체는 false(영상 FIRE→RTL).
-    declare_parameter("mission.sitl_hit_rtl", false);
+    // 충돌 판정(FIRE/RTL) 소스 — 서로 독립적인 두 스위치. 둘 다 환경 무관하게 동작한다.
+    //   hit_rtl_via_referee: 심판 /arms/hit(지상진실 접촉)를 받으면 RTL.
+    //       SITL 전용(Gazebo 접촉 심판이 /arms/hit 발행). 실기체엔 발행자가 없어 false.
+    //   looming_fire_enabled: 비전 τ(bbox 팽창률)로 충돌 임박을 판정해 FIRE.
+    //       실기체의 자동 요격 경로. 지금은 비활성(false), 실기체 검증되면 true 로 켠다.
+    //   조합: SITL=(true,false) / 실기체 현재=(false,false) / 실기체 요격 켤 때=(false,true).
+    declare_parameter("mission.hit_rtl_via_referee", true);
+    declare_parameter("mission.looming_fire_enabled", false);
     declare_parameter("mission.auto_launch_delay_sec", 0.5);
 
     // 자동 모드 CH5(FC arm)를 켜는 상태 목록. 자동 모드에선 arm 을 스위치와 분리해
@@ -95,9 +100,6 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("battery.cell_count", 0);          // 직렬 셀 수(S). 0=CRSF 값 그대로
     declare_parameter("battery.cell_full_v", 4.2);       // 만충 시 셀당 전압[V]
     declare_parameter("battery.cell_empty_v", 3.5);      // 방전(0%) 셀당 전압[V]
-    // 측정 전압 보정: CRSF/FC 가 실제보다 낮/높게 보고할 때 더할 오프셋[V].
-    //   예) 실측 15.9V 인데 15.3V 로 뜨면 +0.6. (근본 해결은 FC 전압분배 캘리브레이션)
-    declare_parameter("battery.voltage_offset", 0.0);
     // 자동요격은 ACRO(각속도) 고정이다. crsf.max_angle_deg / control.acro_mode 와
     // Stabilized(각도) 출력 분기는 삭제됐다 -- 유도 출력이 각속도[deg/s]가 된 이상
     // 그 분기는 각속도를 각도로 잘못 해석할 뿐이다. 브리지 쪽 짝이던
@@ -200,7 +202,8 @@ class ArmsControlNode : public rclcpp::Node {
     pid_pitch_->set_deriv_alpha(deriv_lpf_alpha_);
 
     sitl_auto_launch_ = get_parameter("mission.sitl_auto_launch").as_bool();
-    sitl_hit_rtl_ = get_parameter("mission.sitl_hit_rtl").as_bool();
+    hit_rtl_via_referee_ = get_parameter("mission.hit_rtl_via_referee").as_bool();
+    looming_fire_enabled_ = get_parameter("mission.looming_fire_enabled").as_bool();
     auto_launch_delay_sec_ =
         get_parameter("mission.auto_launch_delay_sec").as_double();
 
@@ -242,7 +245,6 @@ class ArmsControlNode : public rclcpp::Node {
 
     // ---- 배터리 잔량 계산 설정 ----
     battery_cell_count_   = static_cast<int>(get_parameter("battery.cell_count").as_int());
-    battery_voltage_offset_ = get_parameter("battery.voltage_offset").as_double();
     telemetry_timeout_sec_ = get_parameter("crsf.telemetry_timeout_sec").as_double();
     battery_cell_full_v_  = get_parameter("battery.cell_full_v").as_double();
     battery_cell_empty_v_ = get_parameter("battery.cell_empty_v").as_double();
@@ -275,8 +277,10 @@ class ArmsControlNode : public rclcpp::Node {
               pursuit_gate_ = p.as_double();
             else if (n == "control.pursuit_center_boost")
               pursuit_center_boost_ = p.as_bool();
-            else if (n == "mission.sitl_hit_rtl")
-              sitl_hit_rtl_ = p.as_bool();
+            else if (n == "mission.hit_rtl_via_referee")
+              hit_rtl_via_referee_ = p.as_bool();
+            else if (n == "mission.looming_fire_enabled")
+              looming_fire_enabled_ = p.as_bool();
             else if (n == "control.lead_dot_alpha")
               lead_dot_alpha_ = p.as_double();
             else if (n == "control.lead_clamp")
@@ -377,7 +381,7 @@ class ArmsControlNode : public rclcpp::Node {
           };
           int kill = btn(0), arm = btn(1), mode = btn(2), launch = btn(3);
 
-          // MODE: 레벨 스위치. 0=auto(영상유도, Betaflight Acro), 1=manual(손제어, Betaflight Angle)
+          // MODE: 레벨 스위치. 0=auto(영상유도, ACRO/각속도), 1=manual(손제어, 자동수평)
           bool new_manual = static_cast<bool>(mode);
           if (new_manual != joy_manual_mode_) {
             joy_manual_mode_ = new_manual;
@@ -385,9 +389,19 @@ class ArmsControlNode : public rclcpp::Node {
             //   모드 전환 순간 ARM 스위치가 올라가 있어도 즉시 arm 되면 위험하다
             //   (예: auto+SEARCH=ARM 상태에서 manual 로 바꾸면 CH5 가 곧바로 arm).
             //   모드가 바뀌면 래치를 걸어, DISARM 으로 내렸다가 다시 올려야만 arm 되게 한다.
-            require_arm_reset_ = true;
-            RCLCPP_INFO(get_logger(), "Mode: %s (ARM 재토글 필요)",
-                        joy_manual_mode_ ? "MANUAL (Angle)" : "AUTO (Acro)");
+            //
+            //   ★ 예외: TRACK(자동 요격 비행 중)에서 수동으로 넘길 땐 "날던 채로 인계"다.
+            //     래치·pre-arm idle 검사를 건너뛰고 무장을 그대로 유지한다(공중 disarm=낙하 방지).
+            //     TRACK 은 ARM 스위치가 이미 위(auto 에서 내리면 SEARCH OFF→IDLE)라 joy_arm_=true 보장.
+            if (new_manual && sm_->state() == State::TRACK) {
+              manual_armed_ = true;
+              require_arm_reset_ = false;
+              RCLCPP_INFO(get_logger(), "Mode: MANUAL (Angle) — TRACK 중 인계, 무장 유지");
+            } else {
+              require_arm_reset_ = true;
+              RCLCPP_INFO(get_logger(), "Mode: %s (ARM 재토글 필요)",
+                          joy_manual_mode_ ? "MANUAL (Angle)" : "AUTO (Acro)");
+            }
           }
           if (launch && !prev_btn_[3]) {
             sm_->on_launch_button();
@@ -420,11 +434,11 @@ class ArmsControlNode : public rclcpp::Node {
     // 자체가 정보다(닿았는데 FIRE 없음 = 판정 실패, 그 반대 = 오발).
     sub_hit_ = create_subscription<std_msgs::msg::Empty>(
         "/arms/hit", 10, [this](std_msgs::msg::Empty::SharedPtr) {
-          if (sitl_hit_rtl_) {
+          if (hit_rtl_via_referee_) {
             const auto prev = to_string(sm_->state());
-            sm_->on_hit();   // 거리 직격 명중 → RTL (영상 FIRE 대신)
+            sm_->on_hit();   // 심판 직격 명중 → RTL (SITL 지상진실 판정)
             RCLCPP_INFO(get_logger(),
-                "[심판] 직격 명중 → RTL (hit-RTL 모드, %s→%s)",
+                "[심판] 직격 명중 → RTL (referee-hit 모드, %s→%s)",
                 prev.c_str(), to_string(sm_->state()).c_str());
           } else {
             RCLCPP_INFO(get_logger(),
@@ -477,9 +491,10 @@ class ArmsControlNode : public rclcpp::Node {
     double tau = (loom_rate_ema_ > 1e-4)
                    ? (loom_s_ema_ / loom_rate_ema_)
                    : std::numeric_limits<double>::infinity();
-    // hit-RTL 모드(SITL 순수 요격)에선 영상 τ 로 FIRE 하지 않는다.
-    //   TRACK 유지하며 추격 → 실제 충돌(/arms/hit) → RTL. (FIRE 상태 자체를 안 씀)
-    if (!sitl_hit_rtl_) {
+    // 비전 τ FIRE 는 looming_fire_enabled 일 때만. 꺼져 있으면(현재 실기체·SITL)
+    //   τ 로 FIRE 하지 않는다 — TRACK 유지하며 추격만 하고 FIRE 상태엔 진입 안 함.
+    //   SITL 은 대신 심판 /arms/hit 로 RTL, 실기체는 지금 자동 요격을 아직 안 켬.
+    if (looming_fire_enabled_) {
       sm_->on_looming(tau, loom_s_ema_);
     }
 
@@ -573,7 +588,7 @@ class ArmsControlNode : public rclcpp::Node {
           voltage_dv / 10.0, current_da / 10.0,
           capacity_mah, remaining_pct);                            // 배터리 텔레메트리를 1초마다 보여준다.
 
-        const double voltage_v = voltage_dv / 10.0 + battery_voltage_offset_;   // 전압을 V 단위로 환산하고 보정 오프셋을 더한다.
+        const double voltage_v = voltage_dv / 10.0;               // 전압을 V 단위로 환산한다.
         double pct_ratio = remaining_pct / 100.0;                  // 기본은 CRSF 잔량값(0~1)이다.
         if (battery_cell_count_ > 0) {                             // 셀 수가 설정되면 전압으로 직접 계산한다.
           const double empty_v = battery_cell_count_ * battery_cell_empty_v_;   // 0% 기준 전압.
@@ -611,8 +626,6 @@ class ArmsControlNode : public rclcpp::Node {
     double pitch_rate_cmd = 0.0;
     float thrust = 0.f;
 
-    prev_state_ = state;
-
     if (state == State::TRACK || state == State::FIRE) {
       double raw_ex = sm_->current_error_x();
       double raw_ey = sm_->current_error_y();
@@ -620,8 +633,6 @@ class ArmsControlNode : public rclcpp::Node {
           error_lpf_alpha_ * raw_ex + (1.0 - error_lpf_alpha_) * filt_err_x_;
       filt_err_y_ =
           error_lpf_alpha_ * raw_ey + (1.0 - error_lpf_alpha_) * filt_err_y_;
-
-      kp_now_ = rkp_;
 
       // ---- LOS = 픽셀 오차 ----
       //   (예전엔 실제 자세로 카메라-기울기 성분을 보정했으나, acro 제어 전환으로 attitude
@@ -751,7 +762,6 @@ class ArmsControlNode : public rclcpp::Node {
       pid_pitch_->reset();
       filt_err_x_ = 0.0;
       filt_err_y_ = 0.0;
-      kp_now_ = rkp_;
       thrust = 0.f;
       align_locked_ = false;
       pn_init_ = false;   // alpha-beta 추정기 재초기화 (다음 TRACK 진입 시)
@@ -843,9 +853,9 @@ class ArmsControlNode : public rclcpp::Node {
     }
 
     // ---- RTL 핸드오버 ----
-    //   FIRE 후 RTL 에서는 조종사가 수동 스위치를 안 올려도 자동으로 Altitude 모드 + 스틱
-    //   passthrough 로 넘어간다. 스틱을 안 건드리면 스프링 중앙 → Altitude 가 고도유지 = 호버.
-    //   조종사는 그대로 스틱 잡고 자기 위치로 몰고 와 착륙 → PX4 가 착지 후 auto-disarm.
+    //   FIRE 후 RTL 에서는 조종사가 수동 스위치를 안 올려도 자동으로 자동수평 모드(CH6 high)
+    //   + 스틱 passthrough 로 넘어간다. 자동수평은 고도유지가 없으므로(throttle 직결)
+    //   조종사가 throttle·스틱으로 직접 몰고 와 착륙시킨다.
     const bool rtl_handover = (state == State::RTL);
     const bool manual_out = joy_manual_mode_ || rtl_handover;
 
@@ -890,12 +900,12 @@ class ArmsControlNode : public rclcpp::Node {
       //   자동: 기본 발사(TRACK)부터 arm (control.auto_arm_states 로 조정).
       crsf[4] = ch5_armed ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
 
-      // CH6: flight mode — auto=Acro(172, low), manual|RTL=Angle(1811, high).
-      //   Betaflight Modes 탭에서 AUX2(CH6) high 구간에 Angle 을 배정(low=미할당=Acro).
-      //   RTL 이면 자동으로 Angle(수동)로 넘어가 조종사가 이어받아 착륙.
+      // CH6: flight mode — auto=ACRO/각속도(172, low), manual|RTL=자동수평(1811, high).
+      //   FC 를 CH6 high=자동수평(self-level), low=ACRO 로 매핑해 둔다.
+      //   RTL 이면 자동으로 자동수평(수동)으로 넘어가 조종사가 이어받아 착륙.
       crsf[5] = manual_out ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
 
-      // CH7: kill 지시(참고용). 실제 kill 은 CH5 를 강제 disarm 해 처리하므로 BF 매핑 불필요.
+      // CH7: kill 지시(참고용). 실제 kill 은 CH5 를 강제 disarm 해 처리하므로 FC 매핑 불필요.
       crsf[6] = joy_kill_ ? CrsfOutput::CRSF_MAX : CrsfOutput::CRSF_MIN;
 
       // CH8: 미사용 (crsf.fill(CRSF_MIN)으로 172 고정)
@@ -917,7 +927,7 @@ class ArmsControlNode : public rclcpp::Node {
     }
 
     // ---- FIRE one-shot ----
-    // FIRE 는 실기체 경로(sitl_hit_rtl=false)에서만 진입한다(hit-RTL 모드는 on_looming 게이트로 차단).
+    // FIRE 는 looming_fire_enabled=true 일 때만 진입한다(꺼져 있으면 on_looming 게이트에서 차단).
     if (state == State::FIRE && !fire_sent_) {
       fire_sent_ = true;
       RCLCPP_INFO(get_logger(), "FIRE state — payload trigger signaled via mission_state.");
@@ -946,7 +956,6 @@ class ArmsControlNode : public rclcpp::Node {
     msg.error_x = static_cast<float>(sm_->current_error_x());
     msg.error_y = static_cast<float>(sm_->current_error_y());
     msg.target_locked = sm_->target_locked();
-    msg.kp_now = static_cast<float>(kp_now_);
     msg.armed = ch5_armed;                // UI 효과음/표시용 (실제 CH5 arm 상태)
     msg.manual_mode = joy_manual_mode_;   // UI 효과음/표시용 (모드)
     msg.prearm_blocked = prearm_blocked_; // UI 경고용 (스틱 미idle 로 arm 차단)
@@ -994,7 +1003,7 @@ class ArmsControlNode : public rclcpp::Node {
   std::unique_ptr<PIDController> pid_pitch_;
   std::unique_ptr<ServoLock> servo_;
 
-  // 서보 전이감지 상태 (기존 prev_state_ 는 매 틱 덮어써져 전이감지에 못 씀 → 별도 멤버).
+  // 서보 전이감지용 직전 상태 (제어 루프 상태와 별개로 서보 전이만 추적).
   State servo_prev_state_{State::IDLE};
   bool  servo_init_{false};
 
@@ -1009,7 +1018,6 @@ class ArmsControlNode : public rclcpp::Node {
   double prev_err_y_{0.0};
   double err_dot_x_{0.0};
   double err_dot_y_{0.0};
-  double kp_now_{0.0};
   double deadzone_{0.04};
   double deriv_lpf_alpha_{0.25};
 
@@ -1024,12 +1032,11 @@ class ArmsControlNode : public rclcpp::Node {
   int dbg_count_{0};
   double control_rate_hz_{50.0};
 
-  State prev_state_{State::IDLE};
-
   bool align_locked_{false};
 
   bool sitl_auto_launch_{false};
-  bool sitl_hit_rtl_{false};   // RTL 트리거를 /arms/hit(거리명중)로 (영상 FIRE 대신). SITL 용.
+  bool hit_rtl_via_referee_{true};    // 심판 /arms/hit → RTL. SITL 지상진실 판정(실기체는 발행자 없음).
+  bool looming_fire_enabled_{false};  // 비전 τ → FIRE. 실기체 자동 요격 경로(현재 비활성).
   double auto_launch_delay_sec_{0.5};
   bool lock_timer_started_{false};
   bool auto_launched_{false};
@@ -1100,7 +1107,6 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;
   rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr pub_battery_;
   int battery_cell_count_{0};        // 직렬 셀 수(S). 0=CRSF 잔량값 그대로 사용
-  double battery_voltage_offset_{0.0};  // 측정 전압 보정 오프셋[V]
   double battery_cell_full_v_{4.2};  // 만충 셀당 전압[V]
   double battery_cell_empty_v_{3.5}; // 방전(0%) 셀당 전압[V]
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;

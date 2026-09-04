@@ -45,8 +45,6 @@ public:
   void on_hit();   // 심판 직격 명중(/arms/hit) → RTL (SITL: 영상 FIRE 대신)
   void arm();
   void disarm();
-  void on_landed();
-  void force_search();   // 외부 RESET: 어떤 상태든 SEARCH 로 강제 복귀
   void set_tau_fire(double t)      { params_.tau_fire_sec = t; }     // 런타임 τ 임계 조정
   void set_loom_s_min(double s)    { params_.loom_s_min = s; }       // 런타임 최소크기 게이트
 

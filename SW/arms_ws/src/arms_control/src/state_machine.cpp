@@ -141,26 +141,6 @@ void StateMachine::disarm()
   transition(State::IDLE);
 }
 
-void StateMachine::on_landed()
-{
-  if (state_ == State::RTL) {
-    transition(State::IDLE);
-  }
-}
-
-void StateMachine::force_search()
-{
-  // RESET: RTL/TRACK/FIRE 등 어떤 상태든 즉시 SEARCH 로.
-  lock_timer_running_   = false;
-  lock_elapsed_sec_     = 0.0;
-  target_locked_        = false;
-  detection_held_       = false;
-  last_detection_valid_ = false;
-  error_x_              = 0.0;
-  error_y_              = 0.0;
-  transition(State::SEARCH);
-}
-
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
