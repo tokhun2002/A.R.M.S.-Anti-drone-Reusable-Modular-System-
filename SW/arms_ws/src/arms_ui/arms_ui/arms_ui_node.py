@@ -1128,12 +1128,17 @@ class ArmsUINode(Node):
             cv2.putText(frame, "LOCK", (bar_x, bar_y - 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
-        # --- Error/command 화살표 + 숫자 텍스트: 디버그 모드에서만 (bbox 는 위에서 항상) ---
-        if self._debug and state in ("LOCK", "TRACK", "FIRE"):
+        # --- 오차(ERR) 화살표(노랑, 표적 방향): debug 무관하게 LOCK/TRACK/FIRE 에서 항상 ---
+        if state in ("LOCK", "TRACK", "FIRE"):
             ex = int(self._latest_state.error_x * w)
             ey = int(self._latest_state.error_y * h)
             cv2.arrowedLine(frame, (cx_f, cy_f), (cx_f + ex, cy_f + ey),
                             (0, 255, 255), 2, tipLength=0.2)
+
+        # --- ERR 라벨 + 제어명령(CMD) 화살표 + 숫자 텍스트: 디버그 모드에서만 ---
+        if self._debug and state in ("LOCK", "TRACK", "FIRE"):
+            ex = int(self._latest_state.error_x * w)
+            ey = int(self._latest_state.error_y * h)
             cv2.putText(frame, "ERR(target)", (cx_f + ex + 5, cy_f + ey),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
 
