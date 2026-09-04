@@ -384,8 +384,10 @@ class ArmsDetectionNode(Node):
         self.declare_parameter("use_yolo",   True)
         self.declare_parameter("use_hsv",    True)
         # HSV→ROI YOLO가 기본 경로다. HSV가 놓치는 색 변화에 대비해 전체 화면
-        # YOLO를 낮은 주기로 실행한다. 0 이하면 full fallback을 끈다.
-        self.declare_parameter("yolo.full_fallback_interval", 2)
+        # YOLO를 매 프레임 실행한다(1=매프레임). HSV 후보가 못 받치는 프레임도
+        # 전량 YOLO가 커버 → /arms/detections 빈배열 교대 최소화(대가: GPU 부하↑).
+        # 부하를 아끼려면 config 에서 2 이상으로 덮는다. 0 이하면 full fallback을 끈다.
+        self.declare_parameter("yolo.full_fallback_interval", 1)
         self.declare_parameter("yolo.proposal_crop_px", 192)
         # 검출 처리 해상도(가로 px). 0=원본. 출력은 비율이라 정확도 무관, CV 비용만 절감.
         self.declare_parameter("proc_width", 320)

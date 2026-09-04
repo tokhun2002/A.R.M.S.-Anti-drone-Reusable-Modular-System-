@@ -17,9 +17,8 @@ arms_detection_node:
     use_yolo: true
     use_hsv: true
 
-    yolo:
-      # HSV 가 놓쳐도 2프레임마다 전체화면 YOLO 로 재시도(표적 획득 기회 확보).
-      full_fallback_interval: 2
+    # full_fallback_interval 은 노드 코드 기본값(1=매프레임 전체화면 YOLO)을 그대로 쓴다.
+    #   → 여기서 따로 덮지 않는다. 부하를 아끼려면 여기에 yolo.full_fallback_interval: 2 추가.
 
     hsv:
       # --- 면적 게이트 ---
