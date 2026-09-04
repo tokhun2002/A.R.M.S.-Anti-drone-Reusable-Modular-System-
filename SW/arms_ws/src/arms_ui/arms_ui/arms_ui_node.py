@@ -28,7 +28,7 @@ from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import BatteryState, Image, Joy
+from sensor_msgs.msg import BatteryState, CompressedImage, Image, Joy
 from std_msgs.msg import Float32MultiArray
 
 from arms_msgs.msg import DetectionArray, MissionState
@@ -61,6 +61,16 @@ class ArmsUINode(Node):
             depth=1,
         )
         self._image_qos = best_effort_qos
+
+        # UI 화면 스트리밍: 합성된 UI 화면을 JPEG(CompressedImage)로 발행 →
+        #   같은 네트워크의 노트북이 구독해 녹화(ros2 bag/subscriber). Jetson 은 인코딩만
+        #   하면 되어 리눅스 화면캡처 대비 CPU 부하가 훨씬 작다. 구독자가 있을 때만 인코딩한다.
+        #   best-effort+depth1(아래 QoS)로 늦은 프레임을 버려 UDP 실시간성을 지킨다.
+        self.declare_parameter("ui.stream_enabled", True)       # 발행 on/off
+        self.declare_parameter("ui.stream_jpeg_quality", 70)    # JPEG 품질 1~100 (낮을수록 대역폭↓)
+        self.declare_parameter("ui.stream_max_width", 960)      # 발행 전 최대 가로폭(0=원본). 대역폭 절감
+        self.pub_ui_stream = self.create_publisher(
+            CompressedImage, "/arms/ui_image/compressed", best_effort_qos)
 
         # PiP 크기 (프레임 폭 대비 ROI 표시 폭 비율)
         self.declare_parameter("ui.roi_pip_frac", 0.25)
@@ -590,6 +600,8 @@ class ArmsUINode(Node):
         detection_capture = frame.copy()
         if self._cv_debug:
             frame = self._compose_diagnostics_panel(frame)
+        # UI 화면 원격 녹화용 발행(전체화면 letterbox 전, 네이티브 해상도 = 검은 여백 없음).
+        self._publish_ui_stream(frame)
         if self._fullscreen:
             frame = self._fit_to_window(frame)
         else:
@@ -598,6 +610,29 @@ class ArmsUINode(Node):
         key = cv2.waitKey(1) & 0xFF
         if key in (ord("s"), ord("S")):
             self._request_capture(detection_capture)
+
+    def _publish_ui_stream(self, frame):
+        """합성된 UI 화면을 JPEG(CompressedImage)로 발행(원격 녹화용).
+
+        구독자가 있을 때만 인코딩해 평소 CPU 비용을 0으로 둔다. 대역폭/실시간성을
+        위해 발행 전 최대 폭으로 축소하고 JPEG 로 압축한다."""
+        if not bool(self.get_parameter("ui.stream_enabled").value):
+            return
+        if self.pub_ui_stream.get_subscription_count() == 0:
+            return
+        max_w = int(self.get_parameter("ui.stream_max_width").value)
+        if max_w > 0 and frame.shape[1] > max_w:
+            nh = int(frame.shape[0] * max_w / frame.shape[1])
+            frame = cv2.resize(frame, (max_w, nh), interpolation=cv2.INTER_AREA)
+        quality = int(self.get_parameter("ui.stream_jpeg_quality").value)
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if not ok:
+            return
+        msg = CompressedImage()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.format = "jpeg"
+        msg.data = buf.tobytes()
+        self.pub_ui_stream.publish(msg)
 
     def _compose_diagnostics_panel(self, frame):
         """영상 오른쪽에 HSV 후보 미리보기와 실시간 성능 그래프를 붙인다."""
@@ -994,7 +1029,7 @@ class ArmsUINode(Node):
         cv2.putText(frame, text, (x, y), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
 
     def _draw_detector_status(self, frame):
-        """YOLO 상태와 검출 모드(FULL/ROI)를 좌상단에 표시."""
+        """검출 필터 상태(TRK)·YOLO/HSV 상태·후보 카운트를 좌상단에 표시."""
         raw = self._det_status
         if raw is None or len(raw) < 3:
             return
@@ -1010,23 +1045,16 @@ class ArmsUINode(Node):
         y = int(100 * max(1.0, h / 480.0))
         dy = int(cv2.getTextSize("A", font, scale, thick)[0][1] * 2.2)
 
-        # 검출 모드 헤더: FULL=전체프레임(획득), ROI=크롭 안에서만(추적) → '가중치' 전환 확인용
-        mode = raw[3] if len(raw) >= 4 else 0.0
-        mtext = "MODE: ROI (crop)" if mode >= 0.5 else "MODE: FULL frame"
-        mcolor = (0, 200, 255) if mode >= 0.5 else (200, 200, 200)
-        cv2.putText(frame, mtext, (x, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
-        cv2.putText(frame, mtext, (x, y), font, scale, mcolor, thick, cv2.LINE_AA)
-
         # 검출 필터 상태(raw[13]): NEW(획득중)/TRACKED(추적중)/LOST(순간놓침·KF외삽)/REMOVED(제거).
-        #   MODE 오른쪽에 색으로 구분해 붙인다 — 표적이 물렸는지 메인 화면에서 바로 확인.
+        #   색으로 구분 — 표적이 물렸는지 메인 화면에서 바로 확인.
+        #   (구 MODE FULL/ROI 표시는 KF 노드에서 항상 FULL 이라 무의미 → 제거)
         if len(raw) >= 14:
             tstate = {0.0: "NEW", 1.0: "TRACKED", 2.0: "LOST", 3.0: "REMOVED"}.get(raw[13], "--")
             tcolor = {"TRACKED": (0, 220, 0), "LOST": (0, 165, 255),
                       "NEW": (200, 200, 200)}.get(tstate, (170, 170, 170))
-            tx = x + cv2.getTextSize(mtext, font, scale, thick)[0][0] + int(20 * scale)
             ttext = f"TRK: {tstate}"
-            cv2.putText(frame, ttext, (tx, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
-            cv2.putText(frame, ttext, (tx, y), font, scale, tcolor, thick, cv2.LINE_AA)
+            cv2.putText(frame, ttext, (x, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
+            cv2.putText(frame, ttext, (x, y), font, scale, tcolor, thick, cv2.LINE_AA)
         y += dy
 
         for i, name in enumerate(names):
@@ -1036,9 +1064,8 @@ class ArmsUINode(Node):
             if rv == -2.0:                      # 사용불가 (YOLO OOM 등)
                 text, color = f"{name}: DEAD", (0, 0, 255)
             elif fresh:                          # 최근 confidence 있음
-                pct = held[0] * 100.0
                 color = (0, 220, 0) if held[0] > 0.0 else (170, 170, 170)
-                text = f"{name}: {pct:2.0f}%" if held[0] > 0.0 else f"{name}: --"
+                text = f"{name}: {held[0]:.2f}" if held[0] > 0.0 else f"{name}: --"
             elif rv == -1.0:                     # 꺼짐/이 프레임 미실행
                 text, color = f"{name}: off", (140, 140, 140)
             else:                                # 실행했으나 검출 없음
