@@ -29,6 +29,8 @@ services:
       # 영상 노드는 JPEG 압축 토픽도 함께 발행한다. 컨테이너 경계를 넘어 큰 raw
       # 프레임을 UDP로 받으면 조각 유실이 발생하기 쉬우므로 압축 입력을 기본 사용한다.
       - ARMS_INPUT_COMPRESSED=${ARMS_INPUT_COMPRESSED:-1}
+      # 검출 파라미터 override 파일명. 비어있으면 기본(detection.yaml)만 로드.
+      - ARMS_DET_CONFIG=${ARMS_DET_CONFIG:-}
     volumes:
       - ./models:/models:ro    # place .pt model file here
       - ./fastdds_udp.xml:/fastdds_udp.xml:ro
@@ -36,4 +38,11 @@ services:
       # 재시작(docker compose restart arms_detection)만으로 반영. Dockerfile 이
       # 같은 경로로 COPY 한 파일 위에 덮어씌운다. (의존성/Dockerfile 변경 때만 재빌드)
       - ../arms_detection/arms_detection_node.py:/ros_ws/arms_detection_node.py:ro
+      # 검출 파라미터 config (--params-file 로 로드).
+      - ../config:/params:ro
+    # detection.yaml 을 --params-file 로 로드. override 는 ARMS_DET_CONFIG 로 위에 얹는다.
+    command:
+      - bash
+      - -c
+      - "source /opt/ros/humble/setup.bash && source /ros_ws/install/setup.bash && python3 /ros_ws/arms_detection_node.py --ros-args --params-file /params/detection.yaml $${ARMS_DET_CONFIG:+--params-file /params/$$ARMS_DET_CONFIG}"
     restart: unless-stopped

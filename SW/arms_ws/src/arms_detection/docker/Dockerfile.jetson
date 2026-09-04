@@ -43,25 +43,11 @@ WORKDIR /ros_ws
 RUN bash -c "source /opt/ros/humble/setup.bash && \
     colcon build --packages-select arms_msgs --cmake-args -DCMAKE_BUILD_TYPE=Release"
 
-# ---- opencv tracking(contrib) 모듈 ----
-# detect-then-track(CSRT/KCF) 는 opencv 의 tracking(contrib) 모듈이 필요.
-# base 의 opencv-python 을 같은 버전의 contrib-headless 로 교체(호환 유지, GUI deps 제외).
-# 검출 노드는 cv2 CUDA 를 안 쓰므로 headless 로 충분.
-# cv2.__version__ 은 3자리(예: 4.11.0)지만 PyPI 휠은 4자리(4.11.0.86)라 ==4.11.0 은
-# 안 맞음. ==4.11.0.* 로 같은 patch 의 최신 build 를, 실패 시 4.11.* 로 폴백(모두 동일
-# major.minor 유지 → numpy/ultralytics 호환 보존, 최신으로 튀지 않음).
-RUN CV_VER="$(python3 -c 'import cv2; print(cv2.__version__)' 2>/dev/null | cut -d- -f1)"; \
-    MM="$(echo "$CV_VER" | cut -d. -f1,2)"; \
-    pip3 uninstall -y opencv-python opencv-python-headless opencv-contrib-python 2>/dev/null || true; \
-    if [ -n "$CV_VER" ]; then \
-        pip3 install --no-cache-dir "opencv-contrib-python-headless==${CV_VER}.*" \
-        || pip3 install --no-cache-dir "opencv-contrib-python-headless==${MM}.*"; \
-    else \
-        pip3 install --no-cache-dir opencv-contrib-python-headless; \
-    fi \
-    && python3 -c "import cv2; assert hasattr(cv2,'TrackerCSRT_create') or (hasattr(cv2,'legacy') and hasattr(cv2.legacy,'TrackerCSRT_create')), 'no tracking module'; print('opencv tracking OK', cv2.__version__)"
+# opencv: base 이미지의 opencv-python 을 그대로 쓴다. 검출 노드가 쓰는 cv2 기능
+# (KalmanFilter·cvtColor·findContours·Laplacian·imdecode 등)은 전부 core 라 별도
+# 설치가 필요 없다. (CSRT/KCF 트래커(contrib)는 KF 필터로 대체되어 더 이상 안 씀.)
 
-# ---- Copy detection node (HSV proposals + ROI YOLO + detect-then-track) ----
+# ---- Copy detection node (HSV proposals + ROI YOLO, KF filter) ----
 # YOLO 는 in-process (ARMS_MODEL 로 로드).
 COPY arms_detection/arms_detection/arms_detection_node.py /ros_ws/arms_detection_node.py
 

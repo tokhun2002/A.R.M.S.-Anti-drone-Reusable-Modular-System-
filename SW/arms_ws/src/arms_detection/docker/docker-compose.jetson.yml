@@ -31,12 +31,12 @@ services:
       # 엔진 크기와 안 맞아 실패). .pt 나 dynamic 엔진이면 512 도 가능.
       - ARMS_FULL_IMGSZ=${ARMS_FULL_IMGSZ:-320}
       - ARMS_ROI_IMGSZ=${ARMS_ROI_IMGSZ:-320}
-      # YOLO가 연속 실패하면 검출을 비활성화한다. HSV는 proposal-only라
-      # YOLO 없이 단독으로 검출을 발행하지 않는다.
-      - ARMS_YOLO_MAX_FAILS=${ARMS_YOLO_MAX_FAILS:-3}
       # 1=압축(JPEG) 입력 구독(/arms/image_raw/compressed) → 컨테이너로 오는 UDP
       # 데이터량 급감(조각 드롭↓). 호스트에서 raw→compressed 노드가 떠 있어야 한다.
       - ARMS_INPUT_COMPRESSED=${ARMS_INPUT_COMPRESSED:-1}
+      # 검출 파라미터 override 파일명. 비어있으면 기본(detection.yaml=실외)만 로드.
+      #   실내: ARMS_DET_CONFIG=detection.indoor.yaml
+      - ARMS_DET_CONFIG=${ARMS_DET_CONFIG:-}
     volumes:
       - ./models:/models:ro # balloon_camera.pt 또는 변환한 .engine
       - ./fastdds_udp.xml:/fastdds_udp.xml:ro
@@ -47,12 +47,11 @@ services:
       # 검출 파라미터 config → --params-file 로 로드. yaml 만 고치고
       # `docker compose ... restart` 하면 반영(재빌드 불필요).
       - ../config:/params:ro
-    # 검출 튜닝 config 를 --params-file 로 로드. 기본=실외(detection.outdoor.yaml).
-    #   다른 config 로 바꾸려면 ARMS_DET_CONFIG 환경변수로 파일명을 지정한다(SETUP.md A-5 참고):
+    # 검출 파라미터 config(detection.yaml=실외)를 --params-file 로 로드. 실내 등
+    #   override 는 ARMS_DET_CONFIG 로 위에 얹는다(SETUP.md A-5 참고):
     #     ARMS_DET_CONFIG=detection.indoor.yaml docker compose -f docker-compose.jetson.yml up -d
-    #   튜닝을 끄려면(=코드 기본값으로) 이 command 블록을 통째로 주석 처리한다.
     command:
       - bash
       - -c
-      - "source /opt/ros/humble/setup.bash && source /ros_ws/install/setup.bash && python3 /ros_ws/arms_detection_node.py --ros-args --params-file /params/${ARMS_DET_CONFIG:-detection.outdoor.yaml}"
+      - "source /opt/ros/humble/setup.bash && source /ros_ws/install/setup.bash && python3 /ros_ws/arms_detection_node.py --ros-args --params-file /params/detection.yaml $${ARMS_DET_CONFIG:+--params-file /params/$$ARMS_DET_CONFIG}"
     restart: unless-stopped

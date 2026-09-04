@@ -46,7 +46,7 @@ arms_ws/
 └── src/
     ├── arms_bringup/          # 최상위 런치 파일 및 설정
     ├── arms_video/            # 영상 소스 추상화 (v4l2_camera / gz_ros2_bridge)
-    ├── arms_detection/        # 융합 검출 노드 (YOLO in-process + HSV + absdiff, Docker)
+    ├── arms_detection/        # 검출 노드 (HSV 후보 → ROI YOLO 검증 + KF 필터, Docker)
     ├── arms_command/          # 조종 입력 → /arms/command (SITL 가상 조종기 / 실기체 ESP32+ADS1115+GPIO)
     ├── arms_sim/              # SITL 전용: 표적 심판(referee) + 튜닝/심판 콘솔(panel)
     ├── arms_control/          # 상태 머신 + PID + CRSF 출력 (C++/Python hybrid)
@@ -73,7 +73,7 @@ graph TD
     IMAGE(["/arms/image_raw"])
 
     subgraph arms_detection ["arms_detection"]
-        DN_FUSION["arms_detection_node<br/>(YOLO in-process + HSV + absdiff<br/>+ detect-then-track, Docker)"]
+        DN_FUSION["arms_detection_node<br/>(HSV 후보 → ROI YOLO 검증<br/>+ KF 필터, Docker)"]
     end
 
     subgraph arms_command ["arms_command"]
@@ -138,7 +138,7 @@ graph TD
 | 노드                   | subscribe                                                                                    | publish                                                                                   |
 | ---------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `arms_video_node`      | —                                                                                            | `/arms/image_raw`                                                                         |
-| `arms_detection_node`  | `/arms/image_raw`                                                                            | `/arms/detections`<br/>`/arms/debug_image`<br/>`/arms/debug_absdiff`                      |
+| `arms_detection_node`  | `/arms/image_raw`                                                                            | `/arms/detections`<br/>(구독 있을 때만) `/arms/debug_image`·`/arms/roi_image`·`/arms/hsv_debug_image`·`/arms/detector_status` |
 | `arms_command_node`    | —                                                                                            | `/arms/command` (가상 조종기, SITL)                                                       |
 | `arms_command_hw_node` | —                                                                                            | `/arms/command` (실기체 ESP32)                                                            |
 | `panel` (`arms_sim`)   | `/arms/mission_state`                                                                        | — (`ros2 param set` 으로 튜닝/심판 제어)                                                  |
@@ -152,7 +152,7 @@ graph TD
 | 노드                   | 패키지           | 역할                                                                                                                                                                            | 실행 환경                     |
 | ---------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
 | `arms_video_node`      | `arms_video`     | 영상 소스 추상화. 실기체는 v4l2_camera, SITL은 gz_ros2_bridge로 `/arms/image_raw` 발행                                                                                          | 호스트                        |
-| `arms_detection_node`  | `arms_detection` | YOLO(in-process)·HSV·absdiff 를 우선순위 융합 + detect-then-track(CSRT/KCF, ROI) 후 `/arms/detections` 발행. 실기체는 GPU Docker, SITL/호스트는 YOLO 자동 비활성(HSV/absdiff만) | Docker(실기체) / 호스트(SITL) |
+| `arms_detection_node`  | `arms_detection` | HSV로 붉은 후보를 제안하고 ROI YOLO로 검증(+전체화면 fallback), KF로 평활한 단일 표적을 `/arms/detections`로 발행. **YOLO가 최종 판정자**(HSV 단독 발행 금지 → YOLO 없으면 검출 없음). GPU Docker | Docker (실기체/SITL) |
 | `arms_command_node`    | `arms_command`   | **SITL 가상 조종기.** 드래그 스틱·KILL/ARM/MODE/LAUNCH 버튼으로 `/arms/command`(Joy) 발행. 실기체 물리 조종기의 SITL 쌍둥이 (발행자는 이 노드 하나뿐 → 레이스 방지)             | 호스트 (SITL)                 |
 | `arms_command_hw_node` | `arms_command`   | ESP32 모듈이 ADS1115(I2C 짐벌 4축) + GPIO 스위치를 읽어 USB Serial로 Jetson에 전달 → `sensor_msgs/Joy` `/arms/command` 발행. fake_mode 지원                                     | 호스트 (실기체)               |
 | `panel`                | `arms_sim`       | **SITL 전용 튜닝/심판 콘솔.** PID·τ·PN 등 arms_control 파라미터 + 표적 고도/속도 등 referee 파라미터를 `ros2 param set` 으로 실시간 제어. 미션 상태 표시. 노드별로 묶은 그룹 UI | 호스트 (SITL)                 |
@@ -285,87 +285,106 @@ arms_video_node는 영상 소스에 따라 두 가지 모드로 동작한다.
 ```
 /arms/image_raw (sensor_msgs/Image)
         |
-        | DDS (network_mode: host)
+        | DDS (network_mode: host)  — ARMS_INPUT_COMPRESSED=1 이면 압축(JPEG) 입력
         v
     arms_detection_node.py (Docker 내부, GPU)
         |
-    검출 stack: YOLO(in-process) > HSV > absdiff
+    HSV 후보 제안 → ROI YOLO 검증 (+ 전체화면 YOLO fallback)
         |
-    detect-then-track (CSRT/KCF): TRACK 중엔 ROI 크롭에만 YOLO
+    KF 평활 + 이상치 게이트 (단일 표적)
         |
-    BoundingBox 변환 (normalized coords)
+    BoundingBox (normalized coords)
         |
         v
-/arms/detections (arms_msgs/DetectionArray)  [+ /arms/debug_image, /arms/debug_absdiff]
+/arms/detections (arms_msgs/DetectionArray)
+  [+ 구독자 있을 때만: /arms/debug_image, /arms/roi_image,
+     /arms/hsv_debug_image, /arms/detector_status]
 ```
 
-> **파라미터 소스**: arms_detection 은 **config yaml 이 없다.** 아래 모든 파라미터는
-> 노드 코드의 `declare_parameter` **기본값**이며, 런타임 변경은 `ros2 param set
-> /arms_detection_node ...` 로만 한다(영구 저장 파일 없음). YOLO 모델/conf/iou 는 별도로
-> 환경변수 `ARMS_MODEL`/`ARMS_CONF`/`ARMS_IOU`(docker-compose)로 설정한다.
+> **파라미터 소스**: `config/detection.yaml`(기본=실외)을 docker compose 가 `--params-file`
+> 로 로드한다. 실내 등은 `detection.indoor.yaml` override 를 `ARMS_DET_CONFIG` 로 위에 얹는다
+> (SETUP.md A-5). yaml 값은 노드 `declare_parameter` 기본값과 동기 유지 — config 없이 띄워도
+> 동일 동작. 런타임 변경은 `ros2 param set /arms_detection_node ...`. YOLO 모델 경로·conf·iou·
+> imgsz·입력형식은 컨테이너·엔진에 종속이라 환경변수(`ARMS_MODEL` 등, docker-compose)로 관리한다.
 
-### 6.2 검출기 우선순위 (YOLO > HSV > ABSDIFF)
+### 6.2 검출: HSV 후보 → ROI YOLO 검증
 
-세 검출기를 **우선순위**로 결합한다 — 융합/평균이 아니라 **먼저 잡히는 하나만 채택**한다
-(`yolo_box or hsv_box or absdiff_box`). 검출기 간 불일치로 인한 잘못된 평균을 피한다.
+딥러닝 검출(YOLO)과 색 기반 후보(HSV)를 역할 분담한다. **YOLO가 최종 판정자**이고,
+HSV는 YOLO가 볼 곳을 좁혀주는 **후보 제안**만 한다(단독 발행 금지 — 안전 설계).
 
-| 검출기 | 방식 | 강점 | on/off |
-| ------ | ---- | ---- | ------ |
-| **YOLO** | 같은 프로세스 ultralytics 추론 | 학습된 표적, 최고 신뢰도 | `use_yolo` (모델/GPU 없으면 자동 비활성) |
-| **HSV** | 빨간색 영역 색상 분리 | 근거리·색 선명할 때 강력 | `use_hsv` |
-| **ABSDIFF** | 배경 대비 밝기차 blob | 색·형태 무관, 원거리 소형 표적 | `use_absdiff` |
+1. **HSV 후보 제안**: 각 픽셀의 붉은 정도를 hard threshold 가 아닌 연속 확률 $P_{\text{red}}\in[0,1]$
+   로 평가한다 — 색상·채도·명도 가중을 곱한다:
 
-- **YOLO 레이트 게이팅**: 전체 프레임 탐색(ACQUIRE/LOST)에서는 YOLO 를 `yolo.acquire_interval`
-  (기본 2) 프레임마다만 실행해 루프 레이트를 유지한다. TRACK 재검출은 드물어 항상 실행.
-- **ABSDIFF 장면 게이팅**: 프레임 blob 수가 `absdiff.max_blobs`(12) 초과면 어수선한 장면(지상 등)
-  으로 보고 absdiff 결과를 억제 (오탐 방지).
+$$
+P_{\text{red}} = S_{\text{hue}}\cdot S_{\text{sat}}\cdot S_{\text{val}}, \qquad
+S_{\text{hue}} = \exp\!\left(-\frac{1}{2}\left(\frac{d_H}{\sigma_H}\right)^{2}\right),\quad
+d_H = \min(H,\; 180-H)
+$$
 
-### 6.3 내부 상태머신 (detect-then-track)
+   핵심은 색상항 $S_{\text{hue}}$ — 빨강이 HSV 색상환의 $0/180$ 경계에 걸쳐 있으므로 경계까지의
+   거리 $d_H$ 에 대한 **원형 Gaussian** 으로 평가해 경계 문제를 없앤다($\sigma_H$ = 허용 폭).
+   채도항 $S_{\text{sat}}$·명도항 $S_{\text{val}}$ 는 시그모이드 가중으로, 채도가 높을수록 올리고
+   너무 어둡거나 과포화된(조명) 픽셀은 낮춘다. 이 확률맵을 임계화·모폴로지 후 윤곽선을 뽑아,
+   면적 하한·원형도·질감(Laplacian 분산)으로 걸러 점수 상위 `hsv.max_candidates`개를 낸다.
+   면적 **상한은 없다** — 표적에 접근할수록 화면에서 커지는 게 정상(요격 성공 조건)이라 잘라내면 안 됨.
+2. **ROI YOLO 검증**: HSV 후보 crop 들을 YOLO로 확인해 **승인된 것만 채택**. HSV가 못 잡거나
+   ROI가 다 거부하면 `yolo.full_fallback_interval`(기본 1=매프레임)마다 전체화면 YOLO로 보완.
+3. **YOLO 승인 박스만 발행**. HSV confidence 는 후보 품질일 뿐 발행·순위에는 쓰지 않는다.
 
-매 프레임 전체 검출을 돌리는 대신, 표적을 한 번 확정하면 **CSRT/KCF 트래커로 ROI만 추적**한다
-(`_TargetTracker`). 검출 비용을 줄이고(트래킹이 훨씬 쌈) 검출기 깜빡임에 강해 더 연속적인
-`/arms/detections` 를 낸다. control 엔 투명 — 좌표만 더 매끄럽게 나온다.
+| 검출기 | 방식 | 역할 | on/off |
+| --- | --- | --- | --- |
+| **YOLO** | in-process ultralytics 추론 | **최종 판정** | 모델 로드되면 항상 on (없으면 검출 없음) |
+| **HSV** | 붉은색 확률 + 형상·질감 | 후보 제안 (단독 LOCK 금지) | `use_hsv` (off=순수 전체화면 YOLO) |
 
-**ACQUIRE → TRACK → LOST** 3-상태. `track.enable=false` 면 FSM 우회(매 프레임 검출).
+> **YOLO 로드·워밍업**: 시작 시 워밍업 `predict()` 1회로 엔진 로드·CUDA 컨텍스트·오토튜닝을
+> 끝낸다 — (1) 첫 프레임 지연 스파이크 제거, (2) OOM/버전불일치면 여기서 바로 판정. 정적 엔진은
+> 로드 때 메모리를 다 잡으므로 여기서 통과하면 운영 중 자기 추론으로 OOM 나지 않는다. 런타임
+> predict 예외는 그 프레임만 miss 처리(노드는 유지 — 재시작→'device busy' 폭주 방지).
+>
+> **효율 주의**: Jetson 정적 엔진은 batch=1 이라 HSV 후보를 **순차 추론**한다(후보 N개 = N회).
+> crop 도 풀프레임과 같은 imgsz 로 resize 되어 배치·저해상도 이득이 없으므로 후보가 많으면
+> 비싸다 → `hsv.max_candidates` 로 조절(단일 표적이면 1로 충분).
+
+### 6.3 표적 필터 (KF 평활 + 이상치 게이트)
+
+매 프레임 전체 검출 결과를 **칼만 필터(등속도 모델, 정규화 좌표)로 평활**하고, 확정된 표적에서
+크게 튄 검출(오인식)을 걸러 **단일 표적**을 낸다(`_TargetFilter`). control 엔 투명 — 더 연속적인
+`/arms/detections` 를 낼 뿐이다.
+
+> CSRT/KCF **트래커는 쓰지 않는다.** 트래커가 표적에서 드리프트해 락이 풀리는 문제가 있어,
+> 매 프레임 재검출 + KF 평활·이상치 게이트 방식으로 바꿨다.
+
+**상태 NEW → TRACKED ⇄ LOST → REMOVED**
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ACQUIRE
-    ACQUIRE --> ACQUIRE : 검출 실패 / 연속성 미달
-    ACQUIRE --> TRACK : 연속 검출 confirm_frames 회<br/>(중심 이동이 confirm_dist 이내) + 트래커 init 성공
-    TRACK --> TRACK : 트래커 update 성공<br/>(redetect_interval 마다 ROI 재검출로 스냅)
-    TRACK --> LOST : 트래커 update 실패<br/>또는 재검출 max_unconfirmed 회 연속 실패
-    LOST --> TRACK : 재검출 성공 + 모션 예측 근처
-    LOST --> LOST : 재획득 시도 중
-    LOST --> ACQUIRE : reacquire_frames 내 재획득 실패
+    [*] --> NEW
+    NEW --> TRACKED : 같은 위치 연속검출 confirm_frames 회<br/>(중심이동 confirm_dist 이내)
+    TRACKED --> TRACKED : 검출이 예측 근처(jump_gate 이내) → KF 평활 발행
+    TRACKED --> LOST : 미검출 또는 예측서 jump_gate 밖(이상치)
+    LOST --> TRACKED : 검출 복귀(예측 근처)
+    LOST --> LOST : KF 예측으로 외삽(coast) 발행
+    LOST --> REMOVED : 연속 miss max_age 회
+    REMOVED --> NEW : 다음 검출로 새 표적 시작
 ```
 
-**상태별 동작**
+| 상태 | 발행 | 설명 |
+| --- | --- | --- |
+| **NEW** | 실검출 박스 | 확정 전. 직전과 중심이 가까운 검출이 연속돼야 확정(스푸리어스 배제) |
+| **TRACKED** | KF 평활 박스 | 검출이 KF 예측 근처면 채택·평활. 예측서 크게 튀면 기각(이상치 게이트) |
+| **LOST** | KF 예측 박스 | 순간 놓침. 예측으로 외삽(coast). 검출 복귀하면 TRACKED |
+| **REMOVED** | 없음(None) | `max_age` 넘게 놓침 → 표적 제거. 다음 검출은 NEW → control 이 마지막값 홀드 |
 
-| 상태 | 검출 실행 | 발행 | 설명 |
-| ---- | -------- | ---- | ---- |
-| **ACQUIRE** | 매 프레임(전체) | 실검출 박스 | 표적 확정 전. 직전 프레임과 중심이 가까운 검출이 연속돼야 확정(오탐 필터) |
-| **TRACK** | `redetect_interval`마다 ROI만 | 트래킹 박스 | CSRT/KCF 로 추적. 주기적 ROI 재검출로 드리프트 보정(스냅) |
-| **LOST** | 매 프레임(전체) | 없음(None) | 표적 놓침. 마지막 속도로 예측한 위치 근처에서만 재획득 → control 이 마지막값 홀드 |
+> 좌표는 전 과정 **정규화(0~1)** 로 처리한다(해상도 독립). 중심 평활·예측(1스텝 외삽)은
+> `_CenterKalman` 이 담당한다.
 
-**구현 특이사항**
-- **드리프트 보정**: TRACK 중 `redetect_interval`(10)마다 트래킹 박스 주변 ROI 크롭
-  (`redetect_margin` 2.0배)에서 재검출 → 성공하면 그 박스로 트래커 재init(스냅). 트래커가
-  서서히 밀리는 걸 주기적으로 교정. `max_unconfirmed`(3)회 연속 실패 시 LOST.
-- **모션 예측 게이팅**: 중심 속도를 EMA로 추정(`_vel`)해, LOST 재획득 시 예측 위치 근처의
-  검출만 같은 표적으로 인정 → 다른 물체로 튀는 것 방지.
+**파라미터** (`filter.*`)
 
-**주요 파라미터** (`track.*`)
-
-| 파라미터 | 기본 | 의미 |
-| -------- | ---- | ---- |
-| `track.enable` | true | false=FSM 우회, 매 프레임 검출 |
-| `track.tracker_type` | CSRT | CSRT(정확) / KCF(빠름) |
-| `track.confirm_frames` / `confirm_dist` | 3 / 0.08 | ACQUIRE→TRACK 확정 연속수 / 중심 이동 허용(정규화) |
-| `track.redetect_interval` / `redetect_margin` | 10 / 2.0 | TRACK 재검출 주기 [프레임] / ROI 확장배율 |
-| `track.max_unconfirmed` | 3 | 재검출 연속 실패 허용(→LOST) |
-| `track.reacquire_frames` / `match_dist` | 8 / 0.1 | LOST 재획득 창 [프레임] / 예측 게이팅 거리 |
-| `track.min_box_px` | 8 | 트래커 init 최소 박스 [px] |
+| 파라미터 | 기본 | 전이 |
+| --- | --- | --- |
+| `filter.confirm_frames` / `confirm_dist` | 3 / 0.035 | NEW→TRACKED 확정 연속수 / 중심이동 허용(정규화) |
+| `filter.jump_gate` | 0.4 | TRACKED 유지 게이트: 예측 대비 급변 차단(0=off) |
+| `filter.max_age` | 8 | LOST→REMOVED: 연속 miss 이만큼이면 제거 |
 
 ### 6.4 Docker Compose
 
@@ -731,7 +750,7 @@ throttle 스틱은 실제 조종기처럼 **놓아도 그 자리 유지**(가로
   socat PTY,link=/tmp/crsf_tx PTY,link=/tmp/crsf_rx
 
 nodes:
-  - arms_detection_node     (arms_detection) 호스트 실행 → YOLO 자동 비활성, HSV/absdiff만
+  - arms_detection_node     (arms_detection) 호스트 실행(HSV 후보만; 검출 발행엔 YOLO 필요)
   - arms_control_node       (arms_control)   상태머신 + PID + CRSF → /tmp/crsf_tx
   - sitl_bridge_node        (arms_control)   /tmp/crsf_rx → MAVLink UDP → PX4
   - arms_ui_node            (arms_ui)
@@ -780,7 +799,7 @@ arms_video_node  ─────────────────────
       +──────────────────────────────> arms_ui_node (display)
       |
       v
-arms_detection_node  (Docker, YOLO in-process + HSV/absdiff + detect-then-track)
+arms_detection_node  (Docker, HSV 후보 → ROI YOLO 검증 + KF 필터)
       |
       | /arms/detections  [arms_msgs/DetectionArray]
       +──────────────────────────────> arms_ui_node (overlay boxes)
@@ -812,4 +831,4 @@ arms_control_node  (state machine + PID)
 
 ---
 
-_Document version: 0.9 — 2026-08-14_
+_Document version: 0.10 — 2026-09-05_

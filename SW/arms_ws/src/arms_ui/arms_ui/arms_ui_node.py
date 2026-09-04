@@ -610,7 +610,7 @@ class ArmsUINode(Node):
 
         raw = self._det_status or []
         frame_no = int(raw[14]) if len(raw) >= 15 else 0
-        tracker_names = {0: "ACQUIRE", 1: "TRACK", 2: "LOST"}
+        tracker_names = {0: "NEW", 1: "TRACKED", 2: "LOST", 3: "REMOVED"}
         tracker = tracker_names.get(int(raw[13]), "--") if len(raw) >= 14 else "--"
         mode = ("FULL-FALLBACK" if len(raw) >= 16 and raw[15] >= 0.5 else
                 ("ROI" if len(raw) >= 4 and raw[3] >= 0.5 else "HSV->YOLO"))
@@ -994,13 +994,13 @@ class ArmsUINode(Node):
         cv2.putText(frame, text, (x, y), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
 
     def _draw_detector_status(self, frame):
-        """YOLO/HSV proposal 상태와 검출 모드(FULL/ROI)를 좌상단에 표시."""
+        """YOLO 상태와 검출 모드(FULL/ROI)를 좌상단에 표시."""
         raw = self._det_status
         if raw is None or len(raw) < 3:
             return
         h = frame.shape[0]
         now = time.monotonic()
-        names = ("YOLO", "HSV proposal")
+        names = ("YOLO",)
         font = cv2.FONT_HERSHEY_SIMPLEX
         scale = max(0.45, h / 1100.0)
         thick = max(1, int(round(scale * 2)))
@@ -1017,12 +1017,12 @@ class ArmsUINode(Node):
         cv2.putText(frame, mtext, (x, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
         cv2.putText(frame, mtext, (x, y), font, scale, mcolor, thick, cv2.LINE_AA)
 
-        # 트래커 FSM 상태(raw[13]): ACQUIRE(획득)/TRACK(추적중)/LOST(상실). MODE 오른쪽에
-        #   색으로 구분해 붙인다 — 트래커가 실제로 물렸는지 메인 화면에서 바로 확인.
+        # 검출 필터 상태(raw[13]): NEW(획득중)/TRACKED(추적중)/LOST(순간놓침·KF외삽)/REMOVED(제거).
+        #   MODE 오른쪽에 색으로 구분해 붙인다 — 표적이 물렸는지 메인 화면에서 바로 확인.
         if len(raw) >= 14:
-            tstate = {0.0: "ACQUIRE", 1.0: "TRACK", 2.0: "LOST"}.get(raw[13], "--")
-            tcolor = {"TRACK": (0, 220, 0), "LOST": (0, 0, 255),
-                      "ACQUIRE": (200, 200, 200)}.get(tstate, (170, 170, 170))
+            tstate = {0.0: "NEW", 1.0: "TRACKED", 2.0: "LOST", 3.0: "REMOVED"}.get(raw[13], "--")
+            tcolor = {"TRACKED": (0, 220, 0), "LOST": (0, 165, 255),
+                      "NEW": (200, 200, 200)}.get(tstate, (170, 170, 170))
             tx = x + cv2.getTextSize(mtext, font, scale, thick)[0][0] + int(20 * scale)
             ttext = f"TRK: {tstate}"
             cv2.putText(frame, ttext, (tx, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)

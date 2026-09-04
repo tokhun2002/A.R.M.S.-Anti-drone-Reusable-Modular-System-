@@ -2,35 +2,32 @@
 """
 arms_detection_node — A.R.M.S. 빨간 풍선 검출기
 
-검출 구조: HSV proposal → ROI YOLO verification
-  - HSV     : Gaussian red score로 붉은 원형 후보를 최대 2개 제안.
-  - ROI YOLO: 후보 crop들을 한 번의 batch 추론으로 확인. YOLO 승인 결과만 발행.
-  - Full YOLO: HSV가 놓치는 경우를 위해 5프레임마다 전체 화면 fallback.
+검출 구조: HSV proposal → ROI YOLO verification (매 프레임 전체 검출)
+  - HSV     : Gaussian red score로 붉은 원형 후보를 제안.
+  - ROI YOLO: 후보 crop들을 batch 추론으로 확인. YOLO 승인 결과만 발행.
+  - Full YOLO: HSV가 놓치는 경우를 위해 전체 화면 fallback.
 
-검출이 어느 정도 연속되면 CSRT/KCF 트래커로 전환(detect-then-track)해 TRACK
-구간에선 ROI 만 추적한다(싸고 매끄러움). control 엔 완전히 투명 — 더 연속적인
-/arms/detections 를 낼 뿐이다.
+검출 결과는 칼만 필터로 평활하고, 표적을 확정한 뒤에는 예측 위치에서 크게 튄
+검출(오인식)을 걸러낸다. 순간 놓침은 KF 예측으로 잠시 외삽(coast)한다. control
+엔 완전히 투명 — 더 연속적인 /arms/detections 를 낼 뿐이다.
 
 토픽
   구독 : /arms/image_raw        sensor_msgs/Image
   발행 : /arms/detections       arms_msgs/DetectionArray
-  발행 : /arms/roi_image        sensor_msgs/Image  (bgr8, 추적 표적 확대 크롭)
+  발행 : /arms/roi_image        sensor_msgs/Image  (bgr8, 표적 확대 크롭)
   발행 : /arms/debug_image      sensor_msgs/Image  (bgr8, 모든 검출기 결과+최종 시각화)
   발행 : /arms/hsv_debug_image  sensor_msgs/Image  (bgr8, HSV 마스크와 후보 시각화)
   발행 : /arms/detector_status  std_msgs/Float32MultiArray (검출·처리시간 진단값)
 
 파라미터 (ros2 param set /arms_detection_node ...)
-  use_yolo/use_hsv             : bool  검출/후보 제안 on/off (기본 true)
-  yolo.full_fallback_interval  : int   전체 화면 YOLO fallback 주기 (기본 2)
-  proc_width            : int   검출 처리 가로 해상도, 0=원본 (기본 640)
-  publish_debug         : bool  디버그 영상 발행 (기본 true)
-  track.enable          : bool  detect-then-track on/off (기본 true, false=매프레임 검출)
-  track.tracker_type    : str   "CSRT" | "KCF" (기본 CSRT)
-  track.confirm_frames  : int   트래킹 시작 연속 검출 수 (기본 3)
-  track.redetect_interval: int  TRACK 중 ROI YOLO 확인 주기 (기본 5)
-  track.reacquire_frames: int   LOST 재획득 창 (기본 8)
-  track.jump_gate       : float track off 시 위치 급변 차단 게이트, 0=off (기본 0.4)
-  roi.margin            : float ROI 크롭 확장 배율 (기본 1.8)
+  use_hsv                      : bool  HSV 후보 제안 on/off, off=순수 전체화면 YOLO (기본 true)
+  yolo.full_fallback_interval  : int   전체 화면 YOLO fallback 주기 (기본 1)
+  proc_width            : int   검출 처리 가로 해상도, 0=원본 (기본 320)
+  filter.confirm_frames : int   표적 확정에 필요한 연속 검출 수 (기본 3)
+  filter.confirm_dist   : float 연속 판정 중심거리(정규화) (기본 0.035)
+  filter.jump_gate      : float 확정 후 예측 대비 위치 급변 차단 거리, 0=off (기본 0.4)
+  filter.max_age         : int  연속 miss 이만큼이면 표적 제거(LOST→REMOVED) (기본 8)
+  roi.margin            : float /arms/roi_image 확대뷰 크롭 배율 (기본 1.8)
 """
 
 import os
@@ -53,6 +50,33 @@ from arms_msgs.msg import BoundingBox, DetectionArray
 # ---------------------------------------------------------------------------
 
 _MORPH_KERNEL = np.ones((3, 3), np.uint8)
+
+
+def imgmsg_to_bgr(msg: Image) -> np.ndarray:
+    ch = {"rgb8": 3, "bgr8": 3, "mono8": 1}.get(msg.encoding, 3)
+    img = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, ch)
+    if msg.encoding == "rgb8":
+        img = img[:, :, ::-1]
+    return np.ascontiguousarray(img)
+
+
+def bgr_to_imgmsg(bgr: np.ndarray, header) -> Image:
+    msg = Image()
+    msg.header = header
+    msg.height, msg.width = bgr.shape[:2]
+    msg.encoding = "bgr8"
+    msg.is_bigendian = 0
+    msg.step = bgr.shape[1] * 3
+    msg.data = bgr.tobytes()
+    return msg
+
+
+# ---------------------------------------------------------------------------
+# 표적 필터 (KF 평활 + 이상치 게이트) — detection 노드 내부, control 에 투명
+# ---------------------------------------------------------------------------
+
+def _center_dist(a, b) -> float:
+    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
 
 
 class _CenterKalman:
@@ -89,290 +113,126 @@ class _CenterKalman:
         return (float(state[0, 0] + state[2, 0]),
                 float(state[1, 0] + state[3, 0]))
 
-
-def imgmsg_to_bgr(msg: Image) -> np.ndarray:
-    ch = {"rgb8": 3, "bgr8": 3, "mono8": 1}.get(msg.encoding, 3)
-    img = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, ch)
-    if msg.encoding == "rgb8":
-        img = img[:, :, ::-1]
-    return np.ascontiguousarray(img)
-
-
-def bgr_to_imgmsg(bgr: np.ndarray, header) -> Image:
-    msg = Image()
-    msg.header = header
-    msg.height, msg.width = bgr.shape[:2]
-    msg.encoding = "bgr8"
-    msg.is_bigendian = 0
-    msg.step = bgr.shape[1] * 3
-    msg.data = bgr.tobytes()
-    return msg
+    def coast(self):
+        """측정 없이 예측만 한 스텝 진행(등속도 외삽). 다음 스텝이 이어지도록
+        statePost 를 예측값으로 갱신하고 예측 위치를 반환한다."""
+        if self._kf is None:
+            return None
+        pred = self._kf.predict()
+        self._kf.statePost = pred.copy()
+        self._kf.errorCovPost = self._kf.errorCovPre.copy()
+        return float(pred[0, 0]), float(pred[1, 0])
 
 
-# ---------------------------------------------------------------------------
-# Detect-then-track FSM (detection 노드 내부, control 에 투명)
-# ---------------------------------------------------------------------------
+class _TargetFilter:
+    """매 프레임 전체 검출 결과를 칼만 필터로 평활하고, 확정된 표적에서 크게 튄
+    검출(오인식)을 걸러 단일 표적을 낸다. 트래커(CSRT)는 쓰지 않는다.
 
-def _center_dist(a, b) -> float:
-    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
-
-
-def _tracker_available() -> bool:
-    """opencv(main 또는 legacy)에 CSRT/KCF 트래커가 있는지."""
-    return (hasattr(cv2, "TrackerCSRT_create") or hasattr(cv2, "TrackerKCF_create")
-            or (hasattr(cv2, "legacy") and hasattr(cv2.legacy, "TrackerCSRT_create")))
-
-
-def _make_cv_tracker(kind: str):
-    """opencv 버전/빌드에 따라 트래커가 main 모듈 또는 cv2.legacy 에 있음 — 둘 다 시도."""
-    up = str(kind).upper()
-    if up == "KCF":
-        if hasattr(cv2, "TrackerKCF_create"):
-            return cv2.TrackerKCF_create()
-        return cv2.legacy.TrackerKCF_create()
-    if hasattr(cv2, "TrackerCSRT_create"):
-        return cv2.TrackerCSRT_create()
-    return cv2.legacy.TrackerCSRT_create()
-
-
-class _TargetTracker:
-    """표적을 어느 정도 연속 검출하면 CSRT/KCF 트래커로 전환해 ROI만 추적한다.
-    ACQUIRE → TRACK → LOST 3상태. 좌표는 normalized(0..1); cv2 트래커에는
-    다운스케일 프레임 픽셀 bbox 로 변환해 전달. update() 가 발행할 박스를 반환
-    (없으면 None). detect_fn 호출 여부를 FSM 이 결정 → 비용 절감의 핵심."""
-    ACQUIRE, TRACK, LOST = "ACQUIRE", "TRACK", "LOST"
+    상태 (진단/UI 표시용 라벨):
+      NEW      확정 전 — 연속 일치 카운트 중(스푸리어스 배제)
+      TRACKED  확정 + 이번 프레임 검출 채택
+      LOST     확정 + 순간 놓침 — KF 예측으로 외삽(coast). 검출 복귀 시 TRACKED
+      REMOVED  놓침이 max_age 만큼 지속 → 표적 제거. 다음 검출은 NEW 로 시작
+    전이:  NEW → TRACKED ⇄ LOST → REMOVED → (다음 검출) NEW
+    control 엔 투명 — 더 연속적인 /arms/detections 를 낼 뿐이다."""
+    NEW, TRACKED, LOST, REMOVED = "NEW", "TRACKED", "LOST", "REMOVED"
 
     def __init__(self):
-        self.state = self.ACQUIRE
-        self._cv = None
-        self._box = None                 # 마지막 발행 박스 (BoundingBox)
-        self._prev_center = None         # ACQUIRE 연속 판정용 직전 중심
-        self._last_center = None         # 모션 예측용
-        self._vel = (0.0, 0.0)           # 중심 속도 EMA (normalized/frame)
-        self.hit_streak = 0
-        self._since_redetect = 0
-        self._unconfirmed = 0
-        self._lost_count = 0
-        self._last_conf = 0.0
         self._kalman = _CenterKalman()
-        # track.enable=false 경로 상시 연관 게이트 상태 (위치 급변 차단).
-        self._g_center = None            # 확정된 표적 중심(normalized)
-        self._g_confirmed = False
-        self._g_prev = None              # 확정 전 연속판정용 직전 중심
-        self._g_streak = 0
-        self._g_miss = 0
+        self._center = None      # 확정 표적의 최신 KF 중심 (게이트 기준)
+        self._prev = None        # NEW 연속판정용 직전 중심
+        self._streak = 0
+        self._miss = 0
+        self._last_box = None    # 마지막 발행 박스 (LOST 외삽 시 크기/클래스 재사용)
+        self.state = self.NEW
 
-    # ---- geometry (normalized <-> pixel) ----
-    @staticmethod
-    def _box_to_rect(box, W, H):
-        bw = box.width * W
-        bh = box.height * H
-        return box.x_center * W - bw / 2.0, box.y_center * H - bh / 2.0, bw, bh
-
-    @staticmethod
-    def _rect_to_box(rect, W, H, conf, cls_id, cls_name):
-        x, y, bw, bh = rect
-        b = BoundingBox()
-        b.x_center = float((x + bw / 2.0) / W)
-        b.y_center = float((y + bh / 2.0) / H)
-        b.width = float(bw / W)
-        b.height = float(bh / H)
-        b.confidence = float(conf)
-        b.class_id = int(cls_id)
-        b.class_name = str(cls_name)
-        return b
-
-    def _init_cv(self, bgr, box, cfg) -> bool:
-        H, W = bgr.shape[:2]
-        x, y, bw, bh = self._box_to_rect(box, W, H)
-        x = max(0.0, min(x, W - 1.0))
-        y = max(0.0, min(y, H - 1.0))
-        bw = max(1.0, min(bw, W - x))
-        bh = max(1.0, min(bh, H - y))
-        if bw < cfg["min_box_px"] or bh < cfg["min_box_px"]:
-            return False
-        try:
-            t = _make_cv_tracker(cfg["tracker_type"])
-            t.init(bgr, (int(x), int(y), int(bw), int(bh)))
-        except Exception:
-            return False
-        self._cv = t
-        self._box = box
-        return True
-
-    def _update_motion(self, c):
-        if self._last_center is not None:
-            vx = c[0] - self._last_center[0]
-            vy = c[1] - self._last_center[1]
-            self._vel = (0.5 * vx + 0.5 * self._vel[0],
-                         0.5 * vy + 0.5 * self._vel[1])
-        self._last_center = c
-
-    def _near_prediction(self, det, cfg) -> bool:
-        predicted = self._kalman.predicted_center()
-        if predicted is None and self._last_center is None:
-            return True
-        if predicted is not None:
-            px, py = predicted
-        else:
-            px = self._last_center[0] + self._vel[0] * self._lost_count
-            py = self._last_center[1] + self._vel[1] * self._lost_count
-        radius = max(cfg["match_dist"] * 3.0, 0.15)
-        return _center_dist((det.x_center, det.y_center), (px, py)) < radius
-
-    def _smooth_center(self, box):
-        sx, sy = self._kalman.update(box.x_center, box.y_center)
-        box.x_center = float(np.clip(sx, 0.0, 1.0))
-        box.y_center = float(np.clip(sy, 0.0, 1.0))
-        return box
-
-    def _to_acquire(self):
-        self.state = self.ACQUIRE
-        self._cv = None
-        self.hit_streak = 0
-        self._prev_center = None
+    def reset(self):
         self._kalman.reset()
+        self._center = None
+        self._prev = None
+        self._streak = 0
+        self._miss = 0
+        self._last_box = None
+        self.state = self.NEW
 
-    def _to_lost(self):
-        self.state = self.LOST
-        self._cv = None
-        self._lost_count = 0
+    def update(self, det, cfg):
+        """det: 이번 프레임 검출 박스(BoundingBox) 또는 None. 발행할 박스 반환(없으면 None)."""
+        if self.state == self.REMOVED:
+            self.reset()                 # 이전 프레임 제거됨 → 새 표적으로 다시 시작(NEW)
+        if self.state == self.NEW:
+            return self._new(det, cfg)
+        return self._track(det, cfg)     # TRACKED / LOST
 
-    # ---- track.enable=false 경로 상시 안전장치 (위치 급변 차단) ----
-    def _g_reset(self):
-        self._g_center = None
-        self._g_confirmed = False
-        self._g_prev = None
-        self._g_streak = 0
-        self._g_miss = 0
-
-    def _gate_detection(self, det, cfg):
-        """추적기 미사용 경로의 상시 연관 게이트.
-        표적이 confirm_frames 회 연속 검출로 확정되면, 그 위치에서 jump_gate(정규화
-        중심거리) 이상 벗어난 검출을 버려 위치 급변을 막는다. 벗어남이
-        reacquire_frames 넘게 지속되면 확정을 풀고 새 위치로 재획득한다.
-        jump_gate<=0 이면 게이트 비활성(기존 동작)."""
-        gate = cfg["jump_gate"]
-        if gate <= 0.0:
-            return det
+    def _new(self, det, cfg):
+        """NEW: 같은 위치 연속검출(스푸리어스 1프레임 배제)로 표적을 확정하면 TRACKED."""
         if det is None:
-            if self._g_confirmed:
-                self._g_miss += 1
-                if self._g_miss >= cfg["reacquire_frames"]:
-                    self._g_reset()
-            else:
-                self._g_streak = 0
-                self._g_prev = None
+            self._streak = 0
+            self._prev = None
+            self.state = self.NEW
             return None
         c = (det.x_center, det.y_center)
-        if not self._g_confirmed:
-            # 확정 전: 같은 위치 연속검출로 표적 확정(스푸리어스 1프레임 배제).
-            if self._g_prev is not None and \
-                    _center_dist(c, self._g_prev) < cfg["confirm_dist"]:
-                self._g_streak += 1
-            else:
-                self._g_streak = 1
-            self._g_prev = c
-            if self._g_streak >= cfg["confirm_frames"]:
-                self._g_confirmed = True
-                self._g_center = c
-                self._g_miss = 0
-            return det   # 확정 전엔 그대로 발행(기존 동작 유지)
-        # 확정됨: jump 게이트.
-        if _center_dist(c, self._g_center) > gate:
-            self._g_miss += 1
-            if self._g_miss >= cfg["reacquire_frames"]:
-                self._g_reset()      # 튐 지속 → 새 위치로 재획득 허용
-            return None              # 튄 검출은 버림(직전 위치 홀드)
-        # 통과: 채택 + 중심 EMA 갱신(느린 이동 추종).
-        self._g_miss = 0
-        self._g_center = (0.5 * c[0] + 0.5 * self._g_center[0],
-                          0.5 * c[1] + 0.5 * self._g_center[1])
-        return det
-
-    # ---- FSM ----
-    def update(self, bgr, detect_fn, cfg):
-        if not cfg["enable"]:
-            # 추적기 미사용: 매 프레임 검출 + 상시 연관 게이트(위치 급변 차단).
-            return self._gate_detection(detect_fn(bgr), cfg)
-        # 추적기 사용 경로에선 게이트 상태 미사용 → 전환 대비 한 번 리셋.
-        if self._g_confirmed or self._g_center is not None:
-            self._g_reset()
-        H, W = bgr.shape[:2]
-        if self.state == self.TRACK:
-            return self._do_track(bgr, detect_fn, cfg, W, H)
-        if self.state == self.LOST:
-            return self._do_lost(bgr, detect_fn, cfg)
-        return self._do_acquire(bgr, detect_fn, cfg)
-
-    def _do_acquire(self, bgr, detect_fn, cfg):
-        target = detect_fn(bgr)
-        if target is None:
-            self.hit_streak = 0
-            self._prev_center = None
-            return None
-        c = (target.x_center, target.y_center)
-        if self._prev_center is not None and \
-                _center_dist(c, self._prev_center) < cfg["confirm_dist"]:
-            self.hit_streak += 1
+        if self._prev is not None and \
+                _center_dist(c, self._prev) < cfg["confirm_dist"]:
+            self._streak += 1
         else:
-            self.hit_streak = 1
-        self._prev_center = c
-        target = self._smooth_center(target)
+            self._streak = 1
+        self._prev = c
+        if self._streak >= cfg["confirm_frames"]:
+            sx, sy = self._kalman.update(c[0], c[1])   # KF 초기화
+            det.x_center = float(np.clip(sx, 0.0, 1.0))
+            det.y_center = float(np.clip(sy, 0.0, 1.0))
+            self._center = (sx, sy)
+            self._last_box = det
+            self._miss = 0
+            self.state = self.TRACKED
+        else:
+            self.state = self.NEW
+        return det   # 확정 전엔 실검출 그대로 발행
 
-        # detect_fn은 YOLO가 확인한 결과만 반환한다. HSV 후보나 시간 연속성만으로
-        # confidence를 승격하지 않는다.
-        self._last_conf = target.confidence
-        if self.hit_streak >= cfg["confirm_frames"] and self._init_cv(bgr, target, cfg):
-            self.state = self.TRACK
-            self._since_redetect = 0
-            self._unconfirmed = 0
-            self._last_center = c
-            self._vel = (0.0, 0.0)
-        return target                        # ACQUIRE 중엔 실검출 그대로 발행
-
-    def _do_track(self, bgr, detect_fn, cfg, W, H):
-        ok, rect = self._cv.update(bgr)
-        if not ok:
-            self._to_lost()
+    def _track(self, det, cfg):
+        """TRACKED/LOST: KF 예측 위치 기준 게이트 → 통과분만 평활 발행(TRACKED),
+        미검출/게이트아웃은 KF 예측으로 외삽(LOST), max_age 만큼 지속되면 REMOVED."""
+        gate = cfg["jump_gate"]
+        pred = self._kalman.predicted_center() or self._center
+        accept = det is not None and (
+            gate <= 0.0 or
+            _center_dist((det.x_center, det.y_center), pred) <= gate)
+        if accept:
+            sx, sy = self._kalman.update(det.x_center, det.y_center)
+            self._center = (sx, sy)
+            self._miss = 0
+            self.state = self.TRACKED
+            det.x_center = float(np.clip(sx, 0.0, 1.0))
+            det.y_center = float(np.clip(sy, 0.0, 1.0))
+            self._last_box = det
+            return det
+        # 미검출 또는 이상치(예측에서 크게 벗어남) → 표적을 놓침.
+        self._miss += 1
+        if self._miss >= cfg["max_age"]:
+            self.state = self.REMOVED    # 오래 놓침 → 표적 제거(다음 프레임 NEW 로 리셋)
+            self._last_box = None
             return None
-        tracked = self._rect_to_box(rect, W, H, self._last_conf,
-                                    self._box.class_id, self._box.class_name)
-        tracked = self._smooth_center(tracked)
-        self._update_motion((tracked.x_center, tracked.y_center))
-        self._box = tracked
-        self._since_redetect += 1
-        if self._since_redetect >= cfg["redetect_interval"]:
-            self._since_redetect = 0
-            det = detect_fn(bgr, self._box)  # 트래킹 박스 주변 ROI 크롭 재검출(드리프트 보정)
-            if det is not None:
-                self._last_conf = det.confidence
-                if self._init_cv(bgr, det, cfg):   # 검출로 스냅(재init)
-                    self._box = det
-                    tracked = det
-                self._unconfirmed = 0
-            else:
-                self._unconfirmed += 1
-                if self._unconfirmed >= cfg["max_unconfirmed"]:
-                    self._to_lost()          # 확인 실패 누적 → 드리프트 의심, 상실
-                    return None
-        return tracked
+        coasted = self._kalman.coast()   # 측정 없이 예측만 외삽
+        if coasted is None:
+            self.state = self.REMOVED
+            return None
+        self._center = coasted
+        self.state = self.LOST
+        return self._lost_box(coasted)
 
-    def _do_lost(self, bgr, detect_fn, cfg):
-        self._lost_count += 1
-        det = detect_fn(bgr)                 # 매프레임 재획득 시도
-        if det is not None and self._near_prediction(det, cfg):
-            det = self._smooth_center(det)
-            self._last_conf = det.confidence
-            if self._init_cv(bgr, det, cfg):
-                self.state = self.TRACK
-                self._since_redetect = 0
-                self._unconfirmed = 0
-                self._last_center = (det.x_center, det.y_center)
-                return det
-        if self._lost_count >= cfg["reacquire_frames"]:
-            self._to_acquire()
-        return None                          # LOST 중엔 발행 안 함 (control 이 홀드)
+    def _lost_box(self, center):
+        """LOST 외삽 발행 박스: 마지막 박스의 크기·클래스에 예측 중심만 얹는다."""
+        if self._last_box is None:
+            return None
+        b = BoundingBox()
+        b.x_center = float(np.clip(center[0], 0.0, 1.0))
+        b.y_center = float(np.clip(center[1], 0.0, 1.0))
+        b.width = self._last_box.width
+        b.height = self._last_box.height
+        b.confidence = self._last_box.confidence
+        b.class_id = self._last_box.class_id
+        b.class_name = self._last_box.class_name
+        return b
 
 
 # ---------------------------------------------------------------------------
@@ -381,70 +241,41 @@ class ArmsDetectionNode(Node):
     def __init__(self):
         super().__init__("arms_detection_node")
 
-        self.declare_parameter("use_yolo",   True)
-        self.declare_parameter("use_hsv",    True)
-        # HSV→ROI YOLO가 기본 경로다. HSV가 놓치는 색 변화에 대비해 전체 화면
-        # YOLO를 매 프레임 실행한다(1=매프레임). HSV 후보가 못 받치는 프레임도
-        # 전량 YOLO가 커버 → /arms/detections 빈배열 교대 최소화(대가: GPU 부하↑).
-        # 부하를 아끼려면 config 에서 2 이상으로 덮는다. 0 이하면 full fallback을 끈다.
+        # 파라미터 기본값(= 기본 운용 환경 실외). 환경별 튜닝은 config/detection.yaml
+        # (및 detection.indoor.yaml override)로 덮는다 — compose 가 --params-file 로 주입.
+        self.declare_parameter("proc_width", 320)             # 검출 처리 가로 해상도[px], 0=원본
+        self.declare_parameter("use_hsv", True)               # HSV 후보 제안 on/off (off=순수 전체화면 YOLO)
+        # HSV→ROI YOLO 가 못 찾은 프레임에 전체 화면 YOLO 를 도는 주기(1=매프레임, 0=끔).
         self.declare_parameter("yolo.full_fallback_interval", 1)
-        self.declare_parameter("yolo.proposal_crop_px", 192)
-        # 검출 처리 해상도(가로 px). 0=원본. 출력은 비율이라 정확도 무관, CV 비용만 절감.
-        self.declare_parameter("proc_width", 320)
-        self.declare_parameter("publish_debug", True)
+        self.declare_parameter("yolo.proposal_crop_px", 192)  # HSV 후보 검증용 crop 한 변[px]
 
-        # --- HSV proposal (단독 LOCK 금지) ------------------------------------
-        self.declare_parameter("hsv.max_candidates",            4)
-        # 질감 계산은 비교적 비싸므로 기본 형상/색 점수 상위 후보에만 적용한다.
-        self.declare_parameter("hsv.texture_shortlist",         10)
-        self.declare_parameter("hsv.min_area_ratio",          0.00003)
-        self.declare_parameter("hsv.full_conf_area_ratio",    0.0100)
-        self.declare_parameter("hsv.max_area_ratio",          0.1000)
-        # OpenCV hue(0..179)는 빨강이 0/179 경계에 걸쳐 있다. 경계 두 구간을
-        # hard threshold로 자르는 대신 원형 hue 거리의 Gaussian 확률로 평가한다.
-        self.declare_parameter("hsv.hue_sigma",               14.0)
-        # 실내 조명에서 채도가 낮아지거나 반사광으로 밝아진 풍선도 후보에
-        # 포함한다. HSV는 후보만 만들고 최종 승인은 YOLO가 수행한다.
-        self.declare_parameter("hsv.prob_threshold",          0.22)
-        self.declare_parameter("hsv.sat_center",              80.0)
-        self.declare_parameter("hsv.sat_scale",               30.0)
-        self.declare_parameter("hsv.val_min",                 25.0)
-        self.declare_parameter("hsv.val_max_center",          245.0)
-        self.declare_parameter("hsv.val_scale",               28.0)
-        self.declare_parameter("hsv.min_circularity",         0.23)
-        self.declare_parameter("hsv.texture_scale",           120.0)
-        # SEARCH 진단용: YOLO/HSV 각각의
-        # 검출 여부·confidence 를 /arms/detector_status 로 발행해 UI 가 표시한다.
-        # HSV 값은 후보 품질일 뿐 LOCK 판단에는 쓰지 않는다. 메시지 호환을 위해
-        # 세 번째(과거 ABSDIFF) 값은 항상 -1로 보낸다.
-        self.declare_parameter("debug.detector_status", True)
+        # HSV 붉은색 후보 제안 (단독 LOCK 금지 — 최종 승인은 YOLO)
+        self.declare_parameter("hsv.max_candidates", 3)       # YOLO 검증할 상위 후보 수
+        self.declare_parameter("hsv.texture_shortlist", 10)   # 질감 계산 적용 상위 후보 수
+        self.declare_parameter("hsv.min_area_ratio", 0.0004)  # 면적비 하한(노이즈 컷). 상한 없음(근접 표적 유지)
+        self.declare_parameter("hsv.hue_sigma", 15.0)         # 빨강 원형 Gaussian 폭
+        self.declare_parameter("hsv.prob_threshold", 0.25)    # 붉은색 확률 이진화 임계
+        self.declare_parameter("hsv.sat_center", 100.0)       # 채도 sigmoid 중심
+        self.declare_parameter("hsv.sat_scale", 40.0)
+        self.declare_parameter("hsv.val_min", 40.0)           # 명도 하한
+        self.declare_parameter("hsv.val_max_center", 230.0)   # 과포화(조명) 감점 중심
+        self.declare_parameter("hsv.val_scale", 40.0)
+        self.declare_parameter("hsv.min_circularity", 0.30)   # 원형도/종횡비 하한
+        self.declare_parameter("hsv.texture_scale", 120.0)    # 매끈함 점수 스케일
 
-        # --- detect-then-track (ROI + CSRT/KCF) ---
-        # False = CSRT/KCF 추적 안 쓰고 TRACK 구간에서도 매 프레임 풀프레임 검출 방식
-        #   (HSV proposal→ROI YOLO + full fallback)으로 표적을 다시 찾는다. 추적기
-        #   드리프트로 표적을 "놓치는(락 풀리는)" 문제를 없앤다. True 로 되돌리면 복원.
-        self.declare_parameter("track.enable", False)         # false=매프레임 풀프레임 검출(추적기 미사용)
-        self.declare_parameter("track.tracker_type", "CSRT")  # "CSRT" | "KCF"
-        self.declare_parameter("track.confirm_frames", 3)     # 트래킹 시작 연속 검출 수
-        self.declare_parameter("track.confirm_dist", 0.035)   # 연속 판정 중심거리(norm)
-        self.declare_parameter("track.redetect_interval", 5)  # TRACK 중 ROI YOLO 확인 주기
-        self.declare_parameter("track.redetect_margin", 2.0)  # TRACK 재검출 ROI 크롭 확장배율
-        self.declare_parameter("track.match_dist", 0.1)       # 재획득 예측 게이팅 거리
-        self.declare_parameter("track.reacquire_frames", 8)   # LOST 재획득 창
-        self.declare_parameter("track.max_unconfirmed", 2)    # ROI YOLO 연속 실패 허용 횟수
-        self.declare_parameter("track.min_box_px", 4)         # 트래커 init 최소 박스
-        # track.enable=false(추적기 미사용) 경로 상시 안전장치:
-        #   표적이 confirm_frames 회 연속검출로 확정되면 그 위치에서 jump_gate(정규화
-        #   중심거리) 이상 튄 검출을 버려 위치 급변을 막는다. reacquire_frames 넘게
-        #   지속되면 확정 해제 → 새 위치로 재획득. 0 이하면 비활성.
-        self.declare_parameter("track.jump_gate", 0.4)
-        self.declare_parameter("roi.margin", 1.8)             # ROI 크롭 확장 배율
+        # 표적 필터 (KF 평활 + 이상치 게이트)
+        #   상태 전이: NEW → TRACKED ⇄ LOST → REMOVED → (다음 검출) NEW
+        self.declare_parameter("filter.confirm_frames", 3)    # NEW→TRACKED: 같은 위치 연속검출 이만큼이면 확정
+        self.declare_parameter("filter.confirm_dist", 0.035)  # NEW: "같은 위치" 연속 판정 중심거리(정규화)
+        self.declare_parameter("filter.jump_gate", 0.4)       # TRACKED 유지 게이트: 예측서 이만큼 넘게 튀면 기각→miss (0=off)
+        self.declare_parameter("filter.max_age", 8)           # LOST→REMOVED: 연속 miss 이만큼이면 표적 제거
+        self.declare_parameter("roi.margin", 1.8)             # /arms/roi_image 확대뷰 크롭 배율
 
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                          history=HistoryPolicy.KEEP_LAST, depth=1)
 
-        self._tracker = _TargetTracker()
-        self._frame_i = 0   # YOLO ACQUIRE 스로틀용 프레임 카운터
+        self._filter = _TargetFilter()
+        self._frame_i = 0   # 전체화면 YOLO fallback 주기 카운터
         self._last_frame_started = None
         self._diag = None
         self._diag_hsv_mask = None
@@ -464,30 +295,26 @@ class ArmsDetectionNode(Node):
             "ARMS_FULL_IMGSZ", legacy_imgsz or "512"))
         self._yolo_roi_imgsz = int(os.environ.get(
             "ARMS_ROI_IMGSZ", legacy_imgsz or "320"))
-        # TensorRT 엔진은 첫 predict() 에서 지연 로딩된다. GPU OOM/버전불일치로 실패하면
-        # 예외를 그대로 두면 노드가 죽고 재시작→CUDA 컨텍스트 미해제로 'device busy'
-        # 폭주가 난다. 아래 상태로 "실패 시 크래시 대신 쿨다운 후 재시도"(그동안
-        # 이번 프레임 검출을 보류하고 나중에 재시도하게 만든다.
-        self._yolo_retry_after = 0.0   # 이 시각(monotonic)까지는 YOLO 재시도 안 함
-        self._yolo_fail_count  = 0
-        self._yolo_retry_cooldown = float(os.environ.get("ARMS_YOLO_RETRY_SEC", "3.0"))
-        # 이 횟수만큼 연속 실패하면 YOLO를 영구히 비활성화한다.
-        #   → GPU OOM/엔진 불일치로 계속 실패할 때 재시도가 executor 를 블로킹해
-        #     검출이 아예 안 나가는 문제를 막는다. 0 이하면 무한 재시도(기존 동작).
-        self._yolo_max_fails = int(os.environ.get("ARMS_YOLO_MAX_FAILS", "3"))
         model_path = os.environ.get("ARMS_MODEL", "")
-        # 고정 batch TensorRT engine은 여러 ndarray 입력을 받지 못할 수 있다.
-        # .pt 모델은 batch 1회, .engine은 호환성을 위해 후보별 순차 추론한다.
+        # 고정 batch TensorRT engine은 여러 ndarray 입력을 못 받아 후보별 순차 추론한다.
+        # .pt 모델은 list 입력으로 한 번에 batch 추론한다.
         self._yolo_batch_enabled = not model_path.lower().endswith(".engine")
         if model_path:
             try:
                 from ultralytics import YOLO
                 self.get_logger().info(f"Loading YOLO model: {model_path}")
                 self._yolo = YOLO(model_path, task="detect")
-                self.get_logger().info("YOLO loaded (in-process).")
+                # 시작 시 워밍업 predict 1회 — 엔진 로드·CUDA 컨텍스트·오토튜닝을 여기서
+                #   끝낸다. (1) 첫 프레임 지연 스파이크 제거, (2) OOM/버전불일치면 여기서
+                #   바로 드러남. 정적 엔진은 로드 때 메모리를 다 잡으므로 여기서 통과하면
+                #   이후 프레임은 같은 버퍼 재사용 → 자기 추론으로 OOM 나지 않는다.
+                dummy = np.zeros((self._yolo_roi_imgsz, self._yolo_roi_imgsz, 3), np.uint8)
+                self._yolo.predict(dummy, imgsz=self._yolo_roi_imgsz, verbose=False)
+                self.get_logger().info("YOLO loaded + warmed up (in-process).")
             except Exception as e:
-                self.get_logger().warn(
-                    f"YOLO disabled (load failed: {e}); HSV proposals cannot LOCK.")
+                self._yolo = None   # 로드/워밍업 실패 → 검출 비활성(노드는 유지)
+                self.get_logger().error(
+                    f"YOLO 로드/워밍업 실패 — 검출 비활성 (GPU OOM/엔진 불일치 등): {e}")
         else:
             self.get_logger().info("ARMS_MODEL unset → detection disabled (HSV proposal only).")
 
@@ -508,13 +335,8 @@ class ArmsDetectionNode(Node):
         # 상태 배열: [yolo, hsv proposal, legacy slot, mode]. legacy slot은 -1 고정.
         self.pub_detstatus = self.create_publisher(Float32MultiArray, "/arms/detector_status", 10)
 
-        if not _tracker_available():
-            self.get_logger().warn(
-                "cv2 트래커(CSRT/KCF) 없음 — opencv-contrib 미설치  . "
-                "detect-then-track 비활성 → 매프레임 검출로 폴백(기능은 정상).")
-
         self.get_logger().info(
-            "arms_detection_node ready [HSV proposals → batched ROI YOLO + full fallback]")
+            "arms_detection_node ready [HSV proposals → batched ROI YOLO + full fallback, KF filter]")
 
     # ------------------------------------------------------------------
     # Subscriptions
@@ -555,7 +377,7 @@ class ArmsDetectionNode(Node):
         self._diag = {
             "frame_interval_ms": frame_interval_ms,
             "resize_ms": 0.0, "hsv_ms": 0.0, "yolo_ms": 0.0,
-            "tracker_ms": 0.0, "total_ms": 0.0,
+            "filter_ms": 0.0, "total_ms": 0.0,
             "hsv_count": 0, "yolo_inputs": 0, "yolo_accepted": 0,
             "yolo_ran": False, "full_frame": False, "mode": 0.0,
             "yolo_box": None, "hsv_box": None,
@@ -576,16 +398,12 @@ class ArmsDetectionNode(Node):
             bgr = bgr_full
         self._diag["resize_ms"] = (time.perf_counter() - resize_started) * 1000.0
 
-        # detect-then-track: FSM 이 검출/추적을 결정해 발행할 박스를 반환
-        cfg = self._track_cfg()
-        tracker_started = time.perf_counter()
-        target = self._tracker.update(
-            bgr,
-            lambda img, roi=None: self._run_detectors(img, header, roi),
-            cfg)
-        update_ms = (time.perf_counter() - tracker_started) * 1000.0
-        self._diag["tracker_ms"] = max(
-            0.0, update_ms - self._diag["hsv_ms"] - self._diag["yolo_ms"])
+        # 매 프레임 전체 검출 → KF 평활 + 이상치 게이트로 단일 표적 발행.
+        cfg = self._filter_cfg()
+        det = self._detect_acquire(bgr)
+        filter_started = time.perf_counter()
+        target = self._filter.update(det, cfg)
+        self._diag["filter_ms"] = (time.perf_counter() - filter_started) * 1000.0
         self._diag["total_ms"] = (time.perf_counter() - frame_started) * 1000.0
         self._publish_detector_status()
 
@@ -605,49 +423,22 @@ class ArmsDetectionNode(Node):
                               float(self.get_parameter("roi.margin").value))
 
         # 디버그 이미지는 구독자가 있을 때만 그려서 발행 (없으면 발행 비용 전부 절감)
-        if bool(self.get_parameter("publish_debug").value) \
-                and self.pub_debug.get_subscription_count() > 0:
-            self._publish_debug(bgr, header, target, self._tracker.state)
+        if self.pub_debug.get_subscription_count() > 0:
+            self._publish_debug(bgr, header, target, self._filter.state)
 
-    def _track_cfg(self) -> dict:
+    def _filter_cfg(self) -> dict:
         g = self.get_parameter
         return {
-            "enable":            bool(g("track.enable").value),
-            "tracker_type":      str(g("track.tracker_type").value),
-            "confirm_frames":    int(g("track.confirm_frames").value),
-            "confirm_dist":      float(g("track.confirm_dist").value),
-            "redetect_interval": int(g("track.redetect_interval").value),
-            "match_dist":        float(g("track.match_dist").value),
-            "reacquire_frames":  int(g("track.reacquire_frames").value),
-            "max_unconfirmed":   int(g("track.max_unconfirmed").value),
-            "min_box_px":        int(g("track.min_box_px").value),
-            "jump_gate":         float(g("track.jump_gate").value),
+            "confirm_frames":   int(g("filter.confirm_frames").value),
+            "confirm_dist":     float(g("filter.confirm_dist").value),
+            "jump_gate":        float(g("filter.jump_gate").value),
+            "max_age":          int(g("filter.max_age").value),
         }
-
-    def _run_detectors(self, bgr, header=None, roi_box=None):
-        """획득은 HSV→ROI YOLO, 추적 재검증은 ROI YOLO로 실행한다."""
-        if roi_box is not None:
-            self._diag["mode"] = 1.0
-            margin = float(self.get_parameter("track.redetect_margin").value)
-            crop, off = self._crop_roi(bgr, roi_box, margin)
-            if crop is None:
-                return None
-            crop_box = self._detect_yolo(crop, imgsz=self._yolo_roi_imgsz)
-            if crop_box is None:
-                return None
-            box = self._remap_from_crop(
-                crop_box, off, bgr.shape[1], bgr.shape[0])
-            self._diag["yolo_box"] = box
-            self._dbg_boxes = {"yolo": box, "hsv": None}
-            return box
-
-        return self._detect_acquire(bgr)
 
     def _detect_acquire(self, bgr):
         """HSV 후보를 먼저 만들고 ROI들을 한 번의 YOLO batch로 검증한다."""
         self._diag["mode"] = 0.0
-        yolo_on = bool(self.get_parameter("use_yolo").value)
-        use_yolo = yolo_on and self._yolo is not None
+        use_yolo = self._yolo is not None   # 모델 로드됐을 때만 YOLO. HSV 단독 발행은 금지.
         use_hsv = bool(self.get_parameter("use_hsv").value)
         hsv_started = time.perf_counter()
         proposals = self._detect_hsv_candidates(bgr) if use_hsv else []
@@ -703,47 +494,32 @@ class ArmsDetectionNode(Node):
         ]
 
     def _publish_detector_status(self):
-        if not bool(self.get_parameter("debug.detector_status").value):
+        if self.pub_detstatus.get_subscription_count() == 0:
             return
         diag = self._diag
         yolo_box = diag["yolo_box"]
         hsv_box = diag["hsv_box"]
         yolo_ran = bool(diag["yolo_ran"])
-        yolo_on = bool(self.get_parameter("use_yolo").value)
         use_hsv = bool(self.get_parameter("use_hsv").value)
-        yv = (-1.0 if not yolo_on else
-              (-2.0 if self._yolo is None else
-               (-1.0 if not yolo_ran else
-                (float(yolo_box.confidence) if yolo_box else 0.0))))
+        yv = (-2.0 if self._yolo is None else       # 모델 없음(DEAD)
+              (-1.0 if not yolo_ran else            # 이 프레임 미실행
+               (float(yolo_box.confidence) if yolo_box else 0.0)))
         hv = (-1.0 if not use_hsv else
               (float(hsv_box.confidence) if hsv_box else 0.0))
         msg = Float32MultiArray()
-        state_code = {"ACQUIRE": 0.0, "TRACK": 1.0, "LOST": 2.0}.get(
-            self._tracker.state, -1.0)
+        state_code = {"NEW": 0.0, "TRACKED": 1.0, "LOST": 2.0, "REMOVED": 3.0}.get(
+            self._filter.state, -1.0)
         # 0~3은 기존 UI와 호환. 4 이후는 실시간 성능 진단용이다.
         msg.data = [
             yv, hv, -1.0, float(diag["mode"]),
             float(diag["hsv_count"]), float(diag["yolo_inputs"]),
             float(diag["yolo_accepted"]), float(diag["frame_interval_ms"]),
             float(diag["resize_ms"]), float(diag["hsv_ms"]),
-            float(diag["yolo_ms"]), float(diag["tracker_ms"]),
+            float(diag["yolo_ms"]), float(diag["filter_ms"]),
             float(diag["total_ms"]), state_code, float(self._frame_i),
             1.0 if diag["full_frame"] else 0.0,
         ]
         self.pub_detstatus.publish(msg)
-
-    @staticmethod
-    def _crop_roi(bgr, box, margin):
-        """정규화 box 주변을 margin 배 확장해 크롭. (crop, (x0,y0,cw,ch)) 반환."""
-        H, W = bgr.shape[:2]
-        bw = box.width * W * margin
-        bh = box.height * H * margin
-        cx, cy = box.x_center * W, box.y_center * H
-        x0 = int(max(0, cx - bw / 2)); y0 = int(max(0, cy - bh / 2))
-        x1 = int(min(W, cx + bw / 2)); y1 = int(min(H, cy + bh / 2))
-        if x1 - x0 < 8 or y1 - y0 < 8:
-            return None, None
-        return bgr[y0:y1, x0:x1], (x0, y0, x1 - x0, y1 - y0)
 
     @staticmethod
     def _remap_from_crop(box, off, W, H):
@@ -787,17 +563,12 @@ class ArmsDetectionNode(Node):
                            imgsz: int | None = None) -> list[BoundingBox | None]:
         """여러 ROI를 한 번의 YOLO predict 호출로 검증한다.
 
-        엔진 로딩/추론이 GPU OOM 등으로 실패해도 노드를 죽이지 않는다. 실패하면
-        쿨다운을 걸고 해당 batch를 모두 miss로 처리하며,
-        쿨다운 후 자동으로 다시 시도한다. 같은 프로세스 안에서 재시도하므로 재시작
-        시 발생하던 'CUDA device busy(error 46)' 폭주가 생기지 않는다.
+        로드·워밍업은 시작 시(__init__) 이미 검증됐다. 운영 중 predict 예외는 드물지만,
+        노드를 죽이면 재시작→'CUDA device busy' 폭주가 나므로, 이 프레임만 miss 처리한다.
         """
         if not images:
             return []
         if self._yolo is None:
-            return [None] * len(images)
-        now = time.monotonic()
-        if now < self._yolo_retry_after:
             return [None] * len(images)
 
         # TensorRT 고정 batch 엔진은 batch 입력 대신 순차 실행한다. 기본 .pt 경로는
@@ -817,36 +588,13 @@ class ArmsDetectionNode(Node):
                 imgsz=input_size, verbose=False)
         except Exception as e:
             if self._diag is not None:
-                self._diag["yolo_ms"] += (
-                    time.perf_counter() - yolo_started) * 1000.0
-            self._yolo_fail_count += 1
-            # 반쯤 초기화된 backend/컨텍스트를 폐기 → 다음 시도에서 깨끗이 재로딩.
-            try:
-                self._yolo.predictor = None
-            except Exception:
-                pass
-            # 임계치 이상 연속 실패 → YOLO 영구 비활성화. HSV는 proposal-only라
-            # 안전상 검출 결과를 단독 발행하지 않는다.
-            if self._yolo_max_fails > 0 and self._yolo_fail_count >= self._yolo_max_fails:
-                self._yolo = None
-                self.get_logger().error(
-                    f"YOLO {self._yolo_fail_count}회 연속 실패 — 검출을 영구 "
-                    f"비활성화한다 (GPU OOM/엔진 불일치): {e}")
-                return [None] * len(images)
-            self._yolo_retry_after = now + self._yolo_retry_cooldown
+                self._diag["yolo_ms"] += (time.perf_counter() - yolo_started) * 1000.0
             self.get_logger().warning(
-                f"YOLO 추론/엔진로딩 실패 #{self._yolo_fail_count}/{self._yolo_max_fails} "
-                f"(GPU OOM 등) — {self._yolo_retry_cooldown:.0f}s 후 재시도, "
-                f"그동안 검출 보류: {e}")
+                f"YOLO 추론 실패 — 이 프레임 검출 보류: {e}", throttle_duration_sec=2.0)
             return [None] * len(images)
         if self._diag is not None:
             self._diag["yolo_ms"] += (
                 time.perf_counter() - yolo_started) * 1000.0
-        # 이전에 실패한 적이 있으면 복구 로그 후 카운터 리셋.
-        if self._yolo_fail_count:
-            self.get_logger().info(
-                f"YOLO 추론 복구됨 (실패 {self._yolo_fail_count}회 후 정상).")
-            self._yolo_fail_count = 0
         output = []
         for image, result in zip(images, results):
             h, w = image.shape[:2]
@@ -901,15 +649,15 @@ class ArmsDetectionNode(Node):
         if not cnts:
             return []
         min_frac  = float(self.get_parameter("hsv.min_area_ratio").value)
-        max_frac  = float(self.get_parameter("hsv.max_area_ratio").value)
-        full_frac = float(self.get_parameter("hsv.full_conf_area_ratio").value)
         min_circ = float(self.get_parameter("hsv.min_circularity").value)
         preliminary = []
         for c in cnts:
             x, y, bw, bh = cv2.boundingRect(c)
             area_px = float(bw * bh)
             area_frac = area_px / float(w * h)
-            if area_frac < min_frac or area_frac > max_frac:
+            # 하한(노이즈)만 컷한다. 상한은 없다 — 표적에 접근할수록 bbox 가 커지는 게
+            # 정상(요격 성공 조건)이라, 최대 크기로 자르면 근접 시 추적이 끊긴다.
+            if area_frac < min_frac:
                 continue
             aspect = min(bw, bh) / max(1.0, float(max(bw, bh)))
             perimeter = cv2.arcLength(c, True)
@@ -949,10 +697,8 @@ class ArmsDetectionNode(Node):
             box.y_center = float((y + bh / 2) / h)
             box.width = float(bw / w)
             box.height = float(bh / h)
-            size_score = min(1.0, area_frac / full_frac) if full_frac > 0 else 1.0
             box.confidence = float(min(
-                0.60, 0.45 * color_score + 0.35 * shape_score +
-                0.10 * size_score + 0.10 * smooth_score))
+                0.60, 0.50 * color_score + 0.40 * shape_score + 0.10 * smooth_score))
             box.class_id = 2
             box.class_name = "hsv_proposal"
             candidates.append((score, box))
@@ -988,11 +734,6 @@ class ArmsDetectionNode(Node):
             out_h = max(1, int(h * 480 / w))
             img = cv2.resize(img, (480, out_h), interpolation=cv2.INTER_AREA)
         self.pub_hsv_debug.publish(bgr_to_imgmsg(np.ascontiguousarray(img), header))
-
-    def _detect_hsv(self, bgr: np.ndarray) -> BoundingBox | None:
-        """진단/UI 호환용 최고 HSV proposal 하나를 반환한다."""
-        candidates = self._detect_hsv_candidates(bgr)
-        return candidates[0] if candidates else None
 
     # ------------------------------------------------------------------
     # Debug visualization
@@ -1049,8 +790,8 @@ class ArmsDetectionNode(Node):
             cv2.putText(img, t, (w - 260, yy), font, 0.55, (0, 0, 0), 3, cv2.LINE_AA)
             cv2.putText(img, t, (w - 260, yy), font, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
 
-        # 중앙 마커 + 트래커 상태 (TRACK=초록, 그 외=주황)
-        state_col = (0, 220, 0) if state == _TargetTracker.TRACK else (0, 165, 255)
+        # 중앙 마커 + 필터 상태 (TRACKED=초록, 그 외=주황)
+        state_col = (0, 220, 0) if state == _TargetFilter.TRACKED else (0, 165, 255)
         cv2.drawMarker(img, (w // 2, h // 2), (180, 180, 180),
                        cv2.MARKER_TILTED_CROSS, 16, 1)
         cv2.putText(img, state, (10, 24), font, 0.7, state_col, 2, cv2.LINE_AA)

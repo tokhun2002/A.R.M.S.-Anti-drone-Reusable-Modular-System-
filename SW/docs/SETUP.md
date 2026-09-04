@@ -183,37 +183,40 @@ ros2 launch arms_bringup arms_replay.launch.py fullscreen:=true
 
 ### A-5. 검출 튜닝 config 선택 (실외 / 실내)
 
-detection 컨테이너는 `--params-file` 로 검출 튜닝 yaml 을 로드합니다. 파일은
+detection 컨테이너는 `--params-file` 로 검출 파라미터 yaml 을 로드합니다. 파일은
 `SW/arms_ws/src/arms_detection/config/` 에 있고, 컨테이너에는 `/params` 로 바인드
 마운트됩니다(yaml 만 고치고 `docker compose ... restart` 하면 반영, 재빌드 불필요).
 
-| config 파일             | 용도   | 특징 |
-| ----------------------- | ------ | ---- |
-| `detection.outdoor.yaml`| **실외(기본)** | 자연광 가정 — 색 게이트를 조여 하늘/반사광 오탐↓, 원거리 작은 표적 허용 |
-| `detection.indoor.yaml` | 실내   | 형광/LED 가정 — 채도 낮은 붉은색도 후보로, 근접 큰 표적 허용 |
+| config 파일             | 역할 | 특징 |
+| ----------------------- | ---- | ---- |
+| `detection.yaml` | **기본(항상 로드) = 실외** | 검출 노드의 전체 파라미터. 자연광 가정 — 색 게이트를 조여 하늘/반사광 오탐↓, 원거리 작은 표적 허용 |
+| `detection.indoor.yaml` | 실내 override | 기본 위에 얹는 **델타만**. 형광/LED 가정 — 채도 낮은 붉은색도 후보로, 근접 큰 표적 허용 |
 
-**기본값은 실외(`detection.outdoor.yaml`)** 입니다. 로드할 config 는 `ARMS_DET_CONFIG`
-환경변수(파일명만, `/params` 기준)로 바꿉니다:
+기본 config(`detection.yaml`)는 **항상 먼저 로드**되고, `ARMS_DET_CONFIG` 로
+override 파일을 지정하면 그 위에 덮어씁니다. 지정 안 하면 기본(실외)만 로드합니다:
 
 ```bash
 cd SW/arms_ws/src/arms_detection/docker
 
-# 기본(실외) — 그냥 기동하면 outdoor
+# 기본(실외) — 그냥 기동하면 detection.yaml 만 로드
 docker compose -f docker-compose.jetson.yml up -d
 
-# 실내 config 로 기동
+# 실내 override 를 얹어 기동
 ARMS_DET_CONFIG=detection.indoor.yaml docker compose -f docker-compose.jetson.yml up -d
 
-# 이미 떠 있는 컨테이너의 config 만 바꿔 재기동
+# 이미 떠 있는 컨테이너에 override 만 바꿔 재기동
 ARMS_DET_CONFIG=detection.indoor.yaml docker compose -f docker-compose.jetson.yml up -d --force-recreate
 ```
 
 - `arms.launch.py` / `arms_replay.launch.py` 가 자동 기동하는 컨테이너도 이 환경변수를
   따릅니다. 런치 실행 전에 `export ARMS_DET_CONFIG=detection.indoor.yaml` 하면 됩니다.
-- 새 config 를 만들려면 위 두 yaml 을 복사해 값을 바꾸고, `ARMS_DET_CONFIG=<파일명>` 으로
-  가리키면 됩니다(파일은 `config/` 에 두면 자동으로 `/params` 에 마운트됨).
-- config 에서 생략한 파라미터는 노드 코드 기본값을 씁니다(예: `yolo.full_fallback_interval`
-  기본 1 = 매 프레임 전체화면 YOLO). 부하를 아끼려면 config 에서 `2` 이상으로 덮으세요.
+- 새 환경(예: 야간)을 추가하려면 `detection.indoor.yaml` 처럼 **바뀌는 값만** 담은
+  override yaml 을 `config/` 에 만들고 `ARMS_DET_CONFIG=<파일명>` 으로 가리키면 됩니다.
+- 상시 기본값을 바꾸려면 `detection.yaml` 을 직접 고칩니다(전체 파라미터가 여기 있음).
+  예: 부하를 아끼려면 `yolo.full_fallback_interval` 을 `2` 이상으로.
+- `detection.yaml` 값은 노드의 `declare_parameter` 기본값과 같게 유지합니다. 따라서
+  config 없이 노드만 띄워도 같은 값으로 동작하고, override yaml(예: indoor)에는 바뀌는
+  값만 넣으면 됩니다.
 
 ## B. SITL 실행
 
