@@ -755,13 +755,18 @@ class ArmsUINode(Node):
             return
         h, w = frame.shape[:2]
         frac = float(self.get_parameter("ui.roi_pip_frac").value)
-        pip_w = max(1, int(w * frac))
-        pip_h = max(1, int(pip_w * roi.shape[0] / roi.shape[1]))
-        pip_h = min(pip_h, h // 2)   # 너무 세로로 길어지지 않게 제한
-        pip = cv2.resize(roi, (pip_w, pip_h), interpolation=cv2.INTER_NEAREST)
+        side = max(1, min(int(w * frac), h // 2))   # 고정 정사각형 PiP 한 변
+        # ROI 를 짧은 쪽 기준으로 꽉 채워(center-crop, cover) 정사각형에 맞춘다.
+        #   표적 bbox 종횡비가 프레임마다 흔들려도 PiP 창 크기는 항상 일정(세로 출렁임 제거).
+        #   긴 쪽은 가운데 기준으로 잘라낸다(여백 바 없음).
+        rh, rw = roi.shape[:2]
+        c = min(rh, rw)
+        cy0, cx0 = (rh - c) // 2, (rw - c) // 2
+        roi_sq = roi[cy0:cy0 + c, cx0:cx0 + c]
+        pip = cv2.resize(roi_sq, (side, side), interpolation=cv2.INTER_NEAREST)
         m = 8  # 가장자리 여백
         x2, y2 = w - m, h - m
-        x1, y1 = x2 - pip_w, y2 - pip_h
+        x1, y1 = x2 - side, y2 - side
         if x1 < 0 or y1 < 0:
             return
         frame[y1:y2, x1:x2] = pip
@@ -1011,6 +1016,17 @@ class ArmsUINode(Node):
         mcolor = (0, 200, 255) if mode >= 0.5 else (200, 200, 200)
         cv2.putText(frame, mtext, (x, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
         cv2.putText(frame, mtext, (x, y), font, scale, mcolor, thick, cv2.LINE_AA)
+
+        # 트래커 FSM 상태(raw[13]): ACQUIRE(획득)/TRACK(추적중)/LOST(상실). MODE 오른쪽에
+        #   색으로 구분해 붙인다 — 트래커가 실제로 물렸는지 메인 화면에서 바로 확인.
+        if len(raw) >= 14:
+            tstate = {0.0: "ACQUIRE", 1.0: "TRACK", 2.0: "LOST"}.get(raw[13], "--")
+            tcolor = {"TRACK": (0, 220, 0), "LOST": (0, 0, 255),
+                      "ACQUIRE": (200, 200, 200)}.get(tstate, (170, 170, 170))
+            tx = x + cv2.getTextSize(mtext, font, scale, thick)[0][0] + int(20 * scale)
+            ttext = f"TRK: {tstate}"
+            cv2.putText(frame, ttext, (tx, y), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
+            cv2.putText(frame, ttext, (tx, y), font, scale, tcolor, thick, cv2.LINE_AA)
         y += dy
 
         for i, name in enumerate(names):
@@ -1031,6 +1047,18 @@ class ArmsUINode(Node):
             cv2.putText(frame, text, (x, yy), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
             cv2.putText(frame, text, (x, yy), font, scale, color, thick, cv2.LINE_AA)
 
+        # 후보/검증 카운트: HSV 후보수 → YOLO 입력 → 승인 (raw[4],[5],[6]).
+        #   "후보가 안 나오나(HSV 0) vs YOLO가 거부하나(in>0, ok=0)"를 화면에서 바로 구분.
+        if len(raw) >= 7:
+            hsv_c = int(raw[4]); y_in = int(raw[5]); y_ok = int(raw[6])
+            ctext = f"cand HSV:{hsv_c}  YOLO in:{y_in} ok:{y_ok}"
+            ccolor = ((0, 220, 0) if y_ok > 0 else            # 승인 있음=초록
+                      (0, 165, 255) if hsv_c > 0 else          # 후보O 승인X(거부)=주황
+                      (170, 170, 170))                          # 후보 자체 없음=회색
+            cy = y + len(names) * dy
+            cv2.putText(frame, ctext, (x, cy), font, scale, (0, 0, 0), thick + 2, cv2.LINE_AA)
+            cv2.putText(frame, ctext, (x, cy), font, scale, ccolor, thick, cv2.LINE_AA)
+
     def _draw_overlay(self, frame):
         h, w = frame.shape[:2]
         cx_f, cy_f = w // 2, h // 2   # 오차/명령 화살표 기준(중앙). 십자선 분리 후에도 필요.
@@ -1047,8 +1075,10 @@ class ArmsUINode(Node):
                 x1, y1 = cx - bw // 2, cy - bh // 2
                 x2, y2 = cx + bw // 2, cy + bh // 2
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(frame, f"{det.confidence:.2f}", (x1, y1 - 6),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                # confidence 숫자는 debug 일 때만 (평소엔 박스만 깔끔하게).
+                if self._debug:
+                    cv2.putText(frame, f"{det.confidence:.2f}", (x1, y1 - 6),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
         # --- Crosshair 는 _draw_crosshair 로 분리(항상 표시) → 여기선 생략 ---
 
