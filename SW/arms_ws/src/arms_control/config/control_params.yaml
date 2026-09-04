@@ -43,8 +43,16 @@ arms_control_node:
       #   그 주석만 있고 실제 오버라이드가 없어서 실기체도 true 였다.
       sitl_auto_launch: true
       auto_launch_delay_sec: 0.5
-      # RTL 트리거: true=심판 /arms/hit(거리 직격)로 RTL, 영상 FIRE→RTL 끔. SITL 전용(실기체는 false).
-      sitl_hit_rtl: true
+      # ── 충돌 판정(FIRE/RTL) 소스 ─────────────────────────────────────
+      # 서로 독립적인 두 스위치다. 이름의 sitl/실기체는 "누가 쓰나"의 관례일 뿐,
+      # 둘 다 환경과 무관하게 동작한다(오해 방지로 sitl_hit_rtl 을 분리·개명).
+      #   hit_rtl_via_referee : 심판 /arms/hit(Gazebo 접촉) 수신 시 RTL.
+      #     → SITL 만 해당(실기체엔 /arms/hit 발행자 없음). 실기체는 hw_overrides 가 false.
+      #   looming_fire_enabled: 비전 τ(bbox 팽창률)로 충돌 임박 판정 → FIRE.
+      #     → 실기체 자동 요격 경로. 아직 비활성(false). 실기체 검증 뒤 hw_overrides 에서 true.
+      # 조합: SITL=(true,false) / 실기체 현재=(false,false) / 실기체 요격=(false,true).
+      hit_rtl_via_referee: true
+      looming_fire_enabled: false
 
     # =====================================================================
     # 발사 잠금장치 서보 (Jetson 하드웨어 PWM, sysfs)
@@ -72,7 +80,6 @@ arms_control_node:
       cell_count: 0        # 직렬 셀 수(S). 0=CRSF 값 그대로
       cell_full_v: 4.2     # 만충 시 셀당 전압[V]
       cell_empty_v: 3.5    # 방전(0%) 셀당 전압[V]
-      voltage_offset: 0.0  # 측정 전압 보정[V] (실기체는 hw_overrides 에서 조정)
 
     # =====================================================================
     # 제어

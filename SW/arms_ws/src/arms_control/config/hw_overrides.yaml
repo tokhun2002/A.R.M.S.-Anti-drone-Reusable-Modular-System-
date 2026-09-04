@@ -23,7 +23,6 @@ arms_control_node:
       cell_count: 4
       cell_full_v: 4.2
       cell_empty_v: 3.5
-      voltage_offset: 0.0   # ELRS 수신값이 LiPo 알람 측정보다 0.4V 낮아 +0.4 보정
 
     # 실기체: 발사 잠금장치 서보 활성화 (핀15 PWM1, pwmchip0 ch0).
     #   전제: jetson-io 로 핀15 PWM1 pinmux 설정 + /sys/class/pwm 쓰기 권한(99-gpio.rules).
@@ -39,6 +38,13 @@ arms_control_node:
       # 임계값을 낮춘다. 전체프레임 YOLO 는 ARMS_CONF(0.5)로 걸러지므로 근거리
       # 헛-LOCK 은 그대로 억제된다. detection 의 acquire.verify_conf 이하로 둘 것.
       detection_confidence_threshold: 0.25
+
+      # 충돌 판정(FIRE/RTL) 소스 — 실기체는 둘 다 끈다.
+      #   hit_rtl_via_referee: 실기체엔 /arms/hit 발행자가 없다(심판=SITL 전용) → false.
+      #   looming_fire_enabled: 자동 요격(비전 τ FIRE)은 아직 검증 전이라 비활성 → false.
+      #     실기체 요격을 켤 때 여기서 true 로 바꾼다.
+      hit_rtl_via_referee: false
+      looming_fire_enabled: false
 
     control:
       # ── 실기체 PID (미측정) ──────────────────────────────────────────────
