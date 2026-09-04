@@ -94,8 +94,19 @@ FC 없이 검출·추적·UI를 그대로 돌려볼 수 있어, 검출 튜닝이
 
 detection 은 `arms.launch.py` 와 동일하게 **GPU 도커 컨테이너로 자동 기동**됩니다
 (`docker compose up -d`, 멱등). 즉 실기체와 같은 YOLO 검출을 샘플 영상에 그대로 적용합니다.
-조종기는 실기체 ESP32 대신 **SITL 가상 조종기(tkinter GUI)** 가 함께 떠서, 그 창에서
-arm / 모드 / kill / launch 를 클릭으로 넣어 상태 전이(SEARCH→LOCK→…)를 테스트할 수 있습니다.
+
+조종기는 `controller:=` 인자로 고릅니다(기본 `gui`):
+
+- **`controller:=gui`** (기본) — **SITL 가상 조종기(tkinter GUI)** 가 함께 떠서, 그 창에서
+  arm / 모드 / kill / launch 를 클릭으로 넣어 상태 전이(SEARCH→LOCK→…)를 테스트합니다.
+  실기체 조종기·수신기 없이 파이프라인만 돌려볼 때 편합니다.
+- **`controller:=real`** — 실기체 **ESP32 조종기(UART → `/arms/command`)** 를 그대로 씁니다.
+  실제 조종기 입력으로 replay 영상 검증 시 사용합니다(ESP32 시리얼 연결 필요).
+
+```bash
+ros2 launch arms_bringup arms_replay.launch.py                    # gui 가상 조종기(기본)
+ros2 launch arms_bringup arms_replay.launch.py controller:=real   # 실기체 ESP32 조종기
+```
 
 ```bash
 # 기본 샘플(sample1.mov) + 기본 모델(balloon_camera.pt)
@@ -119,6 +130,7 @@ ros2 launch arms_bringup arms_replay.launch.py start_detection:=false
 | `publish_rate`    | `30.0`                            | `/arms/image_raw` 발행 fps                |
 | `model`           | `/models/balloon_camera.engine`   | detection 컨테이너가 로드할 가중치        |
 | `start_detection` | `true`                            | detection 도커 컨테이너 자동 기동 여부    |
+| `controller`      | `gui`                             | 조종기 소스: `gui`(SITL 가상 조종기) / `real`(실기체 ESP32) |
 | `crsf_port`       | `/dev/ttyUSB0`                    | ELRS TX 시리얼 포트 (제어 출력용)         |
 | `fullscreen`      | `false` (replay) / `true` (실기체)| UI 전체화면 여부 (A-4)                    |
 | `debug`           | `true` (replay) / `false` (실기체)| 메인 화면 디버그 오버레이 (A-4)           |

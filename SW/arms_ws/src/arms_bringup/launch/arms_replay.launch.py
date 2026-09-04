@@ -7,6 +7,7 @@
 
   ros2 launch arms_bringup arms_replay.launch.py
   ros2 launch arms_bringup arms_replay.launch.py video_path:=/경로/sample2.mov
+  ros2 launch arms_bringup arms_replay.launch.py controller:=real   # 실기체 ESP32 조종기
 
 - Detection(YOLO+HSV+absdiff): arms.launch.py 와 동일하게 GPU 도커 컨테이너로
   동작한다. 이 런치가 'docker compose up -d' 로 자동 기동한다(멱등). start_detection:=false
@@ -23,7 +24,7 @@ from launch.actions import (DeclareLaunchArgument, ExecuteProcess,
                             IncludeLaunchDescription, LogInfo)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
@@ -64,9 +65,14 @@ def generate_launch_description():
     replay_launch = (
         Path(get_package_share_directory("arms_video")) / "launch" / "video_replay.launch.py"
     )
-    # 조종기: SITL 가상 조종기(tkinter GUI). 실기체 ESP32 대신 클릭으로 arm/모드/kill/launch 발행.
-    command_launch = (
+    # 조종기: controller:= 로 고른다.
+    #   gui(기본) = SITL 가상 조종기(tkinter) — 창에서 arm/모드/kill/launch 클릭
+    #   real      = 실기체 ESP32 조종기(UART → /arms/command)
+    command_gui_launch = (
         Path(get_package_share_directory("arms_command")) / "launch" / "command_sitl.launch.py"
+    )
+    command_real_launch = (
+        Path(get_package_share_directory("arms_command")) / "launch" / "command.launch.py"
     )
     detection_compose = _find_detection_compose()
 
@@ -81,6 +87,8 @@ def generate_launch_description():
     actions = [
         DeclareLaunchArgument("crsf_port", default_value="/dev/ttyUSB0",
                               description="ELRS TX serial port (CRSF output)"),
+        DeclareLaunchArgument("controller", default_value="gui",
+                              description="조종기 소스: gui(SITL 가상 조종기, 기본) | real(실기체 ESP32 UART)"),
         DeclareLaunchArgument("video_path", default_value=default_video,
                               description="재생할 샘플 비디오 경로 (기본: sample1.mov)"),
         DeclareLaunchArgument("publish_rate", default_value="30.0",
@@ -127,9 +135,18 @@ def generate_launch_description():
                 "publish_rate": LaunchConfiguration("publish_rate"),
             }.items(),
         ),
-        # 조종기: SITL 가상 조종기(tkinter GUI) → /arms/command. arm/모드/kill/launch 입력.
+        # 조종기 입력 (→ /arms/command). controller:= 로 gui/real 택일.
+        #   gui  = SITL 가상 조종기(tkinter GUI). 기본.
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(str(command_launch)),
+            PythonLaunchDescriptionSource(str(command_gui_launch)),
+            condition=IfCondition(PythonExpression(
+                ["'", LaunchConfiguration("controller"), "' == 'gui'"])),
+        ),
+        #   real = 실기체 ESP32 조종기(UART → /arms/command).
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(str(command_real_launch)),
+            condition=IfCondition(PythonExpression(
+                ["'", LaunchConfiguration("controller"), "' == 'real'"])),
         ),
         # 제어 (상태머신 + PID + CRSF 시리얼 출력 → ELRS TX → FC)
         Node(
@@ -140,6 +157,9 @@ def generate_launch_description():
             parameters=[
                 str(control_config),
                 {"crsf.port": LaunchConfiguration("crsf_port")},
+                # 자동 track 비활성 (LOCK 이 자동으로 TRACK 안 감 → LAUNCH 버튼 눌러야 TRACK).
+                #   control_params(SITL 기준)는 true 라 여기서 실기체처럼 false 로 덮는다.
+                {"mission.sitl_auto_launch": False},
             ],
         ),
         # OpenCV UI (replay 기본: 메인 화면 디버그 오버레이 on). cv_debug:=true 를 주면
