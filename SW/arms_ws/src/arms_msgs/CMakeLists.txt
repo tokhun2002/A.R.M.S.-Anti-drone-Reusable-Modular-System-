@@ -9,6 +9,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/BoundingBox.msg"
   "msg/DetectionArray.msg"
   "msg/MissionState.msg"
+  "msg/CrsfTelemetry.msg"
   DEPENDENCIES std_msgs
 )
 

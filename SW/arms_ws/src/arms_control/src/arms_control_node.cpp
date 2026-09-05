@@ -14,6 +14,7 @@
 #include "arms_control/pid_controller.hpp"
 #include "arms_control/servo_lock.hpp"
 #include "arms_control/state_machine.hpp"
+#include "arms_msgs/msg/crsf_telemetry.hpp"
 #include "arms_msgs/msg/detection_array.hpp"
 #include "arms_msgs/msg/mission_state.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
@@ -355,6 +356,8 @@ class ArmsControlNode : public rclcpp::Node {
     pub_loom_ = create_publisher<geometry_msgs::msg::Vector3>("/arms/debug_looming", 10);
     // CRSF 배터리 텔레메트리(0x08)를 UI 등에서 쓰도록 표준 메시지로 재발행한다.
     pub_battery_ = create_publisher<sensor_msgs::msg::BatteryState>("/arms/battery", 10);
+    // CRSF 디코딩 통합 발행: 배터리/자세(RPY)/수직속도/비행모드/링크통계 → /arms/crsf.
+    pub_crsf_ = create_publisher<arms_msgs::msg::CrsfTelemetry>("/arms/crsf", 10);
 
     // ----------------------------------------------------------------
     // ROS subscribers
@@ -559,6 +562,9 @@ class ArmsControlNode : public rclcpp::Node {
           down_rssi, down_lq, down_snr);                          // 링크 상태를 1초마다 보여준다.
         last_up_lq_ = up_lq;                                      // uplink LQ 저장(0이면 RF 링크 끊김으로 본다).
         last_lq_time_ = now();
+        crsf_telem_.uplink_rssi_dbm = up_rssi_1;                  // /arms/crsf 통합 필드 갱신
+        crsf_telem_.uplink_lq = up_lq;
+        crsf_telem_.uplink_snr_db = up_snr;
       } else if ((frame.type == 0x1C || frame.type == 0x1D) &&
                  frame.payload.size() >= 5)
       {
@@ -605,7 +611,38 @@ class ArmsControlNode : public rclcpp::Node {
         bat.percentage = static_cast<float>(pct_ratio);            // 잔량을 0~1 비율로 채운다(BatteryState 규약).
         bat.present = true;                                        // 배터리 존재 플래그를 세운다.
         pub_battery_->publish(bat);                                // 매 배터리 프레임마다 재발행한다.
+        crsf_telem_.voltage_v = static_cast<float>(voltage_v);     // /arms/crsf 통합 필드 갱신
+        crsf_telem_.current_a = static_cast<float>(current_da) / 10.0f;
+        crsf_telem_.capacity_used_mah = capacity_mah;
+        crsf_telem_.battery_remaining_pct = remaining_pct;
+      } else if (frame.type == 0x1E && frame.payload.size() >= 6) {
+        // 자세(Attitude): pitch, roll, yaw 순서의 int16 big-endian, 값 = radian × 10000.
+        auto be16 = [&](size_t i) {
+          return static_cast<int16_t>(
+            (static_cast<uint16_t>(frame.payload[i]) << 8) | frame.payload[i + 1]);
+        };
+        constexpr double R2D = 57.29577951308232;                  // rad→deg
+        crsf_telem_.pitch_deg = static_cast<float>(be16(0) / 10000.0 * R2D);
+        crsf_telem_.roll_deg  = static_cast<float>(be16(2) / 10000.0 * R2D);
+        crsf_telem_.yaw_deg   = static_cast<float>(be16(4) / 10000.0 * R2D);
+      } else if (frame.type == 0x07 && frame.payload.size() >= 2) {
+        // 수직속도(Vario): int16 big-endian, 단위 cm/s → m/s.
+        const int16_t vspeed_cms = static_cast<int16_t>(
+          (static_cast<uint16_t>(frame.payload[0]) << 8) | frame.payload[1]);
+        crsf_telem_.vertical_speed_mps = static_cast<float>(vspeed_cms) / 100.0f;
+      } else if (frame.type == 0x21 && !frame.payload.empty()) {
+        // 비행 모드(Flight mode): null-종료 ASCII 문자열.
+        const char * s = reinterpret_cast<const char *>(frame.payload.data());
+        size_t len = 0;
+        while (len < frame.payload.size() && s[len] != '\0') ++len;   // 널/끝까지만
+        crsf_telem_.flight_mode.assign(s, len);
       }
+    }
+
+    // 이번에 CRSF 프레임을 하나라도 받았으면 통합 텔레메트리를 발행한다(최신 스냅샷).
+    if (!result.frames.empty()) {
+      crsf_telem_.header.stamp = now();
+      pub_crsf_->publish(crsf_telem_);
     }
   }
 
@@ -1069,6 +1106,7 @@ class ArmsControlNode : public rclcpp::Node {
   // CRSF 송수신 상태
   std::unique_ptr<CrsfOutput> crsf_out_;                          // CRSF UART 송수신기를 소유한다.
   std::array<bool, 256> crsf_seen_types_{};                       // 처음 발견한 텔레메트리 타입을 구분한다.
+  arms_msgs::msg::CrsfTelemetry crsf_telem_;                      // /arms/crsf 통합 발행용 최신 스냅샷
   // ELRS 링크(바인딩+RF) 판정: LinkStatistics(0x14)의 uplink LQ 로만 본다.
   int          last_up_lq_{-1};         // 마지막 0x14 uplink LQ[%] (-1=미수신)
   rclcpp::Time last_lq_time_;           // 마지막 0x14 수신 시각
@@ -1106,6 +1144,7 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_dbg_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;
   rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr pub_battery_;
+  rclcpp::Publisher<arms_msgs::msg::CrsfTelemetry>::SharedPtr pub_crsf_;     // CRSF 통합 텔레메트리 → /arms/crsf
   int battery_cell_count_{0};        // 직렬 셀 수(S). 0=CRSF 잔량값 그대로 사용
   double battery_cell_full_v_{4.2};  // 만충 셀당 전압[V]
   double battery_cell_empty_v_{3.5}; // 방전(0%) 셀당 전압[V]
