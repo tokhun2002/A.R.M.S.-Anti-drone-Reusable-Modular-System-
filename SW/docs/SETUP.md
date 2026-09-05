@@ -135,8 +135,13 @@ ros2 launch arms_bringup arms_replay.launch.py start_detection:=false
 | `fullscreen`      | `false` (replay) / `true` (실기체)| UI 전체화면 여부 (A-4)                    |
 | `debug`           | `true` (replay) / `false` (실기체)| 메인 화면 디버그 오버레이 (A-4)           |
 | `cv_debug`        | `false`                           | 검출 진단 패널(HSV+그래프) (A-4)          |
+| `video_save`      | `false` — **`arms.launch.py`(실기체) 전용** | 비행 UI 자동 녹화. 자동모드 SEARCH 진입~ARM 스위치 OFF 를 `~/arms_flight_log/<일시>/` 에 bag 저장 (kill 무관). 상세는 "UI 화면 녹화 / 재생 / mp4 변환" 절 4) |
 
 샘플 영상은 `SW/sample_viedo/` 에 `sample1.mov`, `sample2.mov`, `sample3.mov` 가 있습니다.
+
+> `video_save` 는 `arms.launch.py`(실기체)에만 있는 인자입니다. 위 표의 나머지 인자는
+> `arms_replay.launch.py` 기준이며, 실기체와 공유되는 것(`model`/`start_detection`/`crsf_port`/
+> `fullscreen`/`debug`/`cv_debug`)은 `arms.launch.py` 에서도 동일하게 씁니다.
 
 의존성 (영상 스트리밍):
 
@@ -362,6 +367,77 @@ A.R.M.S. UI 창이 떠 있을 때 **`S`(또는 `s`) 키**를 누르면 현재 �
   (`cv_debug` 패널이 이미 켜져 있으면 즉시 저장.)
 - **A.R.M.S. 창이 포커스**돼 있어야 키가 먹는다(OpenCV `waitKey` 기반).
 - `SW/output_image/` 는 런타임 생성물이라 git 추적 대상이 아니다(`.gitignore`).
+
+### UI 화면 녹화 / 재생 / mp4 변환
+
+UI 노드는 화면을 두 토픽으로 발행한다(둘 다 구독자 있을 때만, lazy):
+
+- `/arms/ui_image` (raw `sensor_msgs/Image`) — rqt 로 바로 보기용.
+- `/arms/ui_image/compressed` (JPEG) — 경량 녹화·원격 스트리밍용. **launch 의 image_transport
+  `republish` 노드가 만든다**(파이썬 노드는 image_transport 규약 compressed 를 직접 못 냄).
+
+발행 화질/대역폭은 파라미터로 조절: `ui.stream_max_width`(기본 480), `ui.stream_fps`(기본 15),
+JPEG 품질은 republish 의 `compressed.jpeg_quality`(launch 에 60).
+
+#### 1) 녹화 (compressed = 경량)
+
+```bash
+ros2 bag record -o ui_rec /arms/ui_image/compressed
+```
+
+> mcap 으로 저장하려면 `--storage mcap` (플러그인 필요: `sudo apt install ros-humble-rosbag2-storage-mcap`).
+> 안 깔려 있으면 옵션 없이 기본 `sqlite3` 로 저장된다.
+
+#### 2) 재생하며 화면으로 보기 (compressed → raw → rqt)
+
+rqt 는 압축 토픽을 직접 표시 못 하므로, 재생하면서 raw 로 풀어서 본다(터미널 3개):
+
+```bash
+# ① 재생 (--loop 반복재생)
+ros2 bag play ui_rec --loop
+
+# ② compressed → raw 디코딩
+ros2 run image_transport republish compressed raw \
+  --ros-args -r in/compressed:=/arms/ui_image/compressed -r out:=/arms/ui_view
+
+# ③ raw 보기
+ros2 run rqt_image_view rqt_image_view /arms/ui_view
+```
+
+> ⚠️ 라이브 스택(UI 노드)이 돌고 있으면 재생과 같은 토픽에 섞인다. 스택을 끄거나, 재생 시
+> `--remap /arms/ui_image/compressed:=/pb/ui_image/compressed` 로 토픽명을 바꿔 충돌을 피한다.
+
+#### 3) mp4(H.264) 로 변환
+
+`SW/scripts/bag_to_video/bag_to_mp4.py` 가 bag 을 직접 읽어(재생 불필요) H.264 mp4 로 만든다.
+브라우저·폰·기본 플레이어 어디서나 재생된다(필요: `ffmpeg`).
+
+```bash
+python3 SW/scripts/bag_to_video/bag_to_mp4.py ui_rec              # → ui_rec.mp4
+python3 SW/scripts/bag_to_video/bag_to_mp4.py ui_rec --out clip.mp4 --fps 15
+```
+
+> fps 는 기본으로 bag 타임스탬프에서 자동 계산한다. mcap 으로 녹화했으면 `--storage mcap`.
+> 자세한 옵션은 `SW/scripts/bag_to_video/README.md` 참고.
+
+#### 4) 비행 자동 저장 모드 (`video_save:=true`, 실기체)
+
+실기체 비행 중 UI 를 **자동으로** 녹화한다. `arms.launch.py` 에 `video_save:=true` 를 주면
+`flight_recorder` 노드가 함께 떠서:
+
+- **시작**: 자동모드에서 상태머신이 **SEARCH 진입** 시 녹화 시작.
+- **종료**: 조종기 **ARM(=자동모드 search) 스위치를 내릴 때**(`/arms/command` buttons[1]→0).
+  - **kill 이 걸려도 계속 녹화**한다(kill 은 buttons[0], ARM 스위치와 무관). ARM 스위치를
+    내려야만 종료.
+- **저장 위치**: `~/arms_flight_log/<YYYYmmdd_HHMMSS>/` (비행 시작 일시 폴더에 bag).
+
+```bash
+ros2 launch arms_bringup arms.launch.py video_save:=true
+```
+
+기본값은 `false`(녹화 안 함). 저장된 bag 은 위 3) 방법으로 mp4 변환하거나 재생하면 된다.
+녹화 토픽은 `/arms/ui_image/compressed`(경량). 스택을 정상 종료하면 진행 중이던 bag 도
+안전하게 마감된다.
 
 ### 정상 상태 전이 흐름
 

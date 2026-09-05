@@ -77,6 +77,10 @@ def generate_launch_description():
         DeclareLaunchArgument("cv_debug", default_value="false",
                               description="검출 진단 패널(HSV 미리보기+성능 그래프). "
                                           "true 면 hsv_debug_image 를 구독 → 검출 발행률↓."),
+        DeclareLaunchArgument("video_save", default_value="false",
+                              description="비행 UI 녹화. true 면 자동모드 SEARCH 진입~ARM 스위치 "
+                                          "OFF 까지 /arms/ui_image/compressed 를 ~/arms_flight_log/"
+                                          "<일시>/ 에 bag 으로 저장(kill 되어도 유지)."),
     ]
 
     # 검출 컨테이너 자동 기동 (docker compose up -d — 멱등). 컨테이너의 arms_detection_node
@@ -145,6 +149,15 @@ def generate_launch_description():
                 ("out/compressed", "/arms/ui_image/compressed"),
             ],
             parameters=[{"compressed.jpeg_quality": 60}],
+        ),
+        # 비행 UI 녹화기 (video_save:=true 일 때만). 자동모드 SEARCH 진입~ARM 스위치 OFF 까지
+        #   /arms/ui_image/compressed 를 ~/arms_flight_log/<일시>/ 에 bag 으로 저장(kill 무관).
+        Node(
+            package="arms_ui",
+            executable="flight_recorder",
+            name="flight_recorder",
+            output="screen",
+            condition=IfCondition(LaunchConfiguration("video_save")),
         ),
     ]
 
