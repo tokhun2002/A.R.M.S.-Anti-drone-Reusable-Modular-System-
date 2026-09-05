@@ -131,6 +131,21 @@ def generate_launch_description():
                     LaunchConfiguration("cv_debug"), value_type=bool),
             }],
         ),
+        # UI 화면 스트림: arms_ui_node 가 낸 raw(/arms/ui_image)를 image_transport republish 로
+        #   compressed(/arms/ui_image/compressed)로 만든다 → rqt/원격에서 볼 수 있다.
+        #   (파이썬 노드로는 compressed 정식 발행이 안 되므로 republish 가 담당. lazy: 구독 시만.)
+        #   ★ out 베이스 리맵은 파생 서브토픽에 전파 안 되므로 out/compressed 를 직접 리맵한다.
+        Node(
+            package="image_transport",
+            executable="republish",
+            name="ui_image_republish",
+            arguments=["raw", "compressed"],
+            remappings=[
+                ("in", "/arms/ui_image"),
+                ("out/compressed", "/arms/ui_image/compressed"),
+            ],
+            parameters=[{"compressed.jpeg_quality": 60}],
+        ),
     ]
 
     return LaunchDescription(actions)

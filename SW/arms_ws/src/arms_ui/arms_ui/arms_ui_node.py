@@ -61,16 +61,29 @@ class ArmsUINode(Node):
             depth=1,
         )
         self._image_qos = best_effort_qos
+        # UI raw(/arms/ui_image)는 RELIABLE 로 발행한다. image_transport republish 가 RELIABLE
+        #   로 구독하므로 BEST_EFFORT 면 QoS 불일치로 프레임을 못 받는다(로컬이라 부담 없음).
+        reliable_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
 
-        # UI 화면 스트리밍: 합성된 UI 화면을 JPEG(CompressedImage)로 발행 →
-        #   같은 네트워크의 노트북이 구독해 녹화(ros2 bag/subscriber). Jetson 은 인코딩만
-        #   하면 되어 리눅스 화면캡처 대비 CPU 부하가 훨씬 작다. 구독자가 있을 때만 인코딩한다.
-        #   best-effort+depth1(아래 QoS)로 늦은 프레임을 버려 UDP 실시간성을 지킨다.
+        # UI 화면 스트리밍: 합성 화면을 raw(/arms/ui_image)로 발행(구독자 있을 때만, lazy).
+        #   compressed(/arms/ui_image/compressed)는 launch 의 image_transport 'republish' 가
+        #   이 raw 를 받아 '정식으로' 만든다(파이썬 rclpy 는 image_transport 퍼블리셔가 없어
+        #   compressed 를 직접 내면 rqt 와 타입 충돌하기 때문). rqt 는 base(/arms/ui_image) 하나로
+        #   raw/compressed 를 골라 본다. 노트북은 compressed 를 구독해 경량 스트리밍/녹화.
+        #   여기서 resize·fps 를 걸면 raw 가 작아져 그걸 압축한 compressed 도 자동 경량.
+        #   (JPEG 품질은 이 노드가 아니라 republish 의 compressed.jpeg_quality 로 조절한다.)
         self.declare_parameter("ui.stream_enabled", True)       # 발행 on/off
-        self.declare_parameter("ui.stream_jpeg_quality", 70)    # JPEG 품질 1~100 (낮을수록 대역폭↓)
-        self.declare_parameter("ui.stream_max_width", 960)      # 발행 전 최대 가로폭(0=원본). 대역폭 절감
-        self.pub_ui_stream = self.create_publisher(
-            CompressedImage, "/arms/ui_image/compressed", best_effort_qos)
+        self.declare_parameter("ui.stream_max_width", 480)      # 발행 전 최대 가로폭(0=원본). 대역폭 절감
+        # 발행 프레임레이트 상한. UI 렌더는 카메라 fps(~30)를 따르지만, 무선으로 그만큼
+        #   보내면 노트북에서 끊긴다(프래그먼트 손실). 여기서 상한을 둬 대역폭↓.
+        self.declare_parameter("ui.stream_fps", 15.0)           # 0=제한 없음(렌더 fps 그대로)
+        self._last_stream_t = 0.0
+        self.pub_ui_raw = self.create_publisher(
+            Image, "/arms/ui_image", reliable_qos)
 
         # PiP 크기 (프레임 폭 대비 ROI 표시 폭 비율)
         self.declare_parameter("ui.roi_pip_frac", 0.25)
@@ -612,27 +625,31 @@ class ArmsUINode(Node):
             self._request_capture(detection_capture)
 
     def _publish_ui_stream(self, frame):
-        """합성된 UI 화면을 JPEG(CompressedImage)로 발행(원격 녹화용).
+        """합성된 UI 화면을 raw(/arms/ui_image)로 발행(rqt 뷰·republish 입력용).
 
-        구독자가 있을 때만 인코딩해 평소 CPU 비용을 0으로 둔다. 대역폭/실시간성을
-        위해 발행 전 최대 폭으로 축소하고 JPEG 로 압축한다."""
+        구독자가 있을 때만 발행해 평소 비용을 0 으로 둔다. 발행 전 최대 폭으로 축소하고
+        fps 상한으로 발행률을 제한한다(그러면 이를 압축한 compressed 도 자동 경량).
+        compressed(/arms/ui_image/compressed)는 launch 의 image_transport republish 가 만든다."""
         if not bool(self.get_parameter("ui.stream_enabled").value):
             return
-        if self.pub_ui_stream.get_subscription_count() == 0:
-            return
+        if self.pub_ui_raw.get_subscription_count() == 0:
+            return                  # 아무도 안 보면 아무 일도 안 함(lazy)
+        fps = float(self.get_parameter("ui.stream_fps").value)
+        if fps > 0.0:
+            now = time.monotonic()
+            if now - self._last_stream_t < 1.0 / fps:
+                return              # 발행 주기 미달 → 이 프레임은 처리 건너뜀
+            self._last_stream_t = now
         max_w = int(self.get_parameter("ui.stream_max_width").value)
         if max_w > 0 and frame.shape[1] > max_w:
             nh = int(frame.shape[0] * max_w / frame.shape[1])
             frame = cv2.resize(frame, (max_w, nh), interpolation=cv2.INTER_AREA)
-        quality = int(self.get_parameter("ui.stream_jpeg_quality").value)
-        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
-        if not ok:
-            return
-        msg = CompressedImage()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.format = "jpeg"
-        msg.data = buf.tobytes()
-        self.pub_ui_stream.publish(msg)
+        try:
+            rmsg = self._bridge.cv2_to_imgmsg(frame, encoding="bgr8")
+            rmsg.header.stamp = self.get_clock().now().to_msg()
+            self.pub_ui_raw.publish(rmsg)
+        except Exception as e:      # cv_bridge 인코딩 실패는 무시(스트림만 영향)
+            self.get_logger().warn(f"ui raw publish 실패: {e}")
 
     def _compose_diagnostics_panel(self, frame):
         """영상 오른쪽에 HSV 후보 미리보기와 실시간 성능 그래프를 붙인다."""
