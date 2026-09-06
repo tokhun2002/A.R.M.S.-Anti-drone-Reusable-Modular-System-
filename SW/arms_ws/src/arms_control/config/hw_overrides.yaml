@@ -16,11 +16,9 @@ arms_control_node:
       port: "/dev/ttyUSB0"
       baud: 115200
 
-    # 실기체 배터리: 측정 전압으로 잔량(%)을 계산한다.
-    #   cell_count 를 실제 직렬 셀 수로 맞춰라 (예: 4S→4, 6S→6).
+    # 실기체 배터리: 셀 수는 전압으로 자동 감지한다(cells=ceil(V/4.3)). 셀 전압만 조정 가능.
     #   방전 컷오프를 보수적으로 잡고 싶으면 cell_empty_v 를 3.5~3.6 으로 올린다.
     battery:
-      cell_count: 4
       cell_full_v: 4.2
       cell_empty_v: 3.5
 
@@ -67,4 +65,13 @@ arms_control_node:
       # TWR·무게가 달라 따로 잡는다. hover_throttle(≈0.51) 위여야 상승한다.
       #   첫 비행은 보수적으로(가볍게 상승) → 추격력 부족하면 ↑.
       #   pursuit_center_boost=false 라 이 값이 곧 상수 추력이다.
-      track_throttle: 0.60
+      track_throttle: 0.70
+
+      # ── 무장(arm) ─────────────────────────────────────────────────────
+      # 자동 모드: 스위치와 분리하고 상태머신 상태로 컨트롤 노드가 결정한다.
+      #   SEARCH/LOCK(throttle 0) 에서 미리 arm → TRACK 에서 throttle↑ 전에 무장
+      #   완료 (PX4 의 high-throttle arm 거부 회피). SITL 전용.
+      # auto_arm_states: ["TRACK", "FIRE", "RTL"]
+      auto_arm_states: ["SEARCH", "LOCK", "TRACK", "FIRE", "RTL"]
+
+

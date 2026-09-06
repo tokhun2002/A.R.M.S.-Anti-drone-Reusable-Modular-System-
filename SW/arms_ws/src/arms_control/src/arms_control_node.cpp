@@ -95,10 +95,8 @@ class ArmsControlNode : public rclcpp::Node {
     declare_parameter("crsf.telemetry_timeout_sec", 2.0);
 
     // ── 배터리 잔량(%) 계산 ────────────────────────────────────────────
-    // cell_count>0 이면 측정 전압으로 퍼센트를 직접 계산한다
+    // 셀 수는 전압으로 자동 감지(cells=ceil(V/4.3), 1회 감지 후 래치). 잔량은:
     //   pct = (전압 - cells·empty_v) / (cells·(full_v - empty_v)), 0~100 clamp.
-    // cell_count<=0 이면 CRSF 텔레메트리가 준 잔량값을 그대로 쓴다(기존 동작).
-    declare_parameter("battery.cell_count", 0);          // 직렬 셀 수(S). 0=CRSF 값 그대로
     declare_parameter("battery.cell_full_v", 4.2);       // 만충 시 셀당 전압[V]
     declare_parameter("battery.cell_empty_v", 3.5);      // 방전(0%) 셀당 전압[V]
     // 자동요격은 ACRO(각속도) 고정이다. crsf.max_angle_deg / control.acro_mode 와
@@ -245,7 +243,6 @@ class ArmsControlNode : public rclcpp::Node {
     servo_->init();
 
     // ---- 배터리 잔량 계산 설정 ----
-    battery_cell_count_   = static_cast<int>(get_parameter("battery.cell_count").as_int());
     telemetry_timeout_sec_ = get_parameter("crsf.telemetry_timeout_sec").as_double();
     battery_cell_full_v_  = get_parameter("battery.cell_full_v").as_double();
     battery_cell_empty_v_ = get_parameter("battery.cell_empty_v").as_double();
@@ -595,10 +592,19 @@ class ArmsControlNode : public rclcpp::Node {
           capacity_mah, remaining_pct);                            // 배터리 텔레메트리를 1초마다 보여준다.
 
         const double voltage_v = voltage_dv / 10.0;               // 전압을 V 단위로 환산한다.
-        double pct_ratio = remaining_pct / 100.0;                  // 기본은 CRSF 잔량값(0~1)이다.
-        if (battery_cell_count_ > 0) {                             // 셀 수가 설정되면 전압으로 직접 계산한다.
-          const double empty_v = battery_cell_count_ * battery_cell_empty_v_;   // 0% 기준 전압.
-          const double full_v  = battery_cell_count_ * battery_cell_full_v_;    // 100% 기준 전압.
+        // 셀 수는 전압으로 자동 감지한다. cells = ceil(V / 4.3): 셀당 최대≈4.3V 로 나눠 이 전압을
+        //   낼 수 있는 최소 셀 수를 구한다. 배터리 연결 시점엔 대개 충전돼 있어 정확하며, 첫
+        //   유효 전압에서 1회 감지 후 래치한다(방전으로 값이 흔들리지 않게).
+        if (battery_detected_cells_ <= 0 && voltage_v > 1.0) {
+          battery_detected_cells_ = static_cast<int>(std::ceil(voltage_v / 4.3));
+          RCLCPP_INFO(get_logger(), "배터리 셀 수 자동감지: %dS (%.1fV)",
+                      battery_detected_cells_, voltage_v);
+        }
+        const int cells = battery_detected_cells_;
+        double pct_ratio = remaining_pct / 100.0;                  // 감지 전 fallback: CRSF 잔량값.
+        if (cells > 0) {                                           // 셀 수를 알면 전압으로 직접 계산.
+          const double empty_v = cells * battery_cell_empty_v_;    // 0% 기준 전압.
+          const double full_v  = cells * battery_cell_full_v_;     // 100% 기준 전압.
           const double span = full_v - empty_v;                   // 만충-방전 전압 폭.
           pct_ratio = (span > 1e-6) ? (voltage_v - empty_v) / span : 0.0;   // 선형 보간한다.
           pct_ratio = std::clamp(pct_ratio, 0.0, 1.0);            // 0~1 범위로 자른다.
@@ -1145,7 +1151,7 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;
   rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr pub_battery_;
   rclcpp::Publisher<arms_msgs::msg::CrsfTelemetry>::SharedPtr pub_crsf_;     // CRSF 통합 텔레메트리 → /arms/crsf
-  int battery_cell_count_{0};        // 직렬 셀 수(S). 0=CRSF 잔량값 그대로 사용
+  int battery_detected_cells_{0};    // 전압으로 자동 감지한 셀 수(첫 유효 전압에서 1회 감지 후 래치)
   double battery_cell_full_v_{4.2};  // 만충 셀당 전압[V]
   double battery_cell_empty_v_{3.5}; // 방전(0%) 셀당 전압[V]
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;

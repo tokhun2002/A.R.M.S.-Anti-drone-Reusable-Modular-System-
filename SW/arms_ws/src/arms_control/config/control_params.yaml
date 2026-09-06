@@ -71,13 +71,10 @@ arms_control_node:
     # =====================================================================
     # 배터리 잔량(%) 계산  — UI 좌측 하단 표시에 쓰인다.
     # =====================================================================
-    # cell_count > 0 : 측정 전압으로 퍼센트를 직접 계산 (LiPo 선형 근사).
-    #     pct = (전압 - cell_count·cell_empty_v)
-    #           ÷ (cell_count·(cell_full_v - cell_empty_v)),  0~100% clamp
-    # cell_count <= 0 : CRSF 텔레메트리가 준 잔량값을 그대로 사용(기본).
-    #   → 실기체는 hw_overrides.yaml 에서 실제 셀 수를 넣어라 (예: 6S).
+    # 셀 수는 전압으로 자동 감지한다(cells = ceil(V / 4.3), 연결 시점 전압으로 6S/4S 등 판별,
+    #   첫 유효 전압에서 1회 감지 후 래치). 잔량은 감지된 셀 수로 선형 근사한다:
+    #     pct = (전압 - cells·cell_empty_v) ÷ (cells·(cell_full_v - cell_empty_v)),  0~100% clamp
     battery:
-      cell_count: 0        # 직렬 셀 수(S). 0=CRSF 값 그대로
       cell_full_v: 4.2     # 만충 시 셀당 전압[V]
       cell_empty_v: 3.5    # 방전(0%) 셀당 전압[V]
 
@@ -169,7 +166,6 @@ arms_control_node:
       #   SEARCH/LOCK(throttle 0) 에서 미리 arm → TRACK 에서 throttle↑ 전에 무장
       #   완료 (PX4 의 high-throttle arm 거부 회피). SITL 전용.
       auto_arm_states: ["SEARCH", "LOCK", "TRACK", "FIRE", "RTL"]
-      # auto_arm_states: ["TRACK", "FIRE", "RTL"]
 
       # 수동 모드: arm 하는 순간 스틱이 idle 이어야만 실제로 무장한다 (급상승/오발 방지).
       prearm_check: true
