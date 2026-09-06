@@ -2,6 +2,6 @@
 Type=Application
 Name=A.R.M.S. Autostart
 Comment=부팅(데스크톱 로그인) 시 실기체 런치 자동 실행
-Exec=/home/arms/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/startup/start_arms.sh
+Exec=/home/arms/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/jetson_setting/startup/start_arms.sh
 Terminal=false
 X-GNOME-Autostart-enabled=true

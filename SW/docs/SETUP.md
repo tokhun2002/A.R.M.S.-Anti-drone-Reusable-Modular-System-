@@ -86,6 +86,35 @@ ros2 launch arms_bringup arms.launch.py
 
 노드 스택과 함께 detection 컨테이너(`docker compose up -d`)까지 자동 기동됩니다.
 
+#### 검출 모델(가중치) 지정 — `model:=`
+
+detection 이 로드할 가중치는 `model:=` 로 고릅니다. 경로는 **컨테이너 내부 경로**
+(`/models/<파일>`)입니다 — 호스트의 `.../docker/models/` 가 컨테이너에 `/models` 로
+마운트되므로 파일명만 `/models/` 뒤에 붙이면 됩니다(호스트 절대경로 아님).
+
+```bash
+# 기본(balloon_nano_v8.engine) — 그냥 실행
+ros2 launch arms_bringup arms.launch.py
+
+# 다른 모델 지정
+ros2 launch arms_bringup arms.launch.py model:=/models/balloon_nano_v7.engine
+```
+
+- **기본값은 `/models/balloon_nano_v8.engine`** (`arms.launch.py` / `arms_replay.launch.py` 공통).
+- Jetson 은 **`.engine`(TensorRT)** 만 로드합니다. `.pt` 는 먼저 변환하세요:
+  `python3 SW/yolo/export_trt.py`(모델 지정: `ARMS_PT=/models/<파일>.pt`). 변환된 `.engine`
+  은 `.../docker/models/` 에 생기고 컨테이너 `/models/` 에서 바로 보입니다.
+- 컨테이너를 직접(런치 없이) 올릴 땐 `ARMS_MODEL` 환경변수로 고릅니다. 단 `docker compose
+  restart` 로는 안 바뀌고 **재생성**해야 합니다:
+  ```bash
+  cd SW/arms_ws/src/arms_detection/docker
+  ARMS_MODEL=/models/balloon_nano_v7.engine docker compose -f docker-compose.jetson.yml up -d --force-recreate
+  ```
+  현재 로드된 모델 확인:
+  ```bash
+  docker inspect docker-arms_detection-1 --format '{{range .Config.Env}}{{println .}}{{end}}' | grep ARMS_MODEL
+  ```
+
 ### A-3. 샘플 영상 replay (카메라·FC 없이 파이프라인 테스트)
 
 저장된 샘플 영상으로 detection → control → UI 파이프라인을 검증합니다. 캡처 동글이나
@@ -109,7 +138,7 @@ ros2 launch arms_bringup arms_replay.launch.py controller:=real   # 실기체 ES
 ```
 
 ```bash
-# 기본 샘플(sample1.mov) + 기본 모델(balloon_camera.pt)
+# 기본 샘플(sample1.mov) + 기본 모델(balloon_nano_v8.engine)
 ros2 launch arms_bringup arms_replay.launch.py
 
 # 다른 영상 지정 (절대경로 권장)
@@ -120,7 +149,7 @@ ros2 launch arms_bringup arms_replay.launch.py \
 ros2 launch arms_bringup arms_replay.launch.py publish_rate:=15.0
 
 # 다른 가중치 사용 / detection 컨테이너 끄기
-ros2 launch arms_bringup arms_replay.launch.py model:=/models/balloon.engine
+ros2 launch arms_bringup arms_replay.launch.py model:=/models/balloon_nano_v7.engine
 ros2 launch arms_bringup arms_replay.launch.py start_detection:=false
 ```
 
@@ -128,7 +157,7 @@ ros2 launch arms_bringup arms_replay.launch.py start_detection:=false
 | ----------------- | --------------------------------- | ----------------------------------------- |
 | `video_path`      | `SW/sample_viedo/sample1.mov`     | 재생할 영상 파일 (절대경로 권장)          |
 | `publish_rate`    | `30.0`                            | `/arms/image_raw` 발행 fps                |
-| `model`           | `/models/balloon_camera.engine`   | detection 컨테이너가 로드할 가중치        |
+| `model`           | `/models/balloon_nano_v8.engine`     | detection 컨테이너가 로드할 가중치 (컨테이너 경로 `/models/…`) |
 | `start_detection` | `true`                            | detection 도커 컨테이너 자동 기동 여부    |
 | `controller`      | `gui`                             | 조종기 소스: `gui`(SITL 가상 조종기) / `real`(실기체 ESP32) |
 | `crsf_port`       | `/dev/ttyUSB0`                    | ELRS TX 시리얼 포트 (제어 출력용)         |

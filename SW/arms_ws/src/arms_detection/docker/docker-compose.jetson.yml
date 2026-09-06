@@ -21,7 +21,7 @@ services:
       # and host because FastDDS SHM requires FD passing via Unix socket, which
       # does not work across the container boundary even with ipc: host.
       - FASTRTPS_DEFAULT_PROFILES_FILE=/fastdds_udp.xml
-      - ARMS_MODEL=${ARMS_MODEL:-/models/best_nano_v6.engine}
+      - ARMS_MODEL=${ARMS_MODEL:-/models/balloon_nano_v8.engine}
       # 실내 기본값 0.25 (야외/원거리는 0.32~). YOLO 가 실내에서 표적을 놓치면
       # 이 값을 더 낮춰본다. control 노드의 detection_confidence_threshold(실기체 0.25)와 맞춤.
       - ARMS_CONF=${ARMS_CONF:-0.25}

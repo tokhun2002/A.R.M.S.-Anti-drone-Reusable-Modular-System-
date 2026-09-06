@@ -17,7 +17,7 @@ Environment=DISPLAY=:0
 Environment=XAUTHORITY=/run/user/1000/gdm/Xauthority
 Environment=ROS_DOMAIN_ID=0
 
-ExecStart=/home/arms/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/startup/start_arms.sh
+ExecStart=/home/arms/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/jetson_setting/startup/start_arms.sh
 
 # 죽으면 재시작 (스크립트가 장치/도커 준비를 대기하므로 시작 타임아웃 여유).
 Restart=on-failure

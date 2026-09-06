@@ -4,7 +4,7 @@
 자동으로 뜨게 하는 설정이다.
 
 ```
-SW/startup/
+SW/jetson_setting/startup/
 ├── start_arms.sh            # 실제 기동 스크립트 (ROS/워크스페이스 source → 도커·장치 대기 → launch)
 ├── arms.service             # 방법 A: systemd 서비스 (권장, 자동 재시작·로그)
 ├── arms-autostart.desktop   # 방법 B: 데스크톱 autostart (가장 단순, GUI 세션에 자연스럽게 뜸)
@@ -30,11 +30,11 @@ SW/startup/
    cd ~/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/arms_ws/src/arms_detection/docker
    docker compose -f docker-compose.jetson.yml build
    ```
-   - YOLO 엔진(`models/balloon.engine` 등)은 **이 젯슨에서 빌드된 것**이어야 한다
-     (`SW/YOLO_balloon/export_trt.py` 참고). compose 기본값은 `/models/balloon.engine`.
+   - YOLO 엔진(`models/balloon_nano_v8.engine` 등)은 **이 젯슨에서 빌드된 것**이어야 한다
+     (`SW/YOLO_balloon/export_trt.py` 참고). compose 기본값은 `/models/balloon_nano_v8.engine`.
 3. **스크립트 실행권한**
    ```bash
-   chmod +x ~/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/startup/start_arms.sh
+   chmod +x ~/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/jetson_setting/startup/start_arms.sh
    ```
 4. **장치·권한** — CRSF UART(`/dev/ttyTHS1`, nvgetty 비활성), 서보 PWM(핀15 pinmux +
    `/sys/class/pwm` 권한), ESP32 시리얼(dialout), 카메라(`/dev/video0`). 각 하위
@@ -57,7 +57,7 @@ SW/startup/
    (그리고 `User=`, `ExecStart=` 경로가 맞는지 확인).
 3. 설치·활성화:
    ```bash
-   sudo cp ~/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/startup/arms.service \
+   sudo cp ~/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/jetson_setting/startup/arms.service \
            /etc/systemd/system/arms.service
    sudo systemctl daemon-reload
    sudo systemctl enable arms.service     # 부팅 시 자동 시작 등록
@@ -87,7 +87,7 @@ SW/startup/
 
 ```bash
 mkdir -p ~/.config/autostart
-cp ~/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/startup/arms-autostart.desktop \
+cp ~/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/jetson_setting/startup/arms-autostart.desktop \
    ~/.config/autostart/arms-autostart.desktop
 ```
 - 해제: `rm ~/.config/autostart/arms-autostart.desktop`
@@ -131,7 +131,7 @@ pkill -INT -f "ros2 launch arms_bringup"; docker stop docker-arms_detection-1
 
 부팅 자동화 전에 스크립트가 잘 뜨는지 확인:
 ```bash
-~/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/startup/start_arms.sh
+~/A.R.M.S.-Anti-drone-Reusable-Modular-System-/SW/jetson_setting/startup/start_arms.sh
 ```
 UI 창이 뜨고 노드들이 올라오면 성공. Ctrl-C 로 종료.
 

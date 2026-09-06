@@ -13,7 +13,7 @@
   동작한다. 이 런치가 'docker compose up -d' 로 자동 기동한다(멱등). start_detection:=false
   로 끌 수 있고, 로드할 가중치는 model:= 로 고른다(기본 balloon_camera.pt).
     ros2 launch arms_bringup arms_replay.launch.py                              # 카메라모델(기본)
-    ros2 launch arms_bringup arms_replay.launch.py model:=/models/balloon.engine
+    ros2 launch arms_bringup arms_replay.launch.py model:=/models/balloon_nano_v8.engine
 """
 
 import os
@@ -96,9 +96,9 @@ def generate_launch_description():
         DeclareLaunchArgument("start_detection", default_value="true",
                               description="detection(YOLO) 도커 컨테이너 자동 기동 여부"),
         DeclareLaunchArgument(
-            "model", default_value="/models/best_nano_v6.engine",
+            "model", default_value="/models/balloon_nano_v8.engine",
             description="detection 컨테이너가 로드할 가중치(컨테이너 내부 경로). "
-                        "기본=/models/best_nano_v6.engine (nano FP16 TensorRT)"),
+                        "기본=/models/balloon_nano_v8.engine (nano FP16 TensorRT)"),
         # UI 표시 옵션 (replay 기본: 창모드·디버그 오버레이 on). 실기체 arms.launch.py 는
         # 전체화면·메인화면만이 기본. 필요하면 여기서 인자로 뒤집을 수 있다.
         DeclareLaunchArgument("fullscreen", default_value="false",

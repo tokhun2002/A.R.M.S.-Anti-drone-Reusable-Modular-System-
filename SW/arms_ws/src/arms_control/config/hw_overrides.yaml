@@ -16,12 +16,6 @@ arms_control_node:
       port: "/dev/ttyUSB0"
       baud: 115200
 
-    # 실기체 배터리: 셀 수는 전압으로 자동 감지한다(cells=ceil(V/4.3)). 셀 전압만 조정 가능.
-    #   방전 컷오프를 보수적으로 잡고 싶으면 cell_empty_v 를 3.5~3.6 으로 올린다.
-    battery:
-      cell_full_v: 4.2
-      cell_empty_v: 3.5
-
     # 실기체: 발사 잠금장치 서보 활성화 (핀15 PWM1, pwmchip0 ch0).
     #   전제: jetson-io 로 핀15 PWM1 pinmux 설정 + /sys/class/pwm 쓰기 권한(99-gpio.rules).
     servo:

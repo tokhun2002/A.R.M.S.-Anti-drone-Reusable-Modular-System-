@@ -92,8 +92,11 @@ arms_control_node:
       control_rate_hz: 50.0   # 제어 주파수. 높을수록 반응 빠르고 매끄러움(PN 정확도↑). 카메라 60Hz 와 짝
 
       # ── 유도 방식 ─────────────────────────────────────────────────────
-      # 0 = 기본 추적 (픽셀오차 PID 추종)
-      # 1 = PN 비례항법 (시선각속도를 없애도록 조종 → 미래 충돌점을 앞질러 겨냥)
+      # 0 = 기본 추적 (픽셀오차 PID 추종). 리드는 lead_gain(시간기반)으로 준다.
+      # 1 = PN 비례항법 (시선각속도를 없애도록 조종 → 미래 충돌점을 앞질러 겨냥).
+      #     리드를 alpha-beta(pn_alpha/pn_beta)로 스스로 만든다 → lead_gain 은 안 쓴다.
+      # ★ 두 방식은 배타적이다. 아래 파라미터는 "mode 0 전용 / mode 1(PN) 전용"으로 나뉘며,
+      #   현재 mode 와 무관한 쪽 값은 무시된다. 소속을 각 블록 머리에 표기했다.
       guidance_mode: 0
 
       # 중심 근처 게인 감쇠(gain_scale / pitch_scale) 스위치. false = 순수 P.
@@ -103,7 +106,7 @@ arms_control_node:
       #   장치라, 표적이 중앙에 안 붙는 증상을 만들 수 있다.
       gain_shaping: false
 
-      # ── 기본 추적 PID (guidance_mode 0) ───────────────────────────────
+      # ── 기본 추적 PID [mode 0 전용] ───────────────────────────────────
       # 단위: 정규화 픽셀오차 → 각속도[deg/s].
       #   출력 한계는 아래 max_cmd_rate_dps 하나다 (per-PID output_limit 삭제).
       #   kp 를 올릴 때 포화 시작점이 같이 내려간다: |오차| = max_cmd_rate_dps/kp
@@ -121,13 +124,18 @@ arms_control_node:
       roll_sign: 1.0
       pitch_sign: 1.0
 
-      # 예측 조준(lead): 움직이는 표적의 미래 위치를 겨냥. PN 이 리드를 담당하므로
-      # guidance_mode 1 에서는 꺼 둔다(0.0).
+      # 예측 조준(lead) — [mode 0 전용]. 움직이는 표적의 미래 위치를 겨냥.
+      #   PN(mode 1)은 리드를 alpha-beta 로 따로 만들므로 lead_gain 을 안 읽는다 → 0 유지.
       lead_gain: 0.0
-      lead_dot_alpha: 0.2     # 표적 속도추정 LPF (클수록 예측 민첩/노이즈↑)
-      lead_clamp: 0.6         # 속도추정 스파이크 제한
 
-      # ── PN 비례항법 (guidance_mode 1) ─────────────────────────────────
+      # 표적 속도추정(err_dot) — [mode 0 전용]. LOS 미분+LPF 로 표적 각속도를 추정한다.
+      #   lead_gain(리드)과 gain_shaping 이 이 값을 공유한다(그래서 lead_ 접두사 아님).
+      #   둘 다 꺼져 있으면(lead_gain=0, gain_shaping=false) 출력엔 영향 없고 로그 표시용.
+      #   PN(mode 1)은 이 대신 pn_alpha/pn_beta 로 시선각속도를 추정한다.
+      err_dot_alpha: 0.2      # 속도추정 LPF (클수록 예측 민첩/노이즈↑)
+      err_dot_clamp: 0.6      # 속도추정 스파이크 제한
+
+      # ── PN 비례항법 [mode 1 전용] ─────────────────────────────────────
       # ★ 아래 게인은 구 물리량(1.36kg·둔감) 기준 "3.6m/s 검증값"이다. 현재
       #   기체는 더 가볍고 응답이 빨라 SITL 재검증이 필요하다.
       #   빠른 표적 못 잡으면 pn_nav_gain ↑ / 떨리면 pn_nav_gain ↓ 또는 alpha·beta ↓

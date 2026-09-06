@@ -110,9 +110,10 @@ class ArmsControlNode : public rclcpp::Node {
     // pursuit_center_boost: true=중앙 정렬될수록 추력↑(center_q 스케일, 기존동작).
     //                       false=정렬 무관 상수 추력(track_throttle 고정) → "정렬시 추력증가" 비활성.
     declare_parameter("control.pursuit_center_boost", true);
-    // 예측조준(Lead): 움직이는 공의 미래 위치를 겨냥. lead_gain(리드 세기)은 위에 이미 있음.
-    declare_parameter("control.lead_dot_alpha", 0.2);   // 표적 속도추정 LPF(클수록 민첩/노이즈↑)
-    declare_parameter("control.lead_clamp", 0.6);       // 속도추정 스파이크 제한[1/s]
+    // 표적 속도추정(err_dot): LOS 미분+LPF. guidance_mode 0 의 리드(lead_gain)와 gain_shaping 이 공유.
+    //   PN(mode 1)은 이 값을 안 쓰고 alpha-beta(pn_alpha/beta) 로 리드를 따로 만든다.
+    declare_parameter("control.err_dot_alpha", 0.2);    // 표적 속도추정 LPF(클수록 민첩/노이즈↑)
+    declare_parameter("control.err_dot_clamp", 0.6);    // 속도추정 스파이크 제한[1/s]
     // 각도 단계는 없다. PID/PN 이 곧바로 각속도[deg/s] 명령을 낸다.
     //   예전에는 PID -> '목표기울기[deg]' -> clamp(max_tilt) -> x att_p -> 각속도 였는데,
     //   자세 피드백이 없어서 그 '각도'는 이름뿐이었고 att_p 는 kp 와 직렬로 곱해지는
@@ -218,8 +219,8 @@ class ArmsControlNode : public rclcpp::Node {
     hover_throttle_ = get_parameter("control.hover_throttle").as_double();
     pursuit_gate_ = get_parameter("control.pursuit_gate").as_double();
     pursuit_center_boost_ = get_parameter("control.pursuit_center_boost").as_bool();
-    lead_dot_alpha_ = get_parameter("control.lead_dot_alpha").as_double();
-    lead_clamp_ = get_parameter("control.lead_clamp").as_double();
+    err_dot_alpha_ = get_parameter("control.err_dot_alpha").as_double();
+    err_dot_clamp_ = get_parameter("control.err_dot_clamp").as_double();
     max_cmd_rate_dps_ = get_parameter("control.max_cmd_rate_dps").as_double();
     guidance_mode_ = static_cast<int>(get_parameter("control.guidance_mode").as_int());
     pn_nav_gain_ = get_parameter("control.pn_nav_gain").as_double();
@@ -279,10 +280,10 @@ class ArmsControlNode : public rclcpp::Node {
               hit_rtl_via_referee_ = p.as_bool();
             else if (n == "mission.looming_fire_enabled")
               looming_fire_enabled_ = p.as_bool();
-            else if (n == "control.lead_dot_alpha")
-              lead_dot_alpha_ = p.as_double();
-            else if (n == "control.lead_clamp")
-              lead_clamp_ = p.as_double();
+            else if (n == "control.err_dot_alpha")
+              err_dot_alpha_ = p.as_double();
+            else if (n == "control.err_dot_clamp")
+              err_dot_clamp_ = p.as_double();
             else if (n == "control.max_cmd_rate_dps") {
               max_cmd_rate_dps_ = p.as_double();
               pid_changed = true;   // PID 출력 한계도 이 값이라 같이 반영해야 한다
@@ -688,13 +689,13 @@ class ArmsControlNode : public rclcpp::Node {
       double ey = apply_deadzone(los_y, deadzone_);
       if (dt > 1e-6) {
         // 표적 시선각속도(LOS rate) 추정 = 예측조준의 핵심 신호 (보정 LOS 의 미분).
-        const double DOT_A = lead_dot_alpha_;
+        const double DOT_A = err_dot_alpha_;
         double raw_dx = (los_x - prev_err_x_) / dt;
         double raw_dy = (los_y - prev_err_y_) / dt;
         err_dot_x_ = DOT_A * raw_dx + (1.0 - DOT_A) * err_dot_x_;
         err_dot_y_ = DOT_A * raw_dy + (1.0 - DOT_A) * err_dot_y_;
-        err_dot_x_ = std::clamp(err_dot_x_, -lead_clamp_, lead_clamp_);
-        err_dot_y_ = std::clamp(err_dot_y_, -lead_clamp_, lead_clamp_);
+        err_dot_x_ = std::clamp(err_dot_x_, -err_dot_clamp_, err_dot_clamp_);
+        err_dot_y_ = std::clamp(err_dot_y_, -err_dot_clamp_, err_dot_clamp_);
       }
       prev_err_x_ = los_x;
       prev_err_y_ = los_y;
@@ -1127,8 +1128,8 @@ class ArmsControlNode : public rclcpp::Node {
   double hover_throttle_{0.51};
   double pursuit_gate_{0.25};
   bool   pursuit_center_boost_{true};   // 중앙 정렬시 추력증가 on/off (config)
-  double lead_dot_alpha_{0.2};
-  double lead_clamp_{0.6};
+  double err_dot_alpha_{0.2};
+  double err_dot_clamp_{0.6};
   double max_cmd_rate_dps_{227.5};   // 유도 출력 각속도 상한[deg/s]
   bool   gain_shaping_{false};       // 중심 근처 게인 감쇠 (기본 off = 순수 P)
   // 유도(Guidance): 기본 추적(0) / 비례항법 PN(1)

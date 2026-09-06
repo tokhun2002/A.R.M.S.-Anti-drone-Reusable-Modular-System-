@@ -5,9 +5,9 @@ Full real-hardware launch: arms_video + arms_command + arms_detection + arms_con
 - Detection(YOLO+HSV+absdiff)은 GPU 도커 컨테이너로 동작. 이 런치가 'docker compose
   up -d' 로 자동 기동한다(멱등: 안 떠 있으면 띄우고, 떠 있으면 그대로). start_detection:=false
   로 끌 수 있음. 도커를 못 쓰거나 compose 를 못 찾으면 경고만 남기고 나머지는 계속 뜬다.
-  로드할 가중치는 model:= 로 고른다 (기본 balloon.engine):
-    ros2 launch arms_bringup arms.launch.py                                  # balloon(기본)
-    ros2 launch arms_bringup arms.launch.py model:=/models/drone.engine      # 드론 추적
+  로드할 가중치는 model:= 로 고른다 (기본 balloon_nano_v8.engine):
+    ros2 launch arms_bringup arms.launch.py                                     # balloon nano v8(기본)
+    ros2 launch arms_bringup arms.launch.py model:=/models/drone_small.engine   # 드론 추적
 """
 
 import os
@@ -64,10 +64,10 @@ def generate_launch_description():
         DeclareLaunchArgument("start_detection", default_value="true",
                               description="detection(YOLO) 도커 컨테이너 자동 기동 여부"),
         DeclareLaunchArgument(
-            "model", default_value="/models/best_nano_v6.engine",
+            "model", default_value="/models/balloon_nano_v8.engine",
             description="detection 컨테이너가 로드할 가중치(컨테이너 내부 경로). "
-                        "기본=/models/best_nano_v6.engine(nano FP16 TRT), "
-                        "드론추적=/models/drone.engine"),
+                        "기본=/models/balloon_nano_v8.engine(nano FP16 TRT), "
+                        "드론추적=/models/drone_small.engine"),
         # UI 표시 옵션 (실기체 기본: 전체화면·메인화면만).
         DeclareLaunchArgument("fullscreen", default_value="true",
                               description="UI 전체화면 여부 (true/false)"),
