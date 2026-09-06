@@ -87,6 +87,9 @@ class ArmsUINode(Node):
 
         # PiP 크기 (프레임 폭 대비 ROI 표시 폭 비율)
         self.declare_parameter("ui.roi_pip_frac", 0.25)
+        # ROI PiP 확대 배율: 표적 bbox 를 이 배율로 넓혀 원본 프레임에서 크롭한다.
+        #   (검출 컨테이너가 roi_image 를 되쏘지 않고 UI 가 직접 크롭 — 대역폭/지연 절감)
+        self.declare_parameter("ui.roi_pip_margin", 1.8)
         # ui.cv_debug: 검출 진단 패널(오른쪽에 HSV 미리보기 + 성능 그래프)을 붙일지.
         #   True 면 /arms/hsv_debug_image 를 구독한다. False(실기체 기본) → 메인 화면만.
         #   hsv_debug 를 구독조차 안 하므로 detection 이 발행을 통째로 스킵(구독자 gated) →
@@ -159,7 +162,6 @@ class ArmsUINode(Node):
         self.create_subscription(DetectionArray, "/arms/detections", self._cb_detections, 10)
         self.create_subscription(MissionState, "/arms/mission_state", self._cb_state, 10)
         self.create_subscription(Vector3, "/arms/control_debug", self._cb_debug, 10)
-        self.create_subscription(Image, "/arms/roi_image", self._cb_roi, best_effort_qos)
         # hsv_debug_image(≈500KB raw)는 cv_debug 패널일 때만 구독한다. 아니면
         # 구독자가 0이라 detection 이 발행 자체를 스킵 → UDP 부하/지연이 사라진다.
         if self._cv_debug:
@@ -491,13 +493,29 @@ class ArmsUINode(Node):
 
         threading.Thread(target=_run, daemon=True).start()
 
-    def _cb_roi(self, msg: Image):
-        if msg.width == 0 or msg.height == 0 or len(msg.data) == 0:
+    def _update_roi_from_frame(self, frame):
+        """최신 검출 bbox 로 원본 프레임에서 ROI 확대뷰를 직접 크롭한다.
+
+        검출 컨테이너가 roi_image 를 되쏘던 것을 UI 로 옮긴 것(대역폭/지연 절감).
+        오버레이가 섞이지 않도록 반드시 '그리기 전 깨끗한 frame' 에서 호출한다.
+        """
+        dets = self._latest_detections.detections
+        if not dets:
+            self._latest_roi = None
             return
-        try:
-            self._latest_roi = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        except Exception as e:
-            self.get_logger().warn(f"roi cv_bridge error: {e}")
+        box = dets[0]
+        H, W = frame.shape[:2]
+        margin = float(self.get_parameter("ui.roi_pip_margin").value)
+        bw = box.width * W * margin
+        bh = box.height * H * margin
+        cx, cy = box.x_center * W, box.y_center * H
+        x1 = int(max(0, cx - bw / 2)); y1 = int(max(0, cy - bh / 2))
+        x2 = int(min(W, cx + bw / 2)); y2 = int(min(H, cy + bh / 2))
+        if x2 - x1 < 2 or y2 - y1 < 2:
+            self._latest_roi = None
+            return
+        # frame 에 이후 오버레이가 in-place 로 그려지므로 반드시 copy.
+        self._latest_roi = frame[y1:y2, x1:x2].copy()
 
     def _cb_hsv_debug(self, msg: Image):
         if msg.width == 0 or msg.height == 0 or len(msg.data) == 0:
@@ -586,9 +604,13 @@ class ArmsUINode(Node):
 
         # 수동 모드에서는 원본 영상 + arm/disarm 표시, 오버레이는 생략한다.
         if not self._manual_mode:
+            live = (self._latest_state.state or "IDLE") != "IDLE"
+            # ROI PiP 는 오버레이를 그리기 전 '깨끗한' 프레임에서 크롭한다
+            #   (오버레이가 확대뷰에 섞이지 않도록). IDLE 에선 표시하지 않는다.
+            if live:
+                self._update_roi_from_frame(frame)
             self._draw_overlay(frame)
-            # IDLE 에선 표적 확대 뷰(ROI PiP)도 표시하지 않는다.
-            if (self._latest_state.state or "IDLE") != "IDLE":
+            if live:
                 self._draw_roi_pip(frame)
         else:
             self._draw_manual_arm(frame)

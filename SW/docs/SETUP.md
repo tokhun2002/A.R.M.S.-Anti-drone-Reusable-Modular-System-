@@ -96,21 +96,27 @@ detection 이 로드할 가중치는 `model:=` 로 고릅니다. 경로는 **컨
 # 기본(balloon_nano_v8.engine) — 그냥 실행
 ros2 launch arms_bringup arms.launch.py
 
-# 다른 모델 지정
-ros2 launch arms_bringup arms.launch.py model:=/models/balloon_nano_v7.engine
+# 다른 모델 지정 (아래 ⚠️ — 컨테이너가 이미 떠 있으면 이것만으론 안 바뀝니다)
+ros2 launch arms_bringup arms.launch.py model:=/models/drone_small.engine
 ```
+
+> ⚠️ **`model:=` 는 detection 컨테이너를 "새로 만들 때"만 반영됩니다.** 런치의 `docker compose
+> up -d` 는 멱등이라, 이미 다른 모델로 떠 있는 컨테이너는 그대로 두고 모델을 **안 바꿉니다**
+> (`restart` 도 마찬가지). 실행 중인 컨테이너의 모델을 바꾸려면 **`ARMS_MODEL` + 재생성
+> (`--force-recreate`)** 을 먼저 하고 런치를 띄우세요:
+>
+> ```bash
+> cd SW/arms_ws/src/arms_detection/docker
+> ARMS_MODEL=/models/drone_small.engine docker compose -f docker-compose.jetson.yml up -d --force-recreate
+> ```
+>
+> 그 다음(또는 컨테이너가 아직 안 떠 있을 때)만 런치의 `model:=` 이 그대로 적용됩니다.
 
 - **기본값은 `/models/balloon_nano_v8.engine`** (`arms.launch.py` / `arms_replay.launch.py` 공통).
 - Jetson 은 **`.engine`(TensorRT)** 만 로드합니다. `.pt` 는 먼저 변환하세요:
   `python3 SW/yolo/export_trt.py`(모델 지정: `ARMS_PT=/models/<파일>.pt`). 변환된 `.engine`
   은 `.../docker/models/` 에 생기고 컨테이너 `/models/` 에서 바로 보입니다.
-- 컨테이너를 직접(런치 없이) 올릴 땐 `ARMS_MODEL` 환경변수로 고릅니다. 단 `docker compose
-  restart` 로는 안 바뀌고 **재생성**해야 합니다:
-  ```bash
-  cd SW/arms_ws/src/arms_detection/docker
-  ARMS_MODEL=/models/balloon_nano_v7.engine docker compose -f docker-compose.jetson.yml up -d --force-recreate
-  ```
-  현재 로드된 모델 확인:
+- 현재 로드된 모델 확인:
   ```bash
   docker inspect docker-arms_detection-1 --format '{{range .Config.Env}}{{println .}}{{end}}' | grep ARMS_MODEL
   ```

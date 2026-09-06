@@ -138,7 +138,7 @@ graph TD
 | 노드                   | subscribe                                                                                    | publish                                                                                   |
 | ---------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `arms_video_node`      | —                                                                                            | `/arms/image_raw`                                                                         |
-| `arms_detection_node`  | `/arms/image_raw`                                                                            | `/arms/detections`<br/>(구독 있을 때만) `/arms/debug_image`·`/arms/roi_image`·`/arms/hsv_debug_image`·`/arms/detector_status` |
+| `arms_detection_node`  | `/arms/image_raw`                                                                            | `/arms/detections`<br/>(구독 있을 때만) `/arms/debug_image`·`/arms/hsv_debug_image`·`/arms/detector_status` |
 | `arms_command_node`    | —                                                                                            | `/arms/command` (가상 조종기, SITL)                                                       |
 | `arms_command_hw_node` | —                                                                                            | `/arms/command` (실기체 ESP32)                                                            |
 | `panel` (`arms_sim`)   | `/arms/mission_state`                                                                        | — (`ros2 param set` 으로 튜닝/심판 제어)                                                  |
@@ -297,7 +297,7 @@ arms_video_node는 영상 소스에 따라 두 가지 모드로 동작한다.
         |
         v
 /arms/detections (arms_msgs/DetectionArray)
-  [+ 구독자 있을 때만: /arms/debug_image, /arms/roi_image,
+  [+ 구독자 있을 때만: /arms/debug_image,
      /arms/hsv_debug_image, /arms/detector_status]
 ```
 
@@ -831,4 +831,4 @@ arms_control_node  (state machine + PID)
 
 ---
 
-_Document version: 0.10 — 2026-09-05_
+_Document version: 0.11 — 2026-09-06_

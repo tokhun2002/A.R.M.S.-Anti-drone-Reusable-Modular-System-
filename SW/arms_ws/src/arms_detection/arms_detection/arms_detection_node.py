@@ -14,7 +14,6 @@ arms_detection_node — A.R.M.S. 빨간 풍선 검출기
 토픽
   구독 : /arms/image_raw        sensor_msgs/Image
   발행 : /arms/detections       arms_msgs/DetectionArray
-  발행 : /arms/roi_image        sensor_msgs/Image  (bgr8, 표적 확대 크롭)
   발행 : /arms/debug_image      sensor_msgs/Image  (bgr8, 모든 검출기 결과+최종 시각화)
   발행 : /arms/hsv_debug_image  sensor_msgs/Image  (bgr8, HSV 마스크와 후보 시각화)
   발행 : /arms/detector_status  std_msgs/Float32MultiArray (검출·처리시간 진단값)
@@ -27,7 +26,6 @@ arms_detection_node — A.R.M.S. 빨간 풍선 검출기
   filter.confirm_dist   : float 연속 판정 중심거리(정규화) (기본 0.035)
   filter.jump_gate      : float 확정 후 예측 대비 위치 급변 차단 거리, 0=off (기본 0.4)
   filter.max_age         : int  연속 miss 이만큼이면 표적 제거(LOST→REMOVED) (기본 8)
-  roi.margin            : float /arms/roi_image 확대뷰 크롭 배율 (기본 1.8)
 """
 
 import os
@@ -269,7 +267,6 @@ class ArmsDetectionNode(Node):
         self.declare_parameter("filter.confirm_dist", 0.035)  # NEW: "같은 위치" 연속 판정 중심거리(정규화)
         self.declare_parameter("filter.jump_gate", 0.4)       # TRACKED 유지 게이트: 예측서 이만큼 넘게 튀면 기각→miss (0=off)
         self.declare_parameter("filter.max_age", 8)           # LOST→REMOVED: 연속 miss 이만큼이면 표적 제거
-        self.declare_parameter("roi.margin", 1.8)             # /arms/roi_image 확대뷰 크롭 배율
 
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                          history=HistoryPolicy.KEEP_LAST, depth=1)
@@ -329,7 +326,6 @@ class ArmsDetectionNode(Node):
 
         self.pub_det     = self.create_publisher(DetectionArray, "/arms/detections",    10)
         self.pub_debug   = self.create_publisher(Image,          "/arms/debug_image",   10)
-        self.pub_roi     = self.create_publisher(Image,          "/arms/roi_image",     10)
         self.pub_hsv_debug = self.create_publisher(
             Image, "/arms/hsv_debug_image", 10)
         # 상태 배열: [yolo, hsv proposal, legacy slot, mode]. legacy slot은 -1 고정.
@@ -417,10 +413,8 @@ class ArmsDetectionNode(Node):
             out.detections.append(target)
         self.pub_det.publish(out)
 
-        # ROI 확대 뷰 (유효 타깃 + 구독자 있을 때만) — full-res 에서 크롭
-        if target is not None and self.pub_roi.get_subscription_count() > 0:
-            self._publish_roi(bgr_full, target, header,
-                              float(self.get_parameter("roi.margin").value))
+        # ROI 확대 뷰(PiP)는 UI 노드가 /arms/detections bbox 로 직접 크롭한다
+        #   (컨테이너→호스트 roi_image 전송 제거로 발행 부하·대역폭 절감).
 
         # 디버그 이미지는 구독자가 있을 때만 그려서 발행 (없으면 발행 비용 전부 절감)
         if self.pub_debug.get_subscription_count() > 0:
@@ -534,20 +528,6 @@ class ArmsDetectionNode(Node):
         b.class_id   = box.class_id
         b.class_name = box.class_name
         return b
-
-    def _publish_roi(self, bgr_full, box, header, margin):
-        H, W = bgr_full.shape[:2]
-        bw = box.width * W * margin
-        bh = box.height * H * margin
-        cx, cy = box.x_center * W, box.y_center * H
-        x1 = int(max(0, cx - bw / 2)); y1 = int(max(0, cy - bh / 2))
-        x2 = int(min(W, cx + bw / 2)); y2 = int(min(H, cy + bh / 2))
-        if x2 - x1 < 2 or y2 - y1 < 2:
-            return
-        crop = bgr_full[y1:y2, x1:x2]
-        if crop.size == 0:
-            return
-        self.pub_roi.publish(bgr_to_imgmsg(np.ascontiguousarray(crop), header))
 
     # ------------------------------------------------------------------
     # Detectors
