@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""실기체 비행 UI 녹화기 (video_save:=true 일 때 arms.launch.py 가 기동).
+"""실기체 비행 로그 녹화기 (auto_save:=true 일 때 arms.launch.py 가 기동).
 
-자동모드에서 SEARCH 진입 시 UI 화면 토픽(/arms/ui_image/compressed)을 rosbag 으로
-녹화하기 시작하고, 조종기의 ARM(=자동모드 search) 스위치를 내릴 때까지 저장한다.
+자동모드에서 SEARCH 진입 시 record_topics(UI 영상 + 검출 raw/필터/진단 + CRSF 송·수신
++ 상태/조종)를 rosbag(mcap)으로 녹화하기 시작하고, 조종기의 ARM(=자동모드 search)
+스위치를 내릴 때까지 저장한다.
   · kill(buttons[0]) 은 무관 → kill 이 걸려도 ARM 스위치가 위면 계속 녹화.
   · 저장 위치: ~/arms_flight_log/<YYYYmmdd_HHMMSS>/  (비행 시작 일시)
+  · detections_raw = 칼만 적용 전 원시 검출 → 추후 KF 파라미터 오프라인 재현/튜닝용.
 
 /arms/command(Joy) 스위치: buttons[0]=kill, [1]=arm, [2]=mode(0=auto/1=manual), [3]=launch.
 """
@@ -24,10 +26,22 @@ from arms_msgs.msg import MissionState
 class FlightRecorder(Node):
     def __init__(self):
         super().__init__("flight_recorder")
-        # 녹화할 토픽(UI 압축 화면). 필요하면 여러 개로 확장 가능.
-        self.declare_parameter("record_topic", "/arms/ui_image/compressed")
+        # 녹화할 토픽 목록. 영상(UI) + 검출 raw/필터/진단 + CRSF 송·수신 + 상태/조종.
+        #   detections_raw = 칼만 적용 전 원시 측정값(추후 KF 튜닝 재현용).
+        #   crsf_tx=송신 채널, crsf_rx=수신 텔레메트리(배터리/링크/자세). 배터리 별도 토픽은 없다.
+        #   대부분 구독자 있을 때만 발행되는 토픽이라, 이 녹화기가 구독하면 자동으로 켜진다.
+        self.declare_parameter("record_topics", [
+            "/arms/ui_image/compressed",
+            "/arms/detections_raw",
+            "/arms/detections",
+            "/arms/detector_status",
+            "/arms/crsf_tx",
+            "/arms/crsf_rx",
+            "/arms/mission_state",
+            "/arms/command",
+        ])
         self.declare_parameter("save_dir", "~/arms_flight_log")
-        self._topic = self.get_parameter("record_topic").value
+        self._topics = list(self.get_parameter("record_topics").value)
         self._save_dir = os.path.expanduser(self.get_parameter("save_dir").value)
         os.makedirs(self._save_dir, exist_ok=True)
 
@@ -61,10 +75,12 @@ class FlightRecorder(Node):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._bag_dir = os.path.join(self._save_dir, ts)
         # ros2 bag record 는 -o 경로가 없어야 새로 만든다. 그룹세션으로 띄워 SIGINT 를 그룹째 보낸다.
-        cmd = ["ros2", "bag", "record", "-o", self._bag_dir, self._topic]
+        #   --storage mcap: sqlite3 대비 쓰기 성능·견고성이 낫다(Orin Nano 하드웨어 인코더 없음 → 영상은 이미 JPEG).
+        cmd = ["ros2", "bag", "record", "--storage", "mcap", "-o", self._bag_dir, *self._topics]
         try:
             self._proc = subprocess.Popen(cmd, start_new_session=True)
-            self.get_logger().info(f"[REC] 녹화 시작 → {self._bag_dir}  ({self._topic})")
+            self.get_logger().info(
+                f"[REC] 녹화 시작 → {self._bag_dir}  ({len(self._topics)}개 토픽)")
         except Exception as e:
             self.get_logger().error(f"[REC] 녹화 시작 실패: {e}")
             self._proc = None

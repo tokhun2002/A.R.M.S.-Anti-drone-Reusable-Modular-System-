@@ -28,10 +28,10 @@ from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import BatteryState, CompressedImage, Image, Joy
+from sensor_msgs.msg import CompressedImage, Image, Joy
 from std_msgs.msg import Float32MultiArray
 
-from arms_msgs.msg import DetectionArray, MissionState
+from arms_msgs.msg import CrsfTelemetry, DetectionArray, MissionState
 from geometry_msgs.msg import Vector3
 
 # /arms/command Joy 버튼 인덱스 (arms_command_uart_node.cpp / arms_control_node.cpp 와 일치)
@@ -172,8 +172,8 @@ class ArmsUINode(Node):
         # 메시지를 받는다. (RELIABLE 구독이면 BEST_EFFORT 발행을 하나도 못 받아 모드 전환
         # 오버레이/효과음이 동작하지 않음.)
         self.create_subscription(Joy, "/arms/command", self._cb_command, best_effort_qos)
-        # arms_control 이 CRSF 배터리 텔레메트리를 표준 메시지로 재발행 (RELIABLE, depth 10).
-        self.create_subscription(BatteryState, "/arms/battery", self._cb_battery, 10)
+        # arms_control 이 CRSF 수신 텔레메트리를 통합 발행 (/arms/crsf_rx). 배터리 필드를 여기서 읽는다.
+        self.create_subscription(CrsfTelemetry, "/arms/crsf_rx", self._cb_battery, 10)
         # 검출기 상태 [yolo, hsv proposal, legacy slot] — SEARCH 표시용.
         self.create_subscription(Float32MultiArray, "/arms/detector_status",
                                  self._cb_detstatus, 10)
@@ -183,7 +183,7 @@ class ArmsUINode(Node):
         self._latest_cmd = Vector3()
         self._latest_roi = None
         self._latest_hsv_debug = None
-        self._latest_battery = None   # /arms/battery 최신값 (None=아직 미수신)
+        self._latest_battery = None   # /arms/crsf_rx 최신값 (None=아직 미수신)
         self._elrs_connected = None   # ELRS 연결 여부 (None=미수신). 화면 표시는 이 값으로 즉시 반영
         self._elrs_sound_state = None # 효과음 기준 상태(디바운스로 확정된 값). None=아직 안 알림
         self._elrs_changed_t = 0.0    # raw 표시값이 마지막으로 바뀐 시각(디바운스용)
@@ -324,7 +324,7 @@ class ArmsUINode(Node):
     def _cb_debug(self, msg: Vector3):
         self._latest_cmd = msg
 
-    def _cb_battery(self, msg: BatteryState):
+    def _cb_battery(self, msg: CrsfTelemetry):
         self._latest_battery = msg
 
     def _cb_detstatus(self, msg: Float32MultiArray):
@@ -334,10 +334,10 @@ class ArmsUINode(Node):
         for i, v in enumerate(vals):      # 유효(≥0) 값은 잠깐 유지해 깜빡임 방지
             if v >= 0.0:
                 self._det_hold[i] = (v, now)
-        if len(vals) >= 16:
+        if len(vals) >= 12:
             names = ("hsv_count", "yolo_inputs", "yolo_accepted", "sample",
                      "resize", "hsv", "yolo", "tracker", "total")
-            for name, value in zip(names, vals[4:13]):
+            for name, value in zip(names, vals[2:11]):
                 self._diag_history[name].append(float(value))
 
     def _cb_command(self, msg: Joy):
@@ -683,12 +683,9 @@ class ArmsUINode(Node):
                     (240, 240, 240), 1, cv2.LINE_AA)
 
         raw = self._det_status or []
-        frame_no = int(raw[14]) if len(raw) >= 15 else 0
         tracker_names = {0: "NEW", 1: "TRACKED", 2: "LOST", 3: "REMOVED"}
-        tracker = tracker_names.get(int(raw[13]), "--") if len(raw) >= 14 else "--"
-        mode = ("FULL-FALLBACK" if len(raw) >= 16 and raw[15] >= 0.5 else
-                ("ROI" if len(raw) >= 4 and raw[3] >= 0.5 else "HSV->YOLO"))
-        cv2.putText(panel, f"frame {frame_no}  {tracker}  {mode}", (12, 47),
+        tracker = tracker_names.get(int(raw[11]), "--") if len(raw) >= 12 else "--"
+        cv2.putText(panel, f"filter: {tracker}", (12, 47),
                     font, 0.46, (0, 210, 255), 1, cv2.LINE_AA)
 
         # 같은 실시간 스트림에서 만들어진 HSV probability overlay + 후보 박스.
@@ -1042,13 +1039,13 @@ class ArmsUINode(Node):
 
     def _draw_battery(self, frame):
         """배터리 전압/잔량을 하단 중앙에 표시 — 자동/수동·디버그 무관하게 항상
-        (데이터 있을 때만; /arms/battery 미수신이면 표시할 값이 없어 생략)."""
+        (데이터 있을 때만; /arms/crsf_rx 미수신이면 표시할 값이 없어 생략)."""
         bat = self._latest_battery
         if bat is None:
             return
         h, w = frame.shape[:2]
-        volt = float(bat.voltage)
-        pct = float(bat.percentage) * 100.0   # BatteryState.percentage 는 0~1 규약
+        volt = float(bat.voltage_v)
+        pct = float(bat.battery_remaining_pct)   # CrsfTelemetry.battery_remaining_pct 는 0~100(%)
         pct_valid = (pct == pct) and pct >= 0   # NaN(pct!=pct)·음수면 무효
         if pct_valid:
             pct = max(0.0, min(100.0, pct))
@@ -1084,11 +1081,10 @@ class ArmsUINode(Node):
         y = int(100 * max(1.0, h / 480.0))
         dy = int(cv2.getTextSize("A", font, scale, thick)[0][1] * 2.2)
 
-        # 검출 필터 상태(raw[13]): NEW(획득중)/TRACKED(추적중)/LOST(순간놓침·KF외삽)/REMOVED(제거).
+        # 검출 필터 상태(raw[11]): NEW(획득중)/TRACKED(추적중)/LOST(순간놓침·KF외삽)/REMOVED(제거).
         #   색으로 구분 — 표적이 물렸는지 메인 화면에서 바로 확인.
-        #   (구 MODE FULL/ROI 표시는 KF 노드에서 항상 FULL 이라 무의미 → 제거)
-        if len(raw) >= 14:
-            tstate = {0.0: "NEW", 1.0: "TRACKED", 2.0: "LOST", 3.0: "REMOVED"}.get(raw[13], "--")
+        if len(raw) >= 12:
+            tstate = {0.0: "NEW", 1.0: "TRACKED", 2.0: "LOST", 3.0: "REMOVED"}.get(raw[11], "--")
             tcolor = {"TRACKED": (0, 220, 0), "LOST": (0, 165, 255),
                       "NEW": (200, 200, 200)}.get(tstate, (170, 170, 170))
             ttext = f"TRK: {tstate}"

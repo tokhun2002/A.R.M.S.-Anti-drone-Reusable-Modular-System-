@@ -19,9 +19,9 @@
 #include "arms_msgs/msg/mission_state.hpp"
 #include "geometry_msgs/msg/vector3.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include "sensor_msgs/msg/battery_state.hpp"
 #include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/empty.hpp"
+#include "std_msgs/msg/int16_multi_array.hpp"
 
 using namespace std::chrono_literals;
 
@@ -353,9 +353,11 @@ class ArmsControlNode : public rclcpp::Node {
     // looming 튜닝용: x=τ[s](미접근/무한대는 9.99로 캡), y=bbox크기(EMA), z=크기변화율 ṡ
     pub_loom_ = create_publisher<geometry_msgs::msg::Vector3>("/arms/debug_looming", 10);
     // CRSF 배터리 텔레메트리(0x08)를 UI 등에서 쓰도록 표준 메시지로 재발행한다.
-    pub_battery_ = create_publisher<sensor_msgs::msg::BatteryState>("/arms/battery", 10);
-    // CRSF 디코딩 통합 발행: 배터리/자세(RPY)/수직속도/비행모드/링크통계 → /arms/crsf.
-    pub_crsf_ = create_publisher<arms_msgs::msg::CrsfTelemetry>("/arms/crsf", 10);
+    // CRSF 수신(RX) 텔레메트리 통합 발행: 배터리/자세(RPY)/수직속도/비행모드/링크통계 → /arms/crsf_rx.
+    //   (배터리는 별도 /arms/battery 없이 이 토픽으로만 나간다. UI 도 이걸 구독.)
+    pub_crsf_rx_ = create_publisher<arms_msgs::msg::CrsfTelemetry>("/arms/crsf_rx", 10);
+    // CRSF 송신(TX) 채널 로그용(구독자 있을 때만). [roll,pitch,thr,yaw,arm,mode,kill,ch8] CRSF 단위.
+    pub_crsf_tx_ = create_publisher<std_msgs::msg::Int16MultiArray>("/arms/crsf_tx", 10);
 
     // ----------------------------------------------------------------
     // ROS subscribers
@@ -560,7 +562,7 @@ class ArmsControlNode : public rclcpp::Node {
           down_rssi, down_lq, down_snr);                          // 링크 상태를 1초마다 보여준다.
         last_up_lq_ = up_lq;                                      // uplink LQ 저장(0이면 RF 링크 끊김으로 본다).
         last_lq_time_ = now();
-        crsf_telem_.uplink_rssi_dbm = up_rssi_1;                  // /arms/crsf 통합 필드 갱신
+        crsf_telem_.uplink_rssi_dbm = up_rssi_1;                  // /arms/crsf_rx 통합 필드 갱신
         crsf_telem_.uplink_lq = up_lq;
         crsf_telem_.uplink_snr_db = up_snr;
       } else if ((frame.type == 0x1C || frame.type == 0x1D) &&
@@ -611,17 +613,13 @@ class ArmsControlNode : public rclcpp::Node {
           pct_ratio = std::clamp(pct_ratio, 0.0, 1.0);            // 0~1 범위로 자른다.
         }
 
-        sensor_msgs::msg::BatteryState bat;                        // UI 표시용 표준 배터리 메시지를 만든다.
-        bat.header.stamp = now();                                  // 수신 시각을 기록한다.
-        bat.voltage = static_cast<float>(voltage_v);               // 전압을 V 단위로 채운다.
-        bat.current = static_cast<float>(current_da) / 10.0f;      // 전류를 A 단위로 채운다.
-        bat.percentage = static_cast<float>(pct_ratio);            // 잔량을 0~1 비율로 채운다(BatteryState 규약).
-        bat.present = true;                                        // 배터리 존재 플래그를 세운다.
-        pub_battery_->publish(bat);                                // 매 배터리 프레임마다 재발행한다.
-        crsf_telem_.voltage_v = static_cast<float>(voltage_v);     // /arms/crsf 통합 필드 갱신
+        // 배터리는 /arms/crsf_rx 통합 필드로만 발행(별도 /arms/battery 폐지 — UI 도 /arms/crsf_rx 구독).
+        //   잔량%: cell_count 설정 시 전압 기반 계산값, 아니면 FC(CRSF) 원값(pct_ratio 가 이미 반영).
+        crsf_telem_.voltage_v = static_cast<float>(voltage_v);
         crsf_telem_.current_a = static_cast<float>(current_da) / 10.0f;
         crsf_telem_.capacity_used_mah = capacity_mah;
-        crsf_telem_.battery_remaining_pct = remaining_pct;
+        crsf_telem_.battery_remaining_pct =
+            static_cast<int>(pct_ratio * 100.0 + 0.5);
       } else if (frame.type == 0x1E && frame.payload.size() >= 6) {
         // 자세(Attitude): pitch, roll, yaw 순서의 int16 big-endian, 값 = radian × 10000.
         auto be16 = [&](size_t i) {
@@ -649,7 +647,7 @@ class ArmsControlNode : public rclcpp::Node {
     // 이번에 CRSF 프레임을 하나라도 받았으면 통합 텔레메트리를 발행한다(최신 스냅샷).
     if (!result.frames.empty()) {
       crsf_telem_.header.stamp = now();
-      pub_crsf_->publish(crsf_telem_);
+      pub_crsf_rx_->publish(crsf_telem_);
     }
   }
 
@@ -959,6 +957,17 @@ class ArmsControlNode : public rclcpp::Node {
           get_logger(), *get_clock(), 2000,
           "CRSF TX failed: check UART port and baud rate.");      // 송신 실패를 과도한 반복 없이 알린다.
       }
+
+      // 송신 CRSF 채널 로그(구독자 있을 때만; bag record 가 구독하면 자동 on).
+      if (pub_crsf_tx_->get_subscription_count() > 0) {
+        std_msgs::msg::Int16MultiArray ch;
+        ch.data = {                                                // [roll,pitch,thr,yaw,arm,mode,kill,ch8]
+          static_cast<int16_t>(crsf[0]), static_cast<int16_t>(crsf[1]),
+          static_cast<int16_t>(crsf[2]), static_cast<int16_t>(crsf[3]),
+          static_cast<int16_t>(crsf[4]), static_cast<int16_t>(crsf[5]),
+          static_cast<int16_t>(crsf[6]), static_cast<int16_t>(crsf[7])};
+        pub_crsf_tx_->publish(ch);
+      }
     }
 
     // ---- Debug publish (UI 화살표용) — 구독자 있을 때만 ----
@@ -1113,7 +1122,7 @@ class ArmsControlNode : public rclcpp::Node {
   // CRSF 송수신 상태
   std::unique_ptr<CrsfOutput> crsf_out_;                          // CRSF UART 송수신기를 소유한다.
   std::array<bool, 256> crsf_seen_types_{};                       // 처음 발견한 텔레메트리 타입을 구분한다.
-  arms_msgs::msg::CrsfTelemetry crsf_telem_;                      // /arms/crsf 통합 발행용 최신 스냅샷
+  arms_msgs::msg::CrsfTelemetry crsf_telem_;                      // /arms/crsf_rx 통합 발행용 최신 스냅샷
   // ELRS 링크(바인딩+RF) 판정: LinkStatistics(0x14)의 uplink LQ 로만 본다.
   int          last_up_lq_{-1};         // 마지막 0x14 uplink LQ[%] (-1=미수신)
   rclcpp::Time last_lq_time_;           // 마지막 0x14 수신 시각
@@ -1150,8 +1159,8 @@ class ArmsControlNode : public rclcpp::Node {
   rclcpp::Publisher<arms_msgs::msg::MissionState>::SharedPtr pub_state_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_dbg_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3>::SharedPtr pub_loom_;
-  rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr pub_battery_;
-  rclcpp::Publisher<arms_msgs::msg::CrsfTelemetry>::SharedPtr pub_crsf_;     // CRSF 통합 텔레메트리 → /arms/crsf
+  rclcpp::Publisher<arms_msgs::msg::CrsfTelemetry>::SharedPtr pub_crsf_rx_;   // CRSF 수신 텔레메트리 → /arms/crsf_rx
+  rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr pub_crsf_tx_;  // CRSF 송신 채널 로그 → /arms/crsf_tx
   int battery_detected_cells_{0};    // 전압으로 자동 감지한 셀 수(첫 유효 전압에서 1회 감지 후 래치)
   double battery_cell_full_v_{4.2};  // 만충 셀당 전압[V]
   double battery_cell_empty_v_{3.5}; // 방전(0%) 셀당 전압[V]

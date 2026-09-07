@@ -170,11 +170,11 @@ ros2 launch arms_bringup arms_replay.launch.py start_detection:=false
 | `fullscreen`      | `false` (replay) / `true` (실기체)| UI 전체화면 여부 (A-4)                    |
 | `debug`           | `true` (replay) / `false` (실기체)| 메인 화면 디버그 오버레이 (A-4)           |
 | `cv_debug`        | `false`                           | 검출 진단 패널(HSV+그래프) (A-4)          |
-| `video_save`      | `false` — **`arms.launch.py`(실기체) 전용** | 비행 UI 자동 녹화. 자동모드 SEARCH 진입~ARM 스위치 OFF 를 `~/arms_flight_log/<일시>/` 에 bag 저장 (kill 무관). 상세는 "UI 화면 녹화 / 재생 / mp4 변환" 절 4) |
+| `auto_save`      | `false` — **`arms.launch.py`(실기체) 전용** | 비행 로그 자동 녹화(영상+검출 raw+CRSF 송·수신+상태). 자동모드 SEARCH 진입~ARM 스위치 OFF 를 `~/arms_flight_log/<일시>/` 에 bag(mcap) 저장 (kill 무관). 상세는 "UI 화면 녹화 / 재생 / mp4 변환" 절 4) |
 
 샘플 영상은 `SW/sample_viedo/` 에 `sample1.mov`, `sample2.mov`, `sample3.mov` 가 있습니다.
 
-> `video_save` 는 `arms.launch.py`(실기체)에만 있는 인자입니다. 위 표의 나머지 인자는
+> `auto_save` 는 `arms.launch.py`(실기체)에만 있는 인자입니다. 위 표의 나머지 인자는
 > `arms_replay.launch.py` 기준이며, 실기체와 공유되는 것(`model`/`start_detection`/`crsf_port`/
 > `fullscreen`/`debug`/`cv_debug`)은 `arms.launch.py` 에서도 동일하게 씁니다.
 
@@ -442,23 +442,29 @@ ros2 run rqt_image_view rqt_image_view /arms/ui_view
 > ⚠️ 라이브 스택(UI 노드)이 돌고 있으면 재생과 같은 토픽에 섞인다. 스택을 끄거나, 재생 시
 > `--remap /arms/ui_image/compressed:=/pb/ui_image/compressed` 로 토픽명을 바꿔 충돌을 피한다.
 
-#### 3) mp4(H.264) 로 변환
+#### 3) bag 시각화 (mp4 + CSV + 그래프)
 
-`SW/scripts/bag_to_video/bag_to_mp4.py` 가 bag 을 직접 읽어(재생 불필요) H.264 mp4 로 만든다.
-브라우저·폰·기본 플레이어 어디서나 재생된다(필요: `ffmpeg`).
+`SW/scripts/bag_visualize/bag_visualize.py` 마스터 스크립트 하나로 CSV 변환 + 오버뷰
+그래프 + mp4 영상까지 한 번에 만든다(결과는 `<bag>_viz/`).
 
 ```bash
-python3 SW/scripts/bag_to_video/bag_to_mp4.py ui_rec              # → ui_rec.mp4
-python3 SW/scripts/bag_to_video/bag_to_mp4.py ui_rec --out clip.mp4 --fps 15
+python3 SW/scripts/bag_visualize/bag_visualize.py ui_rec
+#  → ui_rec_viz/{csv/*.csv, target_plane.png, attitude_cmd.png, ui_rec.mp4}
 ```
 
-> fps 는 기본으로 bag 타임스탬프에서 자동 계산한다. mcap 으로 녹화했으면 `--storage mcap`.
-> 자세한 옵션은 `SW/scripts/bag_to_video/README.md` 참고.
+- **target_plane.png**: 화면(정규화 좌표) 상 표적 위치 — detection_raw vs KF 적용값.
+- **attitude_cmd.png**: roll/pitch/yaw 자세(수신) + 제어명령(송신) 6개 시계열.
+- 영상만 원하면 `--no-csv --no-plots`, 그래프만 원하면 `--no-video`.
 
-#### 4) 비행 자동 저장 모드 (`video_save:=true`, 실기체)
+개별 스크립트(`bag_to_csv.py` / `plot_overview.py` / `bag_to_mp4.py`)도 따로 실행 가능.
+storage(mcap/sqlite3)는 `metadata.yaml` 에서 자동감지한다.
+필요: `ffmpeg`(영상), `matplotlib`·`pandas`(그래프). 자세한 옵션은
+`SW/scripts/bag_visualize/README.md` 참고.
 
-실기체 비행 중 UI 를 **자동으로** 녹화한다. `arms.launch.py` 에 `video_save:=true` 를 주면
-`flight_recorder` 노드가 함께 떠서:
+#### 4) 비행 자동 저장 모드 (`auto_save:=true`, 실기체)
+
+실기체 비행 중 로그(영상+검출 raw+CRSF 송·수신+상태)를 **자동으로** 녹화한다.
+`arms.launch.py` 에 `auto_save:=true` 를 주면 `flight_recorder` 노드가 함께 떠서:
 
 - **시작**: 자동모드에서 상태머신이 **SEARCH 진입** 시 녹화 시작.
 - **종료**: 조종기 **ARM(=자동모드 search) 스위치를 내릴 때**(`/arms/command` buttons[1]→0).
@@ -467,12 +473,15 @@ python3 SW/scripts/bag_to_video/bag_to_mp4.py ui_rec --out clip.mp4 --fps 15
 - **저장 위치**: `~/arms_flight_log/<YYYYmmdd_HHMMSS>/` (비행 시작 일시 폴더에 bag).
 
 ```bash
-ros2 launch arms_bringup arms.launch.py video_save:=true
+ros2 launch arms_bringup arms.launch.py auto_save:=true
 ```
 
-기본값은 `false`(녹화 안 함). 저장된 bag 은 위 3) 방법으로 mp4 변환하거나 재생하면 된다.
-녹화 토픽은 `/arms/ui_image/compressed`(경량). 스택을 정상 종료하면 진행 중이던 bag 도
-안전하게 마감된다.
+기본값은 `false`(녹화 안 함). 저장된 bag(mcap)의 영상은 위 3) 방법으로 mp4 변환하거나
+재생하면 된다. 녹화 토픽은 영상 `/arms/ui_image/compressed` 외에 `/arms/detections_raw`
+(칼만 전 원시 검출 — 추후 KF 튜닝용), `/arms/detections`, `/arms/detector_status`,
+`/arms/crsf_tx`(송신 채널), `/arms/crsf_rx`(수신 텔레메트리: 배터리/링크/자세),
+`/arms/mission_state`, `/arms/command` 이며, 목록은 `flight_recorder` 의 `record_topics`
+파라미터로 조정한다. 스택을 정상 종료하면 진행 중이던 bag 도 안전하게 마감된다.
 
 ### 정상 상태 전이 흐름
 

@@ -9,48 +9,35 @@ bag 안의 JPEG 바이트를 ffmpeg 에 그대로 파이프해 H.264(yuv420p)로
     python3 bag_to_mp4.py <bag_dir> [--topic /arms/ui_image/compressed]
                                     [--out out.mp4] [--fps N] [--storage sqlite3|mcap]
 예:
-    python3 SW/scripts/bag_to_mp4.py ui_rec
+    python3 bag_to_mp4.py ui_rec
 """
 import argparse
 import shutil
 import subprocess
 import sys
 
-import rosbag2_py
-from rclpy.serialization import deserialize_message
-from sensor_msgs.msg import CompressedImage
+from _common import detect_storage, open_reader
 
 
-def open_reader(uri: str, storage: str) -> rosbag2_py.SequentialReader:
-    reader = rosbag2_py.SequentialReader()
-    reader.open(
-        rosbag2_py.StorageOptions(uri=uri, storage_id=storage),
-        rosbag2_py.ConverterOptions("", ""),
-    )
-    return reader
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("bag", help="bag 디렉토리 (예: ui_rec)")
-    ap.add_argument("--topic", default="/arms/ui_image/compressed")
-    ap.add_argument("--out", default=None, help="출력 mp4 (기본: <bag>.mp4)")
-    ap.add_argument("--fps", type=float, default=0.0, help="0=타임스탬프에서 자동")
-    ap.add_argument("--storage", default="sqlite3", help="sqlite3 | mcap")
-    args = ap.parse_args()
+def bag_to_mp4(bag: str, topic: str = "/arms/ui_image/compressed",
+               out: str = "", fps: float = 0.0, storage: str = "") -> str:
+    """bag 의 압축영상 토픽을 H.264 mp4 로 변환. 성공 시 출력 경로, 실패 시 "" 반환."""
+    from rclpy.serialization import deserialize_message
+    from sensor_msgs.msg import CompressedImage
 
     if shutil.which("ffmpeg") is None:
-        print("[ERR] ffmpeg 가 없습니다. sudo apt install ffmpeg")
-        return 1
+        print("[mp4] ffmpeg 가 없습니다. sudo apt install ffmpeg")
+        return ""
 
-    out_path = args.out or (args.bag.rstrip("/") + ".mp4")
+    storage = storage or detect_storage(bag)
+    out_path = out or (bag.rstrip("/") + ".mp4")
 
     # --- pass 1: 프레임 수 & 타임스탬프 범위로 fps 계산 ---
-    reader = open_reader(args.bag, args.storage)
+    reader = open_reader(bag, storage)
     n, t_first, t_last = 0, None, None
     while reader.has_next():
         tname, _data, t = reader.read_next()
-        if tname != args.topic:
+        if tname != topic:
             continue
         if t_first is None:
             t_first = t
@@ -59,14 +46,13 @@ def main() -> int:
     del reader
 
     if n == 0:
-        print(f"[ERR] '{args.topic}' 메시지가 bag 에 없음. 'ros2 bag info {args.bag}' 확인.")
-        return 1
+        print(f"[mp4] '{topic}' 메시지가 bag 에 없음 → 영상 생략.")
+        return ""
 
-    fps = args.fps
     if fps <= 0.0:
         span_s = (t_last - t_first) / 1e9 if (t_last and t_first and n > 1) else 0.0
         fps = (n - 1) / span_s if span_s > 0 else 15.0
-    print(f"[INFO] {n} 프레임, fps={fps:.2f} → {out_path} (H.264)")
+    print(f"[mp4] {n} 프레임, fps={fps:.2f} → {out_path} (H.264)")
 
     # --- ffmpeg: 표준입력으로 들어오는 JPEG 스트림을 H.264 로 인코딩 ---
     #   -vf: H.264 yuv420p 는 짝수 해상도 필요 → 홀수면 1px 패딩.
@@ -82,12 +68,12 @@ def main() -> int:
     )
 
     # --- pass 2: bag 의 JPEG 바이트를 그대로 파이프 ---
-    reader = open_reader(args.bag, args.storage)
+    reader = open_reader(bag, storage)
     written = 0
     try:
         while reader.has_next():
             tname, data, _t = reader.read_next()
-            if tname != args.topic:
+            if tname != topic:
                 continue
             msg = deserialize_message(data, CompressedImage)
             ffmpeg.stdin.write(bytes(msg.data))
@@ -97,10 +83,21 @@ def main() -> int:
         ffmpeg.wait()
 
     if ffmpeg.returncode != 0:
-        print(f"[ERR] ffmpeg 실패 (code {ffmpeg.returncode})")
-        return 1
-    print(f"[INFO] 완료: {written} 프레임 → {out_path}")
-    return 0
+        print(f"[mp4] ffmpeg 실패 (code {ffmpeg.returncode})")
+        return ""
+    print(f"[mp4] 완료: {written} 프레임 → {out_path}")
+    return out_path
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("bag", help="bag 디렉토리 (예: ui_rec)")
+    ap.add_argument("--topic", default="/arms/ui_image/compressed")
+    ap.add_argument("--out", default="", help="출력 mp4 (기본: <bag>.mp4)")
+    ap.add_argument("--fps", type=float, default=0.0, help="0=타임스탬프에서 자동")
+    ap.add_argument("--storage", default="", help="sqlite3 | mcap (기본: 자동감지)")
+    args = ap.parse_args()
+    return 0 if bag_to_mp4(args.bag, args.topic, args.out, args.fps, args.storage) else 1
 
 
 if __name__ == "__main__":

@@ -14,7 +14,8 @@ arms_detection_node — A.R.M.S. 빨간 풍선 검출기
 토픽
   구독 : /arms/image_raw        sensor_msgs/Image
   발행 : /arms/detections       arms_msgs/DetectionArray
-  발행 : /arms/debug_image      sensor_msgs/Image  (bgr8, 모든 검출기 결과+최종 시각화)
+  발행 : /arms/detections_raw   arms_msgs/DetectionArray (KF 적용 전 원시 측정값; 로그/튜닝용)
+  발행 : /arms/debug_image      sensor_msgs/Image  (bgr8, HSV 후보 전체+최종 선택 시각화)
   발행 : /arms/hsv_debug_image  sensor_msgs/Image  (bgr8, HSV 마스크와 후보 시각화)
   발행 : /arms/detector_status  std_msgs/Float32MultiArray (검출·처리시간 진단값)
 
@@ -276,9 +277,8 @@ class ArmsDetectionNode(Node):
         self._last_frame_started = None
         self._diag = None
         self._diag_hsv_mask = None
-        self._diag_hsv_proposals = []
-        # 원격 브랜치의 통합 디버그 영상 기능과 성능 진단을 함께 유지한다.
-        self._dbg_boxes = {}
+        self._diag_hsv_proposals = []   # 파이프라인 후보(max_candidates) — hsv_debug_image 용
+        self._diag_hsv_all = []         # 상위 10개 후보 — debug_image 전체 후보 뷰 용
 
         # YOLO: 같은 프로세스에서 직접 추론. ultralytics/모델이 없으면(호스트/SITL)
         # 조용히 비활성화한다. HSV 단독 후보는 안전상 검출로 발행하지 않는다.
@@ -325,10 +325,16 @@ class ArmsDetectionNode(Node):
             self.create_subscription(Image, "/arms/image_raw", self._cb_image, qos)
 
         self.pub_det     = self.create_publisher(DetectionArray, "/arms/detections",    10)
+        # KF/필터 적용 '전' 원시 검출(측정값 z_k) 로그용. 구독자 있을 때만 발행(bag record 시 on).
+        #   추후 칼만 파라미터를 오프라인 재현/튜닝하려고 그대로 남긴다.
+        self.pub_det_raw = self.create_publisher(DetectionArray, "/arms/detections_raw", 10)
+        # debug_image: HSV 후보 전체 + 최종 선택 오버레이. hsv_debug_image: HSV 확률 마스크+후보.
+        #   둘 다 구독자 있을 때만 발행(cv_debug 패널은 hsv_debug_image 를 구독).
         self.pub_debug   = self.create_publisher(Image,          "/arms/debug_image",   10)
         self.pub_hsv_debug = self.create_publisher(
             Image, "/arms/hsv_debug_image", 10)
-        # 상태 배열: [yolo, hsv proposal, legacy slot, mode]. legacy slot은 -1 고정.
+        # 진단 배열: [0]YOLO conf [1]HSV conf [2]hsv_count [3]yolo_inputs [4]yolo_accepted
+        #   [5]frame_interval_ms [6]resize_ms [7]hsv_ms [8]yolo_ms [9]filter_ms [10]total_ms [11]state_code.
         self.pub_detstatus = self.create_publisher(Float32MultiArray, "/arms/detector_status", 10)
 
         self.get_logger().info(
@@ -375,12 +381,12 @@ class ArmsDetectionNode(Node):
             "resize_ms": 0.0, "hsv_ms": 0.0, "yolo_ms": 0.0,
             "filter_ms": 0.0, "total_ms": 0.0,
             "hsv_count": 0, "yolo_inputs": 0, "yolo_accepted": 0,
-            "yolo_ran": False, "full_frame": False, "mode": 0.0,
+            "yolo_ran": False,
             "yolo_box": None, "hsv_box": None,
         }
         self._diag_hsv_mask = None
         self._diag_hsv_proposals = []
-        self._dbg_boxes = {}
+        self._diag_hsv_all = []
         if bgr_full is None or bgr_full.size == 0:
             return
 
@@ -397,12 +403,21 @@ class ArmsDetectionNode(Node):
         # 매 프레임 전체 검출 → KF 평활 + 이상치 게이트로 단일 표적 발행.
         cfg = self._filter_cfg()
         det = self._detect_acquire(bgr)
+        # 필터 전 원시 측정값 발행(구독자 있을 때만). _filter.update 가 det 를 평활값으로
+        #   in-place 수정하므로 반드시 그 '전'에 발행해야 진짜 raw 가 남는다.
+        if self.pub_det_raw.get_subscription_count() > 0:
+            raw = DetectionArray()
+            raw.header = header
+            if det is not None:
+                raw.detections.append(det)
+            self.pub_det_raw.publish(raw)
         filter_started = time.perf_counter()
         target = self._filter.update(det, cfg)
         self._diag["filter_ms"] = (time.perf_counter() - filter_started) * 1000.0
         self._diag["total_ms"] = (time.perf_counter() - frame_started) * 1000.0
         self._publish_detector_status()
 
+        # HSV 마스크 진단 영상(cv_debug 패널용) — 구독자 있을 때만.
         if (self._diag_hsv_mask is not None and
                 self.pub_hsv_debug.get_subscription_count() > 0):
             self._publish_hsv_debug(bgr, header)
@@ -416,7 +431,7 @@ class ArmsDetectionNode(Node):
         # ROI 확대 뷰(PiP)는 UI 노드가 /arms/detections bbox 로 직접 크롭한다
         #   (컨테이너→호스트 roi_image 전송 제거로 발행 부하·대역폭 절감).
 
-        # 디버그 이미지는 구독자가 있을 때만 그려서 발행 (없으면 발행 비용 전부 절감)
+        # 검출 오버레이(HSV 후보 전체+최종)는 구독자 있을 때만 그려서 발행.
         if self.pub_debug.get_subscription_count() > 0:
             self._publish_debug(bgr, header, target, self._filter.state)
 
@@ -431,14 +446,13 @@ class ArmsDetectionNode(Node):
 
     def _detect_acquire(self, bgr):
         """HSV 후보를 먼저 만들고 ROI들을 한 번의 YOLO batch로 검증한다."""
-        self._diag["mode"] = 0.0
         use_yolo = self._yolo is not None   # 모델 로드됐을 때만 YOLO. HSV 단독 발행은 금지.
         use_hsv = bool(self.get_parameter("use_hsv").value)
         hsv_started = time.perf_counter()
         proposals = self._detect_hsv_candidates(bgr) if use_hsv else []
         self._diag["hsv_ms"] += (time.perf_counter() - hsv_started) * 1000.0
         self._diag["hsv_count"] = len(proposals)
-        self._diag_hsv_proposals = proposals
+        self._diag_hsv_proposals = proposals   # hsv_debug_image 용(파이프라인 후보)
         hsv_box = proposals[0] if proposals else None
         self._diag["hsv_box"] = hsv_box
 
@@ -457,11 +471,9 @@ class ArmsDetectionNode(Node):
         full_due = interval > 0 and self._frame_i % interval == 0
         if winner is None and use_yolo and full_due:
             yolo_ran = True
-            self._diag["full_frame"] = True
             winner = self._detect_yolo(bgr, imgsz=self._yolo_full_imgsz)
 
         self._diag["yolo_box"] = winner
-        self._dbg_boxes = {"yolo": winner, "hsv": hsv_box}
         return winner
 
     def _detect_yolo_proposals_batch(self, bgr, proposals):
@@ -503,15 +515,16 @@ class ArmsDetectionNode(Node):
         msg = Float32MultiArray()
         state_code = {"NEW": 0.0, "TRACKED": 1.0, "LOST": 2.0, "REMOVED": 3.0}.get(
             self._filter.state, -1.0)
-        # 0~3은 기존 UI와 호환. 4 이후는 실시간 성능 진단용이다.
+        # 레이아웃: [0]YOLO conf [1]HSV conf [2]hsv_count [3]yolo_inputs [4]yolo_accepted
+        #   [5]frame_interval_ms [6]resize_ms [7]hsv_ms [8]yolo_ms [9]filter_ms
+        #   [10]total_ms [11]state_code(NEW=0/TRACKED=1/LOST=2/REMOVED=3).
         msg.data = [
-            yv, hv, -1.0, float(diag["mode"]),
+            yv, hv,
             float(diag["hsv_count"]), float(diag["yolo_inputs"]),
             float(diag["yolo_accepted"]), float(diag["frame_interval_ms"]),
             float(diag["resize_ms"]), float(diag["hsv_ms"]),
             float(diag["yolo_ms"]), float(diag["filter_ms"]),
-            float(diag["total_ms"]), state_code, float(self._frame_i),
-            1.0 if diag["full_frame"] else 0.0,
+            float(diag["total_ms"]), state_code,
         ]
         self.pub_detstatus.publish(msg)
 
@@ -683,6 +696,8 @@ class ArmsDetectionNode(Node):
             box.class_name = "hsv_proposal"
             candidates.append((score, box))
         candidates.sort(key=lambda item: item[0], reverse=True)
+        # debug_image(전체 후보 뷰)용: 상위 10개까지 노출(파이프라인은 아래 max_candidates 만 검증).
+        self._diag_hsv_all = [box for _, box in candidates[:10]]
         max_candidates = max(1, int(
             self.get_parameter("hsv.max_candidates").value))
         return [box for _, box in candidates[:max_candidates]]
@@ -716,14 +731,15 @@ class ArmsDetectionNode(Node):
         self.pub_hsv_debug.publish(bgr_to_imgmsg(np.ascontiguousarray(img), header))
 
     # ------------------------------------------------------------------
-    # Debug visualization
+    # Debug visualization (/arms/debug_image)
     # ------------------------------------------------------------------
 
-    # 검출기별 색 (BGR)
-    _DBG_PALETTE = {
-        "yolo":     (255, 200, 0),   # 하늘색
-        "hsv":      (0, 0, 255),     # 빨강
-    }
+    # BGR 색: HSV 후보(파이프라인/그냥) / YOLO 결과 / 확정(최종 선택)
+    _DBG_PIPE_COLOR = (0, 120, 255)   # HSV 후보 중 YOLO 검증 대상(max_candidates) — 진한 주황
+    _DBG_CAND_COLOR = (150, 210, 255) # 그냥 후보(그 외 HSV) — 연한 주황
+    _DBG_YOLO_COLOR = (255, 200, 0)   # YOLO 검출 결과 — 하늘색
+    _DBG_FINAL_COLOR = (0, 255, 0)    # 확정(최종 선택) — 초록
+    _DBG_MAX_BOXES = 10               # HSV 후보는 최대 이만큼 그린다
 
     @staticmethod
     def _draw_dbg_box(img, box, color, thick):
@@ -740,35 +756,41 @@ class ArmsDetectionNode(Node):
         cv2.rectangle(img, (x1, y1), (x2, y2), color, thick)
 
     def _publish_debug(self, bgr, header, target, state):
-        """YOLO/HSV 결과와 최종 선택을 함께 표시한다."""
+        """HSV 후보 전체(그냥 후보) + YOLO 결과 + 최종 선택(확정)을 다른 색으로 그려 발행한다."""
         img = bgr.copy()
         h, w = img.shape[:2]
-        dbg = self._dbg_boxes or {}
-
-        # 개별 검출기 원시 결과(얇게, 색상별)
-        for key in ("yolo", "hsv"):
-            box = dbg.get(key)
-            if box is not None:
-                self._draw_dbg_box(img, box, self._DBG_PALETTE[key], 1)
-
-        # 최종 선택 박스: 흰 굵은 테두리로 강조
-        if target is not None:
-            self._draw_dbg_box(img, target, (255, 255, 255), 2)
-
-        # 우상단 범례: 각 검출기 confidence + 최종 선택
         font = cv2.FONT_HERSHEY_SIMPLEX
-        yy = 20
-        for key in ("yolo", "hsv"):
-            box = dbg.get(key)
-            txt = f"{key}: {box.confidence:.2f}" if box is not None else f"{key}: -"
-            col = self._DBG_PALETTE[key] if box is not None else (120, 120, 120)
-            cv2.putText(img, txt, (w - 200, yy), font, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
-            cv2.putText(img, txt, (w - 200, yy), font, 0.5, col, 1, cv2.LINE_AA)
-            yy += 20
+
+        # HSV 후보: 앞 n_pipe개(=max_candidates, YOLO 검증 대상)는 진한 주황,
+        #   나머지(그냥 후보)는 연한 주황. + H# 라벨.
+        proposals = self._diag_hsv_all[:self._DBG_MAX_BOXES]
+        n_pipe = len(self._diag_hsv_proposals)   # 파이프라인(YOLO)로 넘어가는 상위 후보 수
+        for index, box in enumerate(proposals):
+            col = self._DBG_PIPE_COLOR if index < n_pipe else self._DBG_CAND_COLOR
+            self._draw_dbg_box(img, box, col, 1)
+            lx, ly = int(box.x_center * w), int(box.y_center * h)
+            cv2.putText(img, f"H{index + 1}", (lx + 5, max(12, ly - 5)),
+                        font, 0.4, col, 1, cv2.LINE_AA)
+
+        # YOLO 검출 결과(원시 winner): 하늘색 얇게.
+        yolo_box = self._diag.get("yolo_box") if self._diag else None
+        if yolo_box is not None:
+            self._draw_dbg_box(img, yolo_box, self._DBG_YOLO_COLOR, 1)
+
+        # 확정(최종 선택): 초록 굵게.
         if target is not None:
-            t = f"FINAL {target.class_name} {target.confidence:.2f}"
-            cv2.putText(img, t, (w - 260, yy), font, 0.55, (0, 0, 0), 3, cv2.LINE_AA)
-            cv2.putText(img, t, (w - 260, yy), font, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+            self._draw_dbg_box(img, target, self._DBG_FINAL_COLOR, 2)
+
+        # 범례: HSV(검증/전체) / YOLO conf / 최종 선택
+        def _legend(txt, y, color):
+            cv2.putText(img, txt, (w - 220, y), font, 0.5, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(img, txt, (w - 220, y), font, 0.5, color, 1, cv2.LINE_AA)
+        _legend(f"HSV {n_pipe}/{len(proposals)}", 20, self._DBG_PIPE_COLOR)
+        _legend(f"YOLO {yolo_box.confidence:.2f}" if yolo_box is not None else "YOLO -",
+                40, self._DBG_YOLO_COLOR)
+        if target is not None:
+            _legend(f"FINAL {target.class_name} {target.confidence:.2f}",
+                    60, self._DBG_FINAL_COLOR)
 
         # 중앙 마커 + 필터 상태 (TRACKED=초록, 그 외=주황)
         state_col = (0, 220, 0) if state == _TargetFilter.TRACKED else (0, 165, 255)

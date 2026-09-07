@@ -6,7 +6,7 @@ std_msgs/Header header
 float32 voltage_v               # 전압 [V]
 float32 current_a               # 전류 [A]
 int32   capacity_used_mah       # 사용 용량 [mAh]
-int32   battery_remaining_pct   # 잔량 [%] (FC 계산값)
+int32   battery_remaining_pct   # 잔량 [%] (control 계산: cell_count 설정 시 전압기반, 아니면 FC 원값)
 
 # ── 자세 Attitude (CRSF 0x1E) [deg] ──────────────────
 float32 roll_deg
